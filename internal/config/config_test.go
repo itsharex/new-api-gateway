@@ -78,7 +78,15 @@ func TestLoadFromEnvUsesListenAndRedisDefaultsWhenUnset(t *testing.T) {
 }
 
 func TestLoadFromEnvRejectsInvalidBaseURL(t *testing.T) {
-	for _, rawURL := range []string{"localhost:3000", "ftp://localhost:3000", "http:///audit"} {
+	for _, rawURL := range []string{
+		"localhost:3000",
+		"ftp://localhost:3000",
+		"http:///audit",
+		"http://localhost:99999",
+		"http://user:pass@localhost:3000",
+		"http://localhost:3000?x=1",
+		"http://localhost:3000#frag",
+	} {
 		t.Run(rawURL, func(t *testing.T) {
 			setValidEnv(t)
 			t.Setenv("NEW_API_BASE_URL", rawURL)
@@ -114,6 +122,30 @@ func TestLoadFromEnvRejectsExplicitBlankDefaultedValues(t *testing.T) {
 				assertErrorContains(t, err, key)
 			})
 		}
+	}
+}
+
+func TestLoadFromEnvRejectsMalformedListenAddr(t *testing.T) {
+	for _, listenAddr := range []string{"localhost", ":0", ":70000", "localhost:70000"} {
+		t.Run(listenAddr, func(t *testing.T) {
+			setValidEnv(t)
+			t.Setenv("AUDIT_GATEWAY_LISTEN_ADDR", listenAddr)
+
+			_, err := LoadFromEnv()
+			assertErrorContains(t, err, "AUDIT_GATEWAY_LISTEN_ADDR")
+		})
+	}
+}
+
+func TestLoadFromEnvRejectsMalformedRedisAddr(t *testing.T) {
+	for _, redisAddr := range []string{"localhost", "localhost:0", "localhost:70000", "redis://localhost:6379", ":6379"} {
+		t.Run(redisAddr, func(t *testing.T) {
+			setValidEnv(t)
+			t.Setenv("REDIS_ADDR", redisAddr)
+
+			_, err := LoadFromEnv()
+			assertErrorContains(t, err, "REDIS_ADDR")
+		})
 	}
 }
 

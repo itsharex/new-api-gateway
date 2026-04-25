@@ -122,8 +122,26 @@ func validateBaseURL(rawURL string) error {
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return fmt.Errorf("invalid NEW_API_BASE_URL: scheme must be http or https")
 	}
+	if parsed.User != nil {
+		return fmt.Errorf("invalid NEW_API_BASE_URL: userinfo is not allowed")
+	}
 	if parsed.Hostname() == "" {
 		return fmt.Errorf("invalid NEW_API_BASE_URL: host is required")
+	}
+	if strings.HasSuffix(parsed.Host, ":") {
+		return fmt.Errorf("invalid NEW_API_BASE_URL: port is required after colon")
+	}
+	if parsed.Port() != "" {
+		portNumber, err := strconv.Atoi(parsed.Port())
+		if err != nil || portNumber < 1 || portNumber > 65535 {
+			return fmt.Errorf("invalid NEW_API_BASE_URL: port must be between 1 and 65535")
+		}
+	}
+	if parsed.RawQuery != "" {
+		return fmt.Errorf("invalid NEW_API_BASE_URL: query string is not allowed")
+	}
+	if parsed.Fragment != "" {
+		return fmt.Errorf("invalid NEW_API_BASE_URL: fragment is not allowed")
 	}
 	return nil
 }
