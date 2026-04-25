@@ -21,3 +21,9 @@ func TestValidateEmployeeNo(t *testing.T) {
 		t.Fatal("expected invalid employee no")
 	}
 }
+
+func TestValidateEmployeeNoWithNilPattern(t *testing.T) {
+	if err := Validate("E12345", nil); err == nil {
+		t.Fatal("expected nil pattern error")
+	}
+}

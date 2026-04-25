@@ -1,12 +1,20 @@
 package identity
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// ErrTokenNotFound is returned by TokenLookup when no token exists for a key.
+var ErrTokenNotFound = errors.New("token not found")
 
 type Cache interface {
 	Get(ctx context.Context, fingerprint string) (Snapshot, bool, error)
 	Set(ctx context.Context, snapshot Snapshot) error
 }
 
+// TokenLookup finds New API tokens by their canonical key.
+// FindByCanonicalKey returns ErrTokenNotFound when no token exists for the key.
 type TokenLookup interface {
 	FindByCanonicalKey(ctx context.Context, canonicalKey string) (NewAPIToken, error)
 }

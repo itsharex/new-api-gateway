@@ -11,6 +11,9 @@ func Normalize(raw string) string {
 }
 
 func Validate(employeeNo string, pattern *regexp.Regexp) error {
+	if pattern == nil {
+		return fmt.Errorf("employee number pattern is nil")
+	}
 	if employeeNo == "" {
 		return fmt.Errorf("employee number is empty")
 	}
