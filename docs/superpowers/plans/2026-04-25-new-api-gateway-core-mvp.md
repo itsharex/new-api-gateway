@@ -6,7 +6,7 @@
 
 **Architecture:** Implement a Go service that sits in front of new-api, resolves employee identity from `tokens.name`, captures raw evidence to a filesystem object-store abstraction, writes structured metadata to PostgreSQL, and emits analysis/coverage job envelopes for Python workers. This plan intentionally focuses on the gateway core; admin UI, full worker analysis, and advanced dashboards should be planned as follow-on slices after this core is running.
 
-**Tech Stack:** Go 1.22+, standard `net/http`, PostgreSQL via `pgxpool`, Redis via `go-redis`, filesystem-backed object storage for MVP/dev, `httptest` for proxy tests, Python 3.11 worker contract fixtures.
+**Tech Stack:** Go 1.22+, standard `net/http`, PostgreSQL via `pgxpool`, Redis via `go-redis`, filesystem-backed object storage for MVP/dev, `httptest` for proxy tests, Python 3.11 worker contract fixtures managed with `uv`.
 
 ---
 
@@ -2196,6 +2196,7 @@ Expected: commit succeeds.
 **Files:**
 - Create: `internal/jobs/jobs.go`
 - Create: `internal/jobs/jobs_test.go`
+- Create: `workers/analysis_worker/pyproject.toml`
 - Create: `workers/analysis_worker/main.py`
 - Create: `workers/analysis_worker/contract_example.json`
 
@@ -2250,7 +2251,23 @@ func NewTraceCaptured(traceID, routePattern, protocolFamily, captureMode, employ
 }
 ```
 
-- [ ] **Step 3: Add Python worker contract sample**
+- [ ] **Step 3: Add Python worker uv project**
+
+Create `workers/analysis_worker/pyproject.toml`:
+
+```toml
+[project]
+name = "new-api-gateway-analysis-worker"
+version = "0.1.0"
+description = "Analysis worker contracts for the new-api audit gateway"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.uv]
+package = false
+```
+
+- [ ] **Step 4: Add Python worker contract sample**
 
 Create `workers/analysis_worker/contract_example.json`:
 
@@ -2265,7 +2282,7 @@ Create `workers/analysis_worker/contract_example.json`:
 }
 ```
 
-- [ ] **Step 4: Add Python worker skeleton**
+- [ ] **Step 5: Add Python worker skeleton**
 
 Create `workers/analysis_worker/main.py`:
 
@@ -2303,23 +2320,23 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 5: Verify Go and Python contracts**
+- [ ] **Step 6: Verify Go and Python contracts with uv**
 
 Run:
 
 ```bash
 go test ./internal/jobs -v
-python3 workers/analysis_worker/main.py < workers/analysis_worker/contract_example.json
+(cd workers/analysis_worker && uv sync && uv run python main.py < contract_example.json)
 ```
 
 Expected: Go tests PASS and Python prints `{"accepted_trace_id": "trace_example", "worker_status": "accepted"}`.
 
-- [ ] **Step 6: Commit job contract**
+- [ ] **Step 7: Commit job contract**
 
 Run:
 
 ```bash
-git add internal/jobs workers
+git add internal/jobs workers/analysis_worker
 git commit -m "feat: define analysis job contract"
 ```
 
@@ -2353,6 +2370,16 @@ docker compose -f deploy/docker-compose.yml up -d
 
 ```bash
 make test
+```
+
+## Python Worker
+
+The analysis worker uses uv for Python dependency management:
+
+```bash
+cd workers/analysis_worker
+uv sync
+uv run python main.py < contract_example.json
 ```
 
 ## Gateway Environment
