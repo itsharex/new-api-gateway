@@ -85,6 +85,7 @@ func TestLoadFromEnvRejectsInvalidBaseURL(t *testing.T) {
 		"http://localhost:99999",
 		"http://user:pass@localhost:3000",
 		"http://localhost:3000?x=1",
+		"http://localhost:3000?",
 		"http://localhost:3000#frag",
 	} {
 		t.Run(rawURL, func(t *testing.T) {
@@ -95,6 +96,19 @@ func TestLoadFromEnvRejectsInvalidBaseURL(t *testing.T) {
 			assertErrorContains(t, err, "invalid NEW_API_BASE_URL")
 		})
 	}
+}
+
+func TestLoadFromEnvSanitizesMalformedBaseURLError(t *testing.T) {
+	rawURL := "http://gateway-user:super-secret-token@localhost:bad-port"
+	setValidEnv(t)
+	t.Setenv("NEW_API_BASE_URL", rawURL)
+
+	_, err := LoadFromEnv()
+	assertErrorContains(t, err, "invalid NEW_API_BASE_URL")
+	assertErrorOmits(t, err, rawURL)
+	assertErrorOmits(t, err, "gateway-user")
+	assertErrorOmits(t, err, "super-secret-token")
+	assertErrorOmits(t, err, "gateway-user:super-secret-token")
 }
 
 func TestLoadFromEnvRejectsInvalidPostgresDSN(t *testing.T) {
@@ -182,5 +196,15 @@ func assertErrorContains(t *testing.T, err error, want string) {
 	}
 	if !strings.Contains(err.Error(), want) {
 		t.Fatalf("error = %q, want substring %q", err.Error(), want)
+	}
+}
+
+func assertErrorOmits(t *testing.T, err error, forbidden string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected error that omits %q", forbidden)
+	}
+	if strings.Contains(err.Error(), forbidden) {
+		t.Fatalf("error = %q, must not contain %q", err.Error(), forbidden)
 	}
 }

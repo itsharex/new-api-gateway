@@ -117,7 +117,7 @@ func requiredEnv(key string) (string, error) {
 func validateBaseURL(rawURL string) error {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
-		return fmt.Errorf("invalid NEW_API_BASE_URL: %w", err)
+		return fmt.Errorf("invalid NEW_API_BASE_URL: malformed URL")
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return fmt.Errorf("invalid NEW_API_BASE_URL: scheme must be http or https")
@@ -137,7 +137,7 @@ func validateBaseURL(rawURL string) error {
 			return fmt.Errorf("invalid NEW_API_BASE_URL: port must be between 1 and 65535")
 		}
 	}
-	if parsed.RawQuery != "" {
+	if parsed.RawQuery != "" || parsed.ForceQuery {
 		return fmt.Errorf("invalid NEW_API_BASE_URL: query string is not allowed")
 	}
 	if parsed.Fragment != "" {
