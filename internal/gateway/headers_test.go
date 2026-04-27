@@ -59,3 +59,29 @@ func TestHeaderEvidenceJSONIsStable(t *testing.T) {
 		t.Fatalf("header JSON is not stable:\nfirst=%s\nsecond=%s", first, second)
 	}
 }
+
+func TestHeaderEvidenceJSONPreservesRawMapKeyValues(t *testing.T) {
+	header := http.Header{
+		"x-api-key": []string{"sk-direct-secret"},
+		"X-Custom":  []string{"visible"},
+	}
+
+	data, err := headerEvidenceJSON(header)
+	if err != nil {
+		t.Fatalf("headerEvidenceJSON error: %v", err)
+	}
+	if strings.Contains(string(data), "sk-direct-secret") {
+		t.Fatalf("header evidence leaked raw map secret in %s", data)
+	}
+
+	var decoded map[string][]string
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("header evidence is not JSON: %v", err)
+	}
+	if decoded["X-Api-Key"][0] != "[REDACTED]" {
+		t.Fatalf("X-Api-Key = %q", decoded["X-Api-Key"][0])
+	}
+	if decoded["X-Custom"][0] != "visible" {
+		t.Fatalf("X-Custom = %q", decoded["X-Custom"][0])
+	}
+}

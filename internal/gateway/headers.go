@@ -27,7 +27,7 @@ func headerEvidenceJSON(header http.Header) ([]byte, error) {
 	sort.Strings(keys)
 
 	for _, key := range keys {
-		values := header.Values(key)
+		values := header[key]
 		copied := make([]string, 0, len(values))
 		for _, value := range values {
 			copied = append(copied, sanitizeHeaderValue(key, value))
