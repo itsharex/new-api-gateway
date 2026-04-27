@@ -58,23 +58,32 @@ INSERT INTO traces (
   trace_id, method, path, route_pattern, protocol_family, capture_mode,
   status_code, upstream_status_code, stream, request_started_at, response_finished_at,
   duration_ms, request_body_size, response_body_size, request_body_sha256, response_body_sha256,
-  request_raw_ref, response_raw_ref, token_fingerprint, fingerprint_display,
+  request_raw_ref, request_headers_ref, response_raw_ref, response_headers_ref,
+  token_fingerprint, fingerprint_display,
   new_api_token_id_snapshot, token_name_snapshot, employee_no_snapshot,
-  identity_resolution_status, identity_cache_status, model_requested, analysis_status, created_at
+  identity_resolution_status, identity_cache_status, model_requested,
+  usage_prompt_tokens, usage_completion_tokens, usage_total_tokens, usage_reasoning_tokens,
+  usage_cached_tokens, estimated_cost, analysis_status, created_at
 ) VALUES (
   $1,$2,$3,$4,$5,$6,
   $7,$8,$9,$10,$11,
   $12,$13,$14,$15,$16,
   $17,$18,$19,$20,
-  $21,$22,$23,
-  $24,$25,$26,$27,$28
+  $21,$22,
+  $23,$24,$25,
+  $26,$27,$28,
+  $29,$30,$31,$32,
+  $33,$34,$35,$36
 )`,
 		trace.TraceID, trace.Method, trace.Path, trace.RoutePattern, trace.ProtocolFamily, trace.CaptureMode,
 		trace.StatusCode, trace.UpstreamStatusCode, trace.Stream, trace.RequestStartedAt, responseFinishedAt,
 		trace.DurationMillis, trace.RequestBodySize, trace.ResponseBodySize, trace.RequestBodySHA256, trace.ResponseBodySHA256,
-		trace.RequestRawRef, trace.ResponseRawRef, trace.TokenFingerprint, trace.FingerprintDisplay,
+		trace.RequestRawRef, trace.RequestHeadersRef, trace.ResponseRawRef, trace.ResponseHeadersRef,
+		trace.TokenFingerprint, trace.FingerprintDisplay,
 		trace.NewAPITokenIDSnapshot, trace.TokenNameSnapshot, trace.EmployeeNoSnapshot,
-		trace.IdentityResolutionStatus, trace.IdentityCacheStatus, trace.ModelRequested, trace.AnalysisStatus, trace.CreatedAt,
+		trace.IdentityResolutionStatus, trace.IdentityCacheStatus, trace.ModelRequested,
+		trace.UsagePromptTokens, trace.UsageCompletionTokens, trace.UsageTotalTokens, trace.UsageReasoningTokens,
+		trace.UsageCachedTokens, trace.EstimatedCost, trace.AnalysisStatus, trace.CreatedAt,
 	)
 	return err
 }

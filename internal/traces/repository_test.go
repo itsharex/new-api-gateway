@@ -117,8 +117,8 @@ func TestPostgresRepositoryNormalizesZeroResponseFinishedAtToNull(t *testing.T) 
 		t.Fatalf("query = %q, want traces insert", execer.query)
 	}
 	assertPlaceholderAlignment(t, execer.query, execer.args)
-	if len(execer.args) != 28 {
-		t.Fatalf("arg count = %d, want 28", len(execer.args))
+	if len(execer.args) != 36 {
+		t.Fatalf("arg count = %d, want 36", len(execer.args))
 	}
 	assertArg(t, execer.args, 0, trace.TraceID)
 	assertArg(t, execer.args, 1, trace.Method)
@@ -130,11 +130,16 @@ func TestPostgresRepositoryNormalizesZeroResponseFinishedAtToNull(t *testing.T) 
 	if execer.args[10] != nil {
 		t.Fatalf("response_finished_at arg = %#v, want nil", execer.args[10])
 	}
-	assertArg(t, execer.args, 18, trace.TokenFingerprint)
-	assertArg(t, execer.args, 20, trace.NewAPITokenIDSnapshot)
-	assertArg(t, execer.args, 22, trace.EmployeeNoSnapshot)
-	assertArg(t, execer.args, 26, trace.AnalysisStatus)
-	assertArg(t, execer.args, 27, trace.CreatedAt)
+	assertArg(t, execer.args, 17, trace.RequestHeadersRef)
+	assertArg(t, execer.args, 18, trace.ResponseRawRef)
+	assertArg(t, execer.args, 19, trace.ResponseHeadersRef)
+	assertArg(t, execer.args, 20, trace.TokenFingerprint)
+	assertArg(t, execer.args, 22, trace.NewAPITokenIDSnapshot)
+	assertArg(t, execer.args, 24, trace.EmployeeNoSnapshot)
+	assertArg(t, execer.args, 28, trace.UsagePromptTokens)
+	assertArg(t, execer.args, 30, trace.UsageTotalTokens)
+	assertArg(t, execer.args, 34, trace.AnalysisStatus)
+	assertArg(t, execer.args, 35, trace.CreatedAt)
 }
 
 func TestPostgresRepositoryInsertRawEvidenceBuildsExpectedSQLArgs(t *testing.T) {
@@ -195,7 +200,9 @@ func validTrace() Trace {
 		RequestBodySHA256:        "request-sha",
 		ResponseBodySHA256:       "response-sha",
 		RequestRawRef:            "raw/trace_1/request.body",
+		RequestHeadersRef:        "raw/trace_1/request_headers.bin",
 		ResponseRawRef:           "raw/trace_1/response.body",
+		ResponseHeadersRef:       "raw/trace_1/response_headers.bin",
 		TokenFingerprint:         "fp_123",
 		FingerprintDisplay:       "sk-...123",
 		NewAPITokenIDSnapshot:    42,
@@ -204,6 +211,11 @@ func validTrace() Trace {
 		IdentityResolutionStatus: "resolved",
 		IdentityCacheStatus:      "miss",
 		ModelRequested:           "gpt-4.1",
+		UsagePromptTokens:        10,
+		UsageCompletionTokens:    20,
+		UsageTotalTokens:         30,
+		UsageReasoningTokens:     4,
+		UsageCachedTokens:        2,
 		AnalysisStatus:           "pending",
 		CreatedAt:                startedAt.Add(time.Second),
 	}

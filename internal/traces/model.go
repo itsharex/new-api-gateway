@@ -20,7 +20,9 @@ type Trace struct {
 	RequestBodySHA256        string
 	ResponseBodySHA256       string
 	RequestRawRef            string
+	RequestHeadersRef        string
 	ResponseRawRef           string
+	ResponseHeadersRef       string
 	TokenFingerprint         string
 	FingerprintDisplay       string
 	NewAPITokenIDSnapshot    int
@@ -29,6 +31,12 @@ type Trace struct {
 	IdentityResolutionStatus string
 	IdentityCacheStatus      string
 	ModelRequested           string
+	UsagePromptTokens        int
+	UsageCompletionTokens    int
+	UsageTotalTokens         int
+	UsageReasoningTokens     int
+	UsageCachedTokens        int
+	EstimatedCost            string
 	AnalysisStatus           string
 	CreatedAt                time.Time
 }
