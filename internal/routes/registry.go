@@ -64,7 +64,11 @@ func (r Registry) Match(method, path string) (Entry, bool) {
 
 func matchPath(pattern, path string) bool {
 	if strings.HasSuffix(pattern, "*") {
-		return strings.HasPrefix(path, strings.TrimSuffix(pattern, "*"))
+		prefix := strings.TrimSuffix(pattern, "*")
+		if strings.HasSuffix(prefix, "/") {
+			return strings.HasPrefix(path, prefix) && len(path) > len(prefix)
+		}
+		return path == prefix || strings.HasPrefix(path, prefix+"/")
 	}
 	return pattern == path
 }
