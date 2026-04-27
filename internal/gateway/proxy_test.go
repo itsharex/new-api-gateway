@@ -992,6 +992,56 @@ func TestProxyRecordsTraceWhenResponseBodyReadFails(t *testing.T) {
 	}
 }
 
+func TestProxyCapturesResponseHeadersAndDoesNotPublishJobWhenResponseBodyReadFails(t *testing.T) {
+	readErr := errors.New("upstream read failed")
+	repo := &memoryTraceRepo{}
+	publisher := &recordingJobPublisher{}
+	handler := testHandler("https://upstream.test", repo, evidence.NewFilesystemStore(t.TempDir()))
+	handler.JobPublisher = publisher
+	handler.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				"Content-Type":       []string{"application/json"},
+				"X-Upstream-Request": []string{"upstream-1"},
+			},
+			Body:    errReadCloser{err: readErr},
+			Request: req,
+		}, nil
+	})}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-test","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer sk-abc123")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(repo.traces) != 1 {
+		t.Fatalf("expected 1 trace, got %d", len(repo.traces))
+	}
+	if repo.traces[0].ResponseHeadersRef == "" {
+		t.Fatalf("ResponseHeadersRef is empty: %+v", repo.traces[0])
+	}
+	if repo.traces[0].ResponseRawRef != "" {
+		t.Fatalf("ResponseRawRef = %q, want empty", repo.traces[0].ResponseRawRef)
+	}
+	var foundResponseHeaders bool
+	for _, object := range repo.rawEvidence {
+		if object.ObjectType == "response_headers" {
+			foundResponseHeaders = true
+		}
+	}
+	if !foundResponseHeaders {
+		t.Fatalf("raw evidence objects = %+v, missing response_headers", repo.rawEvidence)
+	}
+	if len(publisher.jobs) != 0 {
+		t.Fatalf("published jobs = %d, want 0", len(publisher.jobs))
+	}
+}
+
 func TestProxyStripsHopByHopHeaders(t *testing.T) {
 	var upstreamHeaders http.Header
 	handler := testHandler("https://upstream.test", &memoryTraceRepo{}, evidence.NewFilesystemStore(t.TempDir()))

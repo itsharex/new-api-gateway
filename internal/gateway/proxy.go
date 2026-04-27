@@ -184,21 +184,28 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		auditCtx, cancelAudit := h.auditContext(req.Context())
 		defer cancelAudit()
 		h.reportAuditError(auditCtx, err)
+		responseHeadersObject, headerErr := h.putHeaderEvidence(auditCtx, traceID, "response_headers", upstreamResp.Header)
+		if headerErr != nil {
+			h.reportAuditError(auditCtx, headerErr)
+		}
 		_ = h.insertTrace(auditCtx, traceRecord{
-			traceID:              traceID,
-			req:                  req,
-			entry:                entry,
-			statusCode:           http.StatusBadGateway,
-			upstreamCode:         upstreamResp.StatusCode,
-			startedAt:            startedAt,
-			finishedAt:           finishedAt,
-			requestObject:        requestObject,
-			requestHeadersObject: requestHeadersObject,
-			requestContentType:   capturedReq.ContentType,
-			modelRequested:       modelRequested,
-			requestSize:          capturedReq.SizeBytes,
-			snapshot:             snapshot,
-			unknownRoute:         unknownRoute,
+			traceID:               traceID,
+			req:                   req,
+			entry:                 entry,
+			statusCode:            http.StatusBadGateway,
+			upstreamCode:          upstreamResp.StatusCode,
+			startedAt:             startedAt,
+			finishedAt:            finishedAt,
+			requestObject:         requestObject,
+			requestHeadersObject:  requestHeadersObject,
+			responseHeadersObject: responseHeadersObject,
+			requestContentType:    capturedReq.ContentType,
+			responseContentType:   upstreamResp.Header.Get("Content-Type"),
+			modelRequested:        modelRequested,
+			requestSize:           capturedReq.SizeBytes,
+			snapshot:              snapshot,
+			unknownRoute:          unknownRoute,
+			skipPostPersistence:   true,
 		})
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
 		return
