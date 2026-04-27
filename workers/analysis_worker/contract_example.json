@@ -4,5 +4,17 @@
   "route_pattern": "/v1/chat/completions",
   "protocol_family": "openai_chat",
   "capture_mode": "raw_and_normalized",
-  "employee_no": "E12345"
+  "employee_no": "E12345",
+  "request_raw_ref": "raw/2026/04/27/trace_example/request_body.bin",
+  "request_headers_ref": "raw/2026/04/27/trace_example/request_headers.bin",
+  "response_raw_ref": "raw/2026/04/27/trace_example/response_body.bin",
+  "response_headers_ref": "raw/2026/04/27/trace_example/response_headers.bin",
+  "request_content_type": "application/json",
+  "response_content_type": "application/json",
+  "model_requested": "gpt-test",
+  "usage_prompt_tokens": 11,
+  "usage_completion_tokens": 7,
+  "usage_total_tokens": 18,
+  "usage_reasoning_tokens": 2,
+  "usage_cached_tokens": 3
 }
