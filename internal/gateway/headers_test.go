@@ -85,3 +85,31 @@ func TestHeaderEvidenceJSONPreservesRawMapKeyValues(t *testing.T) {
 		t.Fatalf("X-Custom = %q", decoded["X-Custom"][0])
 	}
 }
+
+func TestHeaderEvidenceJSONMergesCanonicalDuplicateKeys(t *testing.T) {
+	header := http.Header{
+		"X-Custom": []string{"one"},
+		"x-custom": []string{"two"},
+	}
+
+	data, err := headerEvidenceJSON(header)
+	if err != nil {
+		t.Fatalf("headerEvidenceJSON error: %v", err)
+	}
+
+	var decoded map[string][]string
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("header evidence is not JSON: %v", err)
+	}
+	values := decoded["X-Custom"]
+	if len(values) != 2 {
+		t.Fatalf("X-Custom length = %d, values = %v", len(values), values)
+	}
+	seen := map[string]bool{}
+	for _, value := range values {
+		seen[value] = true
+	}
+	if !seen["one"] || !seen["two"] {
+		t.Fatalf("X-Custom values = %v", values)
+	}
+}

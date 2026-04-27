@@ -28,11 +28,12 @@ func headerEvidenceJSON(header http.Header) ([]byte, error) {
 
 	for _, key := range keys {
 		values := header[key]
-		copied := make([]string, 0, len(values))
+		evidenceKey := headerEvidenceKey(key)
+		copied := snapshot[evidenceKey]
 		for _, value := range values {
 			copied = append(copied, sanitizeHeaderValue(key, value))
 		}
-		snapshot[headerEvidenceKey(key)] = copied
+		snapshot[evidenceKey] = copied
 	}
 	return json.Marshal(snapshot)
 }
