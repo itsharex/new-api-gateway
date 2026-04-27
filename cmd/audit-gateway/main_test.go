@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/your-company/new-api-gateway/internal/config"
 )
@@ -58,6 +60,43 @@ func TestAuditErrorLoggerRedactsBearerTokens(t *testing.T) {
 	}
 	if contains(logged, "sk-secret-plain-text") {
 		t.Fatalf("audit log leaked plaintext API key: %q", logged)
+	}
+}
+
+func TestServeUntilContextShutsDownServerWhenContextIsCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server := &http.Server{
+		Addr:    "127.0.0.1:0",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}),
+	}
+	shutdownCalled := make(chan struct{})
+	server.RegisterOnShutdown(func() {
+		close(shutdownCalled)
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- serveUntilContext(ctx, server, 250*time.Millisecond)
+	}()
+
+	time.Sleep(25 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-shutdownCalled:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("server shutdown was not called after context cancellation")
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("serveUntilContext returned error: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("serveUntilContext did not return after context cancellation")
 	}
 }
 

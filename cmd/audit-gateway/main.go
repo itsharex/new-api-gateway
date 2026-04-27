@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"net/http"
+	"os/signal"
 	"regexp"
+	"syscall"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
@@ -19,12 +23,17 @@ import (
 	"github.com/your-company/new-api-gateway/internal/traces"
 )
 
+const shutdownTimeout = 10 * time.Second
+
 func main() {
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
 		log.Fatalf("configuration error: %v", err)
 	}
-	if err := run(context.Background(), cfg, log.Default()); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := run(ctx, cfg, log.Default()); err != nil {
 		log.Fatalf("gateway error: %v", err)
 	}
 }
@@ -45,7 +54,42 @@ func run(ctx context.Context, cfg config.Config, logger *log.Logger) error {
 		Handler: handler,
 	}
 	logger.Printf("audit gateway listening on %s", cfg.ListenAddr)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := serveUntilContext(ctx, server, shutdownTimeout); err != nil {
+		return err
+	}
+	return nil
+}
+
+func serveUntilContext(ctx context.Context, server *http.Server, shutdownTimeout time.Duration) error {
+	addr := server.Addr
+	if addr == "" {
+		addr = ":http"
+	}
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		errc <- server.Serve(listener)
+	}()
+
+	select {
+	case err := <-errc:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	if err := <-errc; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil

@@ -163,6 +163,60 @@ func TestProxyPublishesTraceCapturedJobAfterTracePersistence(t *testing.T) {
 	}
 }
 
+func TestProxyPublishesTraceCapturedJobAfterRawEvidencePersistence(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	var events []string
+	repo := &orderedTraceRepo{events: &events}
+	publisher := &orderedJobPublisher{events: &events}
+	handler := testHandler(upstream.URL, repo, evidence.NewFilesystemStore(t.TempDir()))
+	handler.JobPublisher = publisher
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer sk-abc123")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	want := []string{"trace", "raw:request_body", "raw:response_body", "publish"}
+	if strings.Join(events, ",") != strings.Join(want, ",") {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
+func TestProxyDoesNotPublishTraceCapturedJobWhenRawEvidencePersistenceFails(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	insertErr := errors.New("raw evidence insert failed")
+	publisher := &recordingJobPublisher{}
+	handler := testHandler(upstream.URL, &memoryTraceRepo{insertRawErr: insertErr}, evidence.NewFilesystemStore(t.TempDir()))
+	handler.JobPublisher = publisher
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer sk-abc123")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(publisher.jobs) != 0 {
+		t.Fatalf("published jobs = %d, want 0", len(publisher.jobs))
+	}
+}
+
 func TestProxyReportsTraceCapturedPublishFailureWithoutMaskingUpstream(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
@@ -691,6 +745,53 @@ func TestProxyStreamingResponseEvidenceFailureDoesNotMaskClientResponse(t *testi
 	}
 }
 
+func TestProxyStreamingAuditPersistenceSurvivesCanceledRequestContext(t *testing.T) {
+	repo := &contextRejectingTraceRepo{}
+	handler := testHandler("https://upstream.test", repo, evidence.NewFilesystemStore(t.TempDir()))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`)).WithContext(ctx)
+	cancel()
+
+	rec := httptest.NewRecorder()
+	entry, ok := routes.DefaultRegistry().Match(http.MethodPost, "/v1/chat/completions")
+	if !ok {
+		t.Fatal("default registry did not match chat completions route")
+	}
+	handler.serveStreamingResponse(rec, req, &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader("data: one\n\n")),
+		Request:    req,
+	}, traceRecord{
+		traceID:      "trace_stream_cancel",
+		req:          req,
+		entry:        entry,
+		statusCode:   http.StatusOK,
+		upstreamCode: http.StatusOK,
+		startedAt:    time.Unix(1000, 0).UTC(),
+		requestObject: evidence.Object{
+			ObjectRef:      "request.bin",
+			StorageBackend: "test",
+			SizeBytes:      2,
+			SHA256:         "request-sha",
+			CreatedAt:      time.Unix(1000, 0).UTC(),
+		},
+		requestSize: 2,
+		stream:      true,
+	})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(repo.traces) != 1 {
+		t.Fatalf("expected 1 trace despite canceled request context, got %d", len(repo.traces))
+	}
+	if repo.traces[0].ResponseRawRef == "" {
+		t.Fatal("ResponseRawRef is empty")
+	}
+}
+
 func testHandler(upstreamURL string, repo traces.Repository, store evidence.Store) Handler {
 	return Handler{
 		UpstreamBaseURL:  upstreamURL,
@@ -701,6 +802,27 @@ func testHandler(upstreamURL string, repo traces.Repository, store evidence.Stor
 		AuditSecret:      "0123456789abcdef0123456789abcdef",
 		Now:              func() time.Time { return time.Unix(1000, 0).UTC() },
 	}
+}
+
+type contextRejectingTraceRepo struct {
+	traces      []traces.Trace
+	rawEvidence []traces.RawEvidenceObject
+}
+
+func (r *contextRejectingTraceRepo) InsertTrace(ctx context.Context, trace traces.Trace) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.traces = append(r.traces, trace)
+	return nil
+}
+
+func (r *contextRejectingTraceRepo) InsertRawEvidence(ctx context.Context, object traces.RawEvidenceObject) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.rawEvidence = append(r.rawEvidence, object)
+	return nil
 }
 
 type selectiveEvidenceStore struct {
@@ -756,6 +878,29 @@ type recordingJobPublisher struct {
 func (p *recordingJobPublisher) PublishTraceCaptured(ctx context.Context, job jobs.TraceCapturedJob) error {
 	p.jobs = append(p.jobs, job)
 	return p.err
+}
+
+type orderedTraceRepo struct {
+	events *[]string
+}
+
+func (r *orderedTraceRepo) InsertTrace(ctx context.Context, trace traces.Trace) error {
+	*r.events = append(*r.events, "trace")
+	return nil
+}
+
+func (r *orderedTraceRepo) InsertRawEvidence(ctx context.Context, object traces.RawEvidenceObject) error {
+	*r.events = append(*r.events, "raw:"+object.ObjectType)
+	return nil
+}
+
+type orderedJobPublisher struct {
+	events *[]string
+}
+
+func (p *orderedJobPublisher) PublishTraceCaptured(ctx context.Context, job jobs.TraceCapturedJob) error {
+	*p.events = append(*p.events, "publish")
+	return nil
 }
 
 type recordingCoverageEmitter struct {

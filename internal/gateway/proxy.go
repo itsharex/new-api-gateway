@@ -37,9 +37,12 @@ type Handler struct {
 	Now                 func() time.Time
 	AuditError          func(ctx context.Context, err error)
 	MaxRequestBodyBytes int64
+	AuditTimeout        time.Duration
 	JobPublisher        jobs.Publisher
 	CoverageEmitter     alerts.Emitter
 }
+
+const defaultAuditTimeout = 5 * time.Second
 
 func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	startedAt := h.now()
@@ -224,43 +227,47 @@ func (h Handler) insertTrace(ctx context.Context, record traceRecord) error {
 		CreatedAt:                record.startedAt,
 	}
 	var errs []error
-	traceInserted := false
 	if err := h.TraceRepo.InsertTrace(ctx, trace); err != nil {
 		h.reportAuditError(ctx, err)
 		errs = append(errs, err)
-	} else {
-		traceInserted = true
-		if h.JobPublisher != nil {
-			job := jobs.NewTraceCaptured(
-				record.traceID,
-				record.entry.PathPattern,
-				record.entry.ProtocolFamily,
-				string(record.entry.CaptureMode),
-				record.snapshot.EmployeeNo,
-			)
-			if err := h.JobPublisher.PublishTraceCaptured(ctx, job); err != nil {
-				h.reportAuditError(ctx, err)
-				errs = append(errs, err)
-			}
-		}
-		if err := h.emitCoverageAlert(ctx, record); err != nil {
+		return errors.Join(errs...)
+	}
+
+	if err := h.insertEvidenceObject(ctx, record.traceID, "request_body", record.requestObject); err != nil {
+		errs = append(errs, err)
+	}
+	if record.responseObject.ObjectRef != "" {
+		if err := h.insertEvidenceObject(ctx, record.traceID, "response_body", record.responseObject); err != nil {
 			errs = append(errs, err)
 		}
 	}
-	if traceInserted {
-		if err := h.insertEvidenceObject(ctx, record.traceID, "request_body", record.requestObject); err != nil {
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+
+	if err := h.emitCoverageAlert(ctx, record); err != nil {
+		errs = append(errs, err)
+	}
+	if h.JobPublisher != nil {
+		job := jobs.NewTraceCaptured(
+			record.traceID,
+			record.entry.PathPattern,
+			record.entry.ProtocolFamily,
+			string(record.entry.CaptureMode),
+			record.snapshot.EmployeeNo,
+		)
+		if err := h.JobPublisher.PublishTraceCaptured(ctx, job); err != nil {
+			h.reportAuditError(ctx, err)
 			errs = append(errs, err)
-		}
-		if record.responseObject.ObjectRef != "" {
-			if err := h.insertEvidenceObject(ctx, record.traceID, "response_body", record.responseObject); err != nil {
-				errs = append(errs, err)
-			}
 		}
 	}
 	return errors.Join(errs...)
 }
 
 func (h Handler) serveStreamingResponse(w http.ResponseWriter, req *http.Request, upstreamResp *http.Response, record traceRecord) {
+	auditCtx, cancelAudit := h.auditContext(req.Context())
+	defer cancelAudit()
+
 	copyHeaders(w.Header(), upstreamResp.Header)
 	w.Header().Set("x-audit-trace-id", record.traceID)
 	w.WriteHeader(upstreamResp.StatusCode)
@@ -287,7 +294,7 @@ func (h Handler) serveStreamingResponse(w http.ResponseWriter, req *http.Request
 		}, 1)
 		go func() {
 			defer pr.Close()
-			object, err := h.EvidenceStore.Put(req.Context(), evidence.PutRequest{
+			object, err := h.EvidenceStore.Put(auditCtx, evidence.PutRequest{
 				TraceID:     record.traceID,
 				ObjectType:  "response_body",
 				ContentType: upstreamResp.Header.Get("Content-Type"),
@@ -308,22 +315,30 @@ func (h Handler) serveStreamingResponse(w http.ResponseWriter, req *http.Request
 		result := <-storeDone
 		responseObject = result.object
 		if result.err != nil {
-			h.reportAuditError(req.Context(), result.err)
+			h.reportAuditError(auditCtx, result.err)
 		} else if captureErr != nil {
-			h.reportAuditError(req.Context(), captureErr)
+			h.reportAuditError(auditCtx, captureErr)
 		}
 	}
 	if responseErr != nil {
-		h.reportAuditError(req.Context(), responseErr)
+		h.reportAuditError(auditCtx, responseErr)
 	}
 	if h.EvidenceStore == nil && captureErr != nil {
-		h.reportAuditError(req.Context(), captureErr)
+		h.reportAuditError(auditCtx, captureErr)
 	}
 
 	record.finishedAt = h.now()
 	record.responseObject = responseObject
 	record.responseSize = written
-	_ = h.insertTrace(req.Context(), record)
+	_ = h.insertTrace(auditCtx, record)
+}
+
+func (h Handler) auditContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := h.AuditTimeout
+	if timeout <= 0 {
+		timeout = defaultAuditTimeout
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), timeout)
 }
 
 func (h Handler) emitCoverageAlert(ctx context.Context, record traceRecord) error {
