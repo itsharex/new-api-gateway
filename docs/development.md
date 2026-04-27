@@ -37,3 +37,9 @@ make run
 ```
 
 The gateway must never log or persist plaintext API keys. Tests should assert that API-key handling only stores HMAC fingerprints and token metadata.
+
+## Evidence and Analysis Jobs
+
+The gateway stores request body, response body, request headers, and response headers as raw evidence objects. Header evidence is JSON and redacts API-key-bearing headers before writing to storage.
+
+The Redis `analysis_jobs` list receives `trace_captured` envelopes only after the trace row and raw evidence rows are persisted. Job envelopes include evidence refs, content types, requested model, and token usage fields when the gateway can extract them from non-streaming JSON responses.
