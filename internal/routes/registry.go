@@ -44,6 +44,18 @@ func DefaultRegistry() Registry {
 		{Method: "POST", PathPattern: "/v1beta/models/*", ProtocolFamily: "gemini", BodyKind: "json", CaptureMode: CaptureRawAndNormalized, Normalizer: "gemini_generate_content"},
 		{Method: "POST", PathPattern: "/v1/models/*", ProtocolFamily: "gemini", BodyKind: "json", CaptureMode: CaptureRawAndNormalized, Normalizer: "gemini_generate_content"},
 		{Method: "GET", PathPattern: "/v1/realtime", ProtocolFamily: "realtime", BodyKind: "websocket", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "realtime_minimal", UnsupportedAlertCode: "known_route_raw_first"},
+		{Method: "POST", PathPattern: "/v1/engines/:model/embeddings", ProtocolFamily: "embeddings", BodyKind: "json", CaptureMode: CaptureRawAndNormalized, Normalizer: "embeddings"},
+		{Method: "POST", PathPattern: "/v1/video/generations", ProtocolFamily: "video", BodyKind: "json_or_multipart", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
+		{Method: "GET", PathPattern: "/v1/video/generations/:task_id", ProtocolFamily: "video", BodyKind: "none", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
+		{Method: "GET", PathPattern: "/v1/videos/:task_id", ProtocolFamily: "video", BodyKind: "none", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
+		{Method: "GET", PathPattern: "/v1/videos/:task_id/content", ProtocolFamily: "video", BodyKind: "none", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
+		{Method: "POST", PathPattern: "/v1/videos/:video_id/remix", ProtocolFamily: "video", BodyKind: "json_or_multipart", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
+		{Method: "POST", PathPattern: "/kling/v1/videos/text2video", ProtocolFamily: "kling_video", BodyKind: "json", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
+		{Method: "POST", PathPattern: "/kling/v1/videos/image2video", ProtocolFamily: "kling_video", BodyKind: "json_or_multipart", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
+		{Method: "GET", PathPattern: "/kling/v1/videos/text2video/:task_id", ProtocolFamily: "kling_video", BodyKind: "none", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
+		{Method: "GET", PathPattern: "/kling/v1/videos/image2video/:task_id", ProtocolFamily: "kling_video", BodyKind: "none", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
+		{Method: "POST", PathPattern: "/jimeng/", ProtocolFamily: "jimeng", BodyKind: "json", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
+		{Method: "POST", PathPattern: "/:mode/mj/*", ProtocolFamily: "midjourney", BodyKind: "json", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
 		{Method: "POST", PathPattern: "/mj/*", ProtocolFamily: "midjourney", BodyKind: "json", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
 		{Method: "POST", PathPattern: "/suno/*", ProtocolFamily: "suno", BodyKind: "json", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
 		{Method: "POST", PathPattern: "/v1/videos*", ProtocolFamily: "video", BodyKind: "json_or_multipart", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
@@ -63,6 +75,12 @@ func (r Registry) Match(method, path string) (Entry, bool) {
 }
 
 func matchPath(pattern, path string) bool {
+	if pattern == path {
+		return true
+	}
+	if strings.Contains(pattern, ":") {
+		return matchSegmentPath(pattern, path)
+	}
 	if strings.HasSuffix(pattern, "*") {
 		prefix := strings.TrimSuffix(pattern, "*")
 		if strings.HasSuffix(prefix, "/") {
@@ -70,5 +88,47 @@ func matchPath(pattern, path string) bool {
 		}
 		return path == prefix || strings.HasPrefix(path, prefix+"/")
 	}
-	return pattern == path
+	return false
+}
+
+func matchSegmentPath(pattern, path string) bool {
+	patternSegments := splitPath(pattern)
+	pathSegments := splitPath(path)
+	if len(patternSegments) == 0 || len(pathSegments) == 0 {
+		return false
+	}
+	if patternSegments[len(patternSegments)-1] == "*" {
+		if len(pathSegments) < len(patternSegments) {
+			return false
+		}
+		patternSegments = patternSegments[:len(patternSegments)-1]
+		pathSegments = pathSegments[:len(patternSegments)]
+	} else if len(patternSegments) != len(pathSegments) {
+		return false
+	}
+	if len(patternSegments) != len(pathSegments) {
+		return false
+	}
+	for i := range patternSegments {
+		patternSegment := patternSegments[i]
+		pathSegment := pathSegments[i]
+		if pathSegment == "" {
+			return false
+		}
+		if strings.HasPrefix(patternSegment, ":") {
+			continue
+		}
+		if patternSegment != pathSegment {
+			return false
+		}
+	}
+	return true
+}
+
+func splitPath(path string) []string {
+	trimmed := strings.Trim(path, "/")
+	if trimmed == "" {
+		return nil
+	}
+	return strings.Split(trimmed, "/")
 }

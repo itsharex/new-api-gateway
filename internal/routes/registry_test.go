@@ -141,3 +141,56 @@ func TestDefaultRegistryWildcardBoundaries(t *testing.T) {
 		})
 	}
 }
+
+func TestDefaultRegistryMatchesApprovedMVPRoutes(t *testing.T) {
+	tests := []struct {
+		method       string
+		path         string
+		wantPattern  string
+		wantProtocol string
+		wantCapture  CaptureMode
+	}{
+		{"POST", "/v1/engines/text-embedding-3-small/embeddings", "/v1/engines/:model/embeddings", "embeddings", CaptureRawAndNormalized},
+		{"POST", "/v1/video/generations", "/v1/video/generations", "video", CaptureRawAndMinimal},
+		{"GET", "/v1/video/generations/task_123", "/v1/video/generations/:task_id", "video", CaptureRawAndMinimal},
+		{"GET", "/v1/videos/task_123", "/v1/videos/:task_id", "video", CaptureRawAndMinimal},
+		{"GET", "/v1/videos/task_123/content", "/v1/videos/:task_id/content", "video", CaptureRawAndMinimal},
+		{"POST", "/v1/videos/video_123/remix", "/v1/videos/:video_id/remix", "video", CaptureRawAndMinimal},
+		{"POST", "/kling/v1/videos/text2video", "/kling/v1/videos/text2video", "kling_video", CaptureRawAndMinimal},
+		{"POST", "/kling/v1/videos/image2video", "/kling/v1/videos/image2video", "kling_video", CaptureRawAndMinimal},
+		{"GET", "/kling/v1/videos/text2video/task_123", "/kling/v1/videos/text2video/:task_id", "kling_video", CaptureRawAndMinimal},
+		{"GET", "/kling/v1/videos/image2video/task_123", "/kling/v1/videos/image2video/:task_id", "kling_video", CaptureRawAndMinimal},
+		{"POST", "/jimeng/", "/jimeng/", "jimeng", CaptureRawAndMinimal},
+		{"POST", "/relay/mj/submit/imagine", "/:mode/mj/*", "midjourney", CaptureRawAndMinimal},
+		{"POST", "/suno/submit/music", "/suno/*", "suno", CaptureRawAndMinimal},
+	}
+
+	registry := DefaultRegistry()
+	for _, tt := range tests {
+		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
+			entry, ok := registry.Match(tt.method, tt.path)
+			if !ok {
+				t.Fatalf("expected match for %s %s", tt.method, tt.path)
+			}
+			if entry.PathPattern != tt.wantPattern {
+				t.Fatalf("PathPattern = %q, want %q", entry.PathPattern, tt.wantPattern)
+			}
+			if entry.ProtocolFamily != tt.wantProtocol {
+				t.Fatalf("ProtocolFamily = %q, want %q", entry.ProtocolFamily, tt.wantProtocol)
+			}
+			if entry.CaptureMode != tt.wantCapture {
+				t.Fatalf("CaptureMode = %q, want %q", entry.CaptureMode, tt.wantCapture)
+			}
+		})
+	}
+}
+
+func TestRouteSegmentParametersRequireNonEmptySegment(t *testing.T) {
+	registry := DefaultRegistry()
+	if _, ok := registry.Match("GET", "/v1/videos//content"); ok {
+		t.Fatal("expected no match for empty task id")
+	}
+	if _, ok := registry.Match("POST", "/relay/mj/"); ok {
+		t.Fatal("expected no match for empty mj child path")
+	}
+}
