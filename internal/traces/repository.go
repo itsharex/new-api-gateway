@@ -2,8 +2,17 @@ package traces
 
 import (
 	"context"
+	"errors"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+var (
+	errNilDatabasePool         = errors.New("traces repository: nil database pool")
+	errTraceStartedAtRequired  = errors.New("traces repository: request_started_at is required")
+	errTraceCreatedAtRequired  = errors.New("traces repository: created_at is required")
+	errObjectCreatedAtRequired = errors.New("traces repository: created_at is required")
 )
 
 type Repository interface {
@@ -11,16 +20,40 @@ type Repository interface {
 	InsertRawEvidence(ctx context.Context, object RawEvidenceObject) error
 }
 
+type execer interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+}
+
+var _ execer = (*pgxpool.Pool)(nil)
+
 type PostgresRepository struct {
-	pool *pgxpool.Pool
+	execer execer
 }
 
 func NewPostgresRepository(pool *pgxpool.Pool) PostgresRepository {
-	return PostgresRepository{pool: pool}
+	if pool == nil {
+		return PostgresRepository{}
+	}
+	return PostgresRepository{execer: pool}
 }
 
 func (r PostgresRepository) InsertTrace(ctx context.Context, trace Trace) error {
-	_, err := r.pool.Exec(ctx, `
+	if r.execer == nil {
+		return errNilDatabasePool
+	}
+	if trace.RequestStartedAt.IsZero() {
+		return errTraceStartedAtRequired
+	}
+	if trace.CreatedAt.IsZero() {
+		return errTraceCreatedAtRequired
+	}
+
+	var responseFinishedAt any
+	if !trace.ResponseFinishedAt.IsZero() {
+		responseFinishedAt = trace.ResponseFinishedAt
+	}
+
+	_, err := r.execer.Exec(ctx, `
 INSERT INTO traces (
   trace_id, method, path, route_pattern, protocol_family, capture_mode,
   status_code, upstream_status_code, stream, request_started_at, response_finished_at,
@@ -37,7 +70,7 @@ INSERT INTO traces (
   $24,$25,$26,$27,$28
 )`,
 		trace.TraceID, trace.Method, trace.Path, trace.RoutePattern, trace.ProtocolFamily, trace.CaptureMode,
-		trace.StatusCode, trace.UpstreamStatusCode, trace.Stream, trace.RequestStartedAt, trace.ResponseFinishedAt,
+		trace.StatusCode, trace.UpstreamStatusCode, trace.Stream, trace.RequestStartedAt, responseFinishedAt,
 		trace.DurationMillis, trace.RequestBodySize, trace.ResponseBodySize, trace.RequestBodySHA256, trace.ResponseBodySHA256,
 		trace.RequestRawRef, trace.ResponseRawRef, trace.TokenFingerprint, trace.FingerprintDisplay,
 		trace.NewAPITokenIDSnapshot, trace.TokenNameSnapshot, trace.EmployeeNoSnapshot,
@@ -47,7 +80,14 @@ INSERT INTO traces (
 }
 
 func (r PostgresRepository) InsertRawEvidence(ctx context.Context, object RawEvidenceObject) error {
-	_, err := r.pool.Exec(ctx, `
+	if r.execer == nil {
+		return errNilDatabasePool
+	}
+	if object.CreatedAt.IsZero() {
+		return errObjectCreatedAtRequired
+	}
+
+	_, err := r.execer.Exec(ctx, `
 INSERT INTO raw_evidence_objects (
   trace_id, object_type, object_ref, storage_backend, content_type, size_bytes, sha256, created_at
 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
