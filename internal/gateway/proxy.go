@@ -1,14 +1,18 @@
 package gateway
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/your-company/new-api-gateway/internal/alerts"
@@ -76,10 +80,30 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 	snapshot := h.resolveIdentity(req.Context(), authResult, hasAuth)
 
-	requestObject, err := h.putEvidence(req.Context(), traceID, "request_body", capturedReq.ContentType, capturedReq.BodyBytes)
+	auditCtx, cancelAudit := h.auditContext(req.Context())
+	requestObject, err := h.putEvidence(auditCtx, traceID, "request_body", capturedReq.ContentType, capturedReq.BodyBytes)
 	if err != nil {
-		h.reportAuditError(req.Context(), err)
+		h.reportAuditError(auditCtx, err)
+		cancelAudit()
 		http.Error(w, "failed to store request evidence", http.StatusInternalServerError)
+		return
+	}
+	cancelAudit()
+
+	if entry.BodyKind == "websocket" && isWebSocketUpgrade(req) {
+		h.serveWebSocketTunnel(w, req, traceRecord{
+			traceID:       traceID,
+			req:           req,
+			entry:         entry,
+			statusCode:    http.StatusSwitchingProtocols,
+			upstreamCode:  http.StatusSwitchingProtocols,
+			startedAt:     startedAt,
+			requestObject: requestObject,
+			requestSize:   capturedReq.SizeBytes,
+			snapshot:      snapshot,
+			stream:        true,
+			unknownRoute:  unknownRoute,
+		})
 		return
 	}
 
@@ -92,7 +116,9 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	upstreamResp, err := h.client().Do(upstreamReq)
 	if err != nil {
 		finishedAt := h.now()
-		h.insertTrace(req.Context(), traceRecord{
+		auditCtx, cancelAudit := h.auditContext(req.Context())
+		defer cancelAudit()
+		h.insertTrace(auditCtx, traceRecord{
 			traceID:       traceID,
 			req:           req,
 			entry:         entry,
@@ -129,9 +155,11 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	responseBody, err := io.ReadAll(upstreamResp.Body)
 	if err != nil {
-		h.reportAuditError(req.Context(), err)
 		finishedAt := h.now()
-		_ = h.insertTrace(req.Context(), traceRecord{
+		auditCtx, cancelAudit := h.auditContext(req.Context())
+		defer cancelAudit()
+		h.reportAuditError(auditCtx, err)
+		_ = h.insertTrace(auditCtx, traceRecord{
 			traceID:       traceID,
 			req:           req,
 			entry:         entry,
@@ -149,25 +177,30 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 	finishedAt := h.now()
 
-	responseObject, err := h.putEvidence(req.Context(), traceID, "response_body", upstreamResp.Header.Get("Content-Type"), responseBody)
+	auditCtx, cancelAudit = h.auditContext(req.Context())
+	defer cancelAudit()
+	responseObject, err := h.putEvidence(auditCtx, traceID, "response_body", upstreamResp.Header.Get("Content-Type"), responseBody)
+	skipPostPersistence := false
 	if err != nil {
-		h.reportAuditError(req.Context(), err)
+		h.reportAuditError(auditCtx, err)
+		skipPostPersistence = true
 	}
 
-	_ = h.insertTrace(req.Context(), traceRecord{
-		traceID:        traceID,
-		req:            req,
-		entry:          entry,
-		statusCode:     upstreamResp.StatusCode,
-		upstreamCode:   upstreamResp.StatusCode,
-		startedAt:      startedAt,
-		finishedAt:     finishedAt,
-		requestObject:  requestObject,
-		responseObject: responseObject,
-		requestSize:    capturedReq.SizeBytes,
-		responseSize:   int64(len(responseBody)),
-		snapshot:       snapshot,
-		unknownRoute:   unknownRoute,
+	_ = h.insertTrace(auditCtx, traceRecord{
+		traceID:             traceID,
+		req:                 req,
+		entry:               entry,
+		statusCode:          upstreamResp.StatusCode,
+		upstreamCode:        upstreamResp.StatusCode,
+		startedAt:           startedAt,
+		finishedAt:          finishedAt,
+		requestObject:       requestObject,
+		responseObject:      responseObject,
+		requestSize:         capturedReq.SizeBytes,
+		responseSize:        int64(len(responseBody)),
+		snapshot:            snapshot,
+		unknownRoute:        unknownRoute,
+		skipPostPersistence: skipPostPersistence,
 	})
 
 	copyHeaders(w.Header(), upstreamResp.Header)
@@ -177,20 +210,21 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 type traceRecord struct {
-	traceID        string
-	req            *http.Request
-	entry          routes.Entry
-	statusCode     int
-	upstreamCode   int
-	startedAt      time.Time
-	finishedAt     time.Time
-	requestObject  evidence.Object
-	responseObject evidence.Object
-	requestSize    int64
-	responseSize   int64
-	snapshot       identity.Snapshot
-	stream         bool
-	unknownRoute   bool
+	traceID             string
+	req                 *http.Request
+	entry               routes.Entry
+	statusCode          int
+	upstreamCode        int
+	startedAt           time.Time
+	finishedAt          time.Time
+	requestObject       evidence.Object
+	responseObject      evidence.Object
+	requestSize         int64
+	responseSize        int64
+	snapshot            identity.Snapshot
+	stream              bool
+	unknownRoute        bool
+	skipPostPersistence bool
 }
 
 func (h Handler) insertTrace(ctx context.Context, record traceRecord) error {
@@ -244,6 +278,9 @@ func (h Handler) insertTrace(ctx context.Context, record traceRecord) error {
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
+	if record.skipPostPersistence {
+		return nil
+	}
 
 	if err := h.emitCoverageAlert(ctx, record); err != nil {
 		errs = append(errs, err)
@@ -262,6 +299,124 @@ func (h Handler) insertTrace(ctx context.Context, record traceRecord) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func (h Handler) serveWebSocketTunnel(w http.ResponseWriter, req *http.Request, record traceRecord) {
+	upstreamReq, err := h.newWebSocketUpstreamRequest(req)
+	if err != nil {
+		http.Error(w, "failed to create upstream request", http.StatusBadGateway)
+		h.recordWebSocketTrace(req, record, http.StatusBadGateway, 0)
+		return
+	}
+	upstreamConn, err := dialUpstream(req.Context(), upstreamReq.URL)
+	if err != nil {
+		http.Error(w, "upstream request failed", http.StatusBadGateway)
+		h.recordWebSocketTrace(req, record, http.StatusBadGateway, 0)
+		return
+	}
+	defer upstreamConn.Close()
+
+	if err := upstreamReq.Write(upstreamConn); err != nil {
+		http.Error(w, "upstream request failed", http.StatusBadGateway)
+		h.recordWebSocketTrace(req, record, http.StatusBadGateway, 0)
+		return
+	}
+
+	upstreamReader := bufio.NewReader(upstreamConn)
+	upstreamResp, err := http.ReadResponse(upstreamReader, upstreamReq)
+	if err != nil {
+		http.Error(w, "upstream request failed", http.StatusBadGateway)
+		h.recordWebSocketTrace(req, record, http.StatusBadGateway, 0)
+		return
+	}
+	record.statusCode = upstreamResp.StatusCode
+	record.upstreamCode = upstreamResp.StatusCode
+
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "websocket tunnel unsupported", http.StatusInternalServerError)
+		h.recordWebSocketTrace(req, record, http.StatusInternalServerError, upstreamResp.StatusCode)
+		return
+	}
+	clientConn, clientRW, err := hijacker.Hijack()
+	if err != nil {
+		h.reportAuditError(req.Context(), err)
+		h.recordWebSocketTrace(req, record, http.StatusInternalServerError, upstreamResp.StatusCode)
+		return
+	}
+	defer clientConn.Close()
+
+	if err := upstreamResp.Write(clientConn); err != nil {
+		h.reportAuditError(req.Context(), err)
+		h.recordWebSocketTrace(req, record, http.StatusBadGateway, upstreamResp.StatusCode)
+		return
+	}
+	if upstreamResp.StatusCode == http.StatusSwitchingProtocols {
+		copyBidirectional(clientConn, clientRW.Reader, upstreamConn, upstreamReader)
+	}
+	h.recordWebSocketTrace(req, record, record.statusCode, record.upstreamCode)
+}
+
+func (h Handler) recordWebSocketTrace(req *http.Request, record traceRecord, statusCode, upstreamCode int) {
+	record.statusCode = statusCode
+	record.upstreamCode = upstreamCode
+	record.finishedAt = h.now()
+	auditCtx, cancelAudit := h.auditContext(req.Context())
+	defer cancelAudit()
+	_ = h.insertTrace(auditCtx, record)
+}
+
+func (h Handler) newWebSocketUpstreamRequest(req *http.Request) (*http.Request, error) {
+	target, err := h.upstreamURL(req.URL)
+	if err != nil {
+		return nil, err
+	}
+	upstreamReq, err := http.NewRequestWithContext(req.Context(), req.Method, target.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	upstreamReq.Header = req.Header.Clone()
+	upstreamReq.Host = target.Host
+	return upstreamReq, nil
+}
+
+func dialUpstream(ctx context.Context, target *url.URL) (net.Conn, error) {
+	host := target.Hostname()
+	port := target.Port()
+	switch target.Scheme {
+	case "http":
+		if port == "" {
+			port = "80"
+		}
+		var dialer net.Dialer
+		return dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+	case "https":
+		if port == "" {
+			port = "443"
+		}
+		dialer := tls.Dialer{Config: &tls.Config{ServerName: host}}
+		return dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+	default:
+		return nil, errors.New("unsupported upstream scheme")
+	}
+}
+
+func copyBidirectional(clientConn net.Conn, clientReader *bufio.Reader, upstreamConn net.Conn, upstreamReader *bufio.Reader) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _ = io.Copy(upstreamConn, io.MultiReader(clientReader, clientConn))
+		_ = upstreamConn.Close()
+		_ = clientConn.Close()
+	}()
+	go func() {
+		defer wg.Done()
+		_, _ = io.Copy(clientConn, io.MultiReader(upstreamReader, upstreamConn))
+		_ = clientConn.Close()
+		_ = upstreamConn.Close()
+	}()
+	wg.Wait()
 }
 
 func (h Handler) serveStreamingResponse(w http.ResponseWriter, req *http.Request, upstreamResp *http.Response, record traceRecord) {
@@ -504,6 +659,22 @@ func stripHopByHopHeaders(header http.Header) {
 	} {
 		delHeader(header, name)
 	}
+}
+
+func isWebSocketUpgrade(req *http.Request) bool {
+	return headerContainsToken(req.Header, "Connection", "Upgrade") &&
+		strings.EqualFold(req.Header.Get("Upgrade"), "websocket")
+}
+
+func headerContainsToken(header http.Header, name, token string) bool {
+	for _, value := range header.Values(name) {
+		for _, part := range strings.Split(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(part), token) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func delHeader(header http.Header, name string) {

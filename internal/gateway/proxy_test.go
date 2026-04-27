@@ -1,12 +1,15 @@
 package gateway
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -454,6 +457,169 @@ func TestProxyDoesNotMaskResponseEvidenceFailure(t *testing.T) {
 	}
 }
 
+func TestProxyDoesNotPublishJobOrCoverageWhenResponseEvidenceStoreFails(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	store := &selectiveEvidenceStore{
+		objects: map[string]evidence.Object{
+			"request_body": {
+				ObjectRef:      "request.bin",
+				StorageBackend: "test",
+				SizeBytes:      2,
+				SHA256:         "request-sha",
+				CreatedAt:      time.Unix(1000, 0).UTC(),
+			},
+		},
+		errs: map[string]error{"response_body": errors.New("response evidence failed")},
+	}
+	publisher := &recordingJobPublisher{}
+	emitter := &recordingCoverageEmitter{}
+	handler := testHandler(upstream.URL, &memoryTraceRepo{}, store)
+	handler.JobPublisher = publisher
+	handler.CoverageEmitter = emitter
+
+	req := httptest.NewRequest(http.MethodPost, "/mj/submit/imagine", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer sk-abc123")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(publisher.jobs) != 0 {
+		t.Fatalf("published jobs = %d, want 0", len(publisher.jobs))
+	}
+	if len(emitter.alerts) != 0 {
+		t.Fatalf("coverage alerts = %d, want 0", len(emitter.alerts))
+	}
+}
+
+func TestProxyNonStreamingAuditPersistenceSurvivesCanceledRequestContext(t *testing.T) {
+	repo := &contextRejectingTraceRepo{}
+	store := &contextRejectingEvidenceStore{}
+	publisher := &recordingJobPublisher{}
+	handler := testHandler("https://upstream.test", repo, store)
+	handler.JobPublisher = publisher
+
+	ctx, cancel := context.WithCancel(context.Background())
+	handler.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       cancelOnEOFReadCloser{Reader: strings.NewReader(`{"ok":true}`), cancel: cancel},
+			Request:    req,
+		}, nil
+	})}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`)).WithContext(ctx)
+	req.Header.Set("Authorization", "Bearer sk-abc123")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(repo.traces) != 1 {
+		t.Fatalf("expected 1 trace despite canceled request context, got %d", len(repo.traces))
+	}
+	if repo.traces[0].ResponseRawRef == "" {
+		t.Fatal("ResponseRawRef is empty")
+	}
+	if len(publisher.jobs) != 1 {
+		t.Fatalf("published jobs = %d, want 1", len(publisher.jobs))
+	}
+}
+
+func TestProxyTunnelsRealtimeWebSocketUpgrade(t *testing.T) {
+	upstreamSawUpgrade := make(chan struct{}, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/realtime" {
+			t.Fatalf("upstream path = %q", r.URL.Path)
+		}
+		if !headerContainsToken(r.Header, "Connection", "Upgrade") {
+			t.Fatalf("upstream Connection = %q, want Upgrade token", r.Header.Values("Connection"))
+		}
+		if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+			t.Fatalf("upstream Upgrade = %q", r.Header.Get("Upgrade"))
+		}
+		if r.Header.Get("Sec-WebSocket-Key") != "dGhlIHNhbXBsZSBub25jZQ==" {
+			t.Fatalf("upstream Sec-WebSocket-Key = %q", r.Header.Get("Sec-WebSocket-Key"))
+		}
+		upstreamSawUpgrade <- struct{}{}
+		w.Header().Set("Connection", "Upgrade")
+		w.Header().Set("Upgrade", "websocket")
+		w.Header().Set("Sec-WebSocket-Accept", "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
+		w.WriteHeader(http.StatusSwitchingProtocols)
+	}))
+	defer upstream.Close()
+
+	repo := &notifyingTraceRepo{traces: make(chan traces.Trace, 1)}
+	proxy := httptest.NewServer(testHandler(upstream.URL, repo, evidence.NewFilesystemStore(t.TempDir())))
+	defer proxy.Close()
+
+	proxyURL, err := url.Parse(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.Dial("tcp", proxyURL.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	_, err = io.WriteString(conn, "GET /v1/realtime?model=gpt-realtime HTTP/1.1\r\n"+
+		"Host: "+proxyURL.Host+"\r\n"+
+		"Authorization: Bearer sk-abc123\r\n"+
+		"Connection: Upgrade\r\n"+
+		"Upgrade: websocket\r\n"+
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"+
+		"Sec-WebSocket-Version: 13\r\n"+
+		"Sec-WebSocket-Protocol: realtime, openai-insecure-api-key.sk-abc123, openai-beta.realtime-v1\r\n"+
+		"\r\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("status = %d, want 101", resp.StatusCode)
+	}
+	if !headerContainsToken(resp.Header, "Connection", "Upgrade") {
+		t.Fatalf("response Connection = %q, want Upgrade token", resp.Header.Values("Connection"))
+	}
+	if !strings.EqualFold(resp.Header.Get("Upgrade"), "websocket") {
+		t.Fatalf("response Upgrade = %q", resp.Header.Get("Upgrade"))
+	}
+	select {
+	case <-upstreamSawUpgrade:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("upstream did not receive websocket upgrade")
+	}
+	_ = resp.Body.Close()
+	_ = conn.Close()
+	select {
+	case trace := <-repo.traces:
+		if trace.StatusCode != http.StatusSwitchingProtocols {
+			t.Fatalf("trace StatusCode = %d, want 101", trace.StatusCode)
+		}
+		if !trace.Stream {
+			t.Fatal("trace Stream = false, want true")
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("websocket trace was not persisted after tunnel closed")
+	}
+}
+
 func TestProxyRecordsTraceWhenResponseBodyReadFails(t *testing.T) {
 	readErr := errors.New("upstream read failed")
 	repo := &memoryTraceRepo{}
@@ -891,6 +1057,57 @@ func (s *selectiveEvidenceStore) Put(ctx context.Context, req evidence.PutReques
 
 func (s *selectiveEvidenceStore) Get(ctx context.Context, objectRef string) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(nil)), nil
+}
+
+type contextRejectingEvidenceStore struct{}
+
+func (s *contextRejectingEvidenceStore) Put(ctx context.Context, req evidence.PutRequest) (evidence.Object, error) {
+	if err := ctx.Err(); err != nil {
+		return evidence.Object{}, err
+	}
+	body, _ := io.ReadAll(req.Reader)
+	return evidence.Object{
+		ObjectRef:      req.ObjectType + ".bin",
+		StorageBackend: "test",
+		ContentType:    req.ContentType,
+		SizeBytes:      int64(len(body)),
+		SHA256:         req.ObjectType + "-sha",
+		CreatedAt:      time.Unix(1000, 0).UTC(),
+	}, nil
+}
+
+func (s *contextRejectingEvidenceStore) Get(ctx context.Context, objectRef string) (io.ReadCloser, error) {
+	return io.NopCloser(bytes.NewReader(nil)), nil
+}
+
+type cancelOnEOFReadCloser struct {
+	io.Reader
+	cancel context.CancelFunc
+}
+
+func (r cancelOnEOFReadCloser) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if err == io.EOF {
+		r.cancel()
+	}
+	return n, err
+}
+
+func (r cancelOnEOFReadCloser) Close() error {
+	return nil
+}
+
+type notifyingTraceRepo struct {
+	traces chan traces.Trace
+}
+
+func (r *notifyingTraceRepo) InsertTrace(ctx context.Context, trace traces.Trace) error {
+	r.traces <- trace
+	return nil
+}
+
+func (r *notifyingTraceRepo) InsertRawEvidence(ctx context.Context, object traces.RawEvidenceObject) error {
+	return nil
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
