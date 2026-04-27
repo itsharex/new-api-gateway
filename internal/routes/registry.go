@@ -84,7 +84,7 @@ func matchPath(pattern, path string) bool {
 	if strings.HasSuffix(pattern, "*") {
 		prefix := strings.TrimSuffix(pattern, "*")
 		if strings.HasSuffix(prefix, "/") {
-			return strings.HasPrefix(path, prefix) && len(path) > len(prefix)
+			return matchSegmentPath(pattern, path)
 		}
 		return path == prefix || strings.HasPrefix(path, prefix+"/")
 	}

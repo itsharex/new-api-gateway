@@ -199,4 +199,16 @@ func TestRouteSegmentParametersRequireNonEmptySegment(t *testing.T) {
 	if _, ok := registry.Match("POST", "/relay/mj//submit"); ok {
 		t.Fatal("expected no match for empty mj wildcard segment")
 	}
+	if _, ok := registry.Match("POST", "/mj//submit"); ok {
+		t.Fatal("expected no match for empty mj wildcard segment")
+	}
+	if _, ok := registry.Match("POST", "/suno//submit"); ok {
+		t.Fatal("expected no match for empty suno wildcard segment")
+	}
+	if _, ok := registry.Match("POST", "/v1/models//generateContent"); ok {
+		t.Fatal("expected no match for empty gemini v1 model segment")
+	}
+	if _, ok := registry.Match("POST", "/v1beta/models//generateContent"); ok {
+		t.Fatal("expected no match for empty gemini v1beta model segment")
+	}
 }
