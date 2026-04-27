@@ -33,7 +33,7 @@ type Resolver struct {
 }
 
 func (r Resolver) Resolve(ctx context.Context, canonicalKey, fingerprintValue, fingerprintDisplay string) (Snapshot, error) {
-	if isNilTokenLookup(r.Lookup) {
+	if isNilInterface(r.Lookup) {
 		return Snapshot{}, errResolverLookupRequired
 	}
 	if r.EmployeeNoPattern == nil {
@@ -41,8 +41,9 @@ func (r Resolver) Resolve(ctx context.Context, canonicalKey, fingerprintValue, f
 	}
 
 	cacheStatus := IdentityCacheStatusMissDBLookup
-	if r.Cache != nil {
-		cached, ok, err := r.Cache.Get(ctx, fingerprintValue)
+	cache := r.Cache
+	if !isNilInterface(cache) {
+		cached, ok, err := cache.Get(ctx, fingerprintValue)
 		if err != nil {
 			cacheStatus = IdentityCacheStatusCacheErrorDBLookup
 		} else if ok {
@@ -91,18 +92,18 @@ func (r Resolver) Resolve(ctx context.Context, canonicalKey, fingerprintValue, f
 		ResolutionStatus:    status,
 		IdentityCacheStatus: cacheStatus,
 	}
-	if r.Cache != nil && snapshot.ResolutionStatus == ResolutionStatusResolved {
-		_ = r.Cache.Set(ctx, snapshot)
+	if !isNilInterface(cache) && snapshot.ResolutionStatus == ResolutionStatusResolved {
+		_ = cache.Set(ctx, snapshot)
 	}
 	return snapshot, nil
 }
 
-func isNilTokenLookup(lookup TokenLookup) bool {
-	if lookup == nil {
+func isNilInterface[T any](v T) bool {
+	if any(v) == nil {
 		return true
 	}
 
-	value := reflect.ValueOf(lookup)
+	value := reflect.ValueOf(v)
 	switch value.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
 		return value.IsNil()

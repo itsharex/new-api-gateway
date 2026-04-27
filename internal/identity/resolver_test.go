@@ -3,6 +3,7 @@ package identity
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"testing"
 )
@@ -49,7 +50,7 @@ func (f *fakeLookup) FindByCanonicalKey(ctx context.Context, canonicalKey string
 }
 
 func TestResolverUsesCacheHit(t *testing.T) {
-	cache := &fakeCache{ok: true, value: Snapshot{TokenFingerprint: "fp", EmployeeNo: "E12345", ResolutionStatus: "resolved"}}
+	cache := &fakeCache{ok: true, value: Snapshot{TokenFingerprint: "fp", EmployeeNo: "E12345", ResolutionStatus: ResolutionStatusResolved}}
 	lookup := &fakeLookup{}
 	resolver := Resolver{Cache: cache, Lookup: lookup, EmployeeNoPattern: employeeNoPattern}
 
@@ -57,7 +58,7 @@ func TestResolverUsesCacheHit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve error: %v", err)
 	}
-	if got.EmployeeNo != "E12345" || got.IdentityCacheStatus != "redis_or_local_hit" {
+	if got.EmployeeNo != "E12345" || got.IdentityCacheStatus != IdentityCacheStatusHit {
 		t.Fatalf("unexpected snapshot %#v", got)
 	}
 	if lookup.calls != 0 {
@@ -79,6 +80,23 @@ func TestResolverReturnsErrorForTypedNilLookup(t *testing.T) {
 
 	if _, err := resolver.Resolve(context.Background(), "canonical", "fp", "tkfp_abc"); err == nil {
 		t.Fatal("expected error for typed nil lookup")
+	}
+}
+
+func TestResolverTreatsTypedNilCacheAsNoCache(t *testing.T) {
+	var cache *fakeCache
+	lookup := &fakeLookup{token: NewAPIToken{TokenID: 12, TokenName: "E12345", TokenStatus: 1}}
+	resolver := Resolver{Cache: cache, Lookup: lookup, EmployeeNoPattern: employeeNoPattern}
+
+	got, err := resolver.Resolve(context.Background(), "canonical", "fp", "tkfp_abc")
+	if err != nil {
+		t.Fatalf("Resolve error: %v", err)
+	}
+	if lookup.calls != 1 {
+		t.Fatalf("lookup called %d times", lookup.calls)
+	}
+	if got.ResolutionStatus != ResolutionStatusResolved || got.IdentityCacheStatus != IdentityCacheStatusMissDBLookup {
+		t.Fatalf("unexpected snapshot %#v", got)
 	}
 }
 
@@ -105,7 +123,7 @@ func TestResolverLookupConvertsTokenNameToEmployeeNo(t *testing.T) {
 	if got.EmployeeNo != "E12345" {
 		t.Fatalf("EmployeeNo = %q", got.EmployeeNo)
 	}
-	if got.ResolutionStatus != "resolved" {
+	if got.ResolutionStatus != ResolutionStatusResolved {
 		t.Fatalf("ResolutionStatus = %q", got.ResolutionStatus)
 	}
 	if cache.setCalls != 1 {
@@ -159,7 +177,7 @@ func TestResolverMarksInvalidEmployeeNo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve error: %v", err)
 	}
-	if got.ResolutionStatus != "invalid_employee_no" {
+	if got.ResolutionStatus != ResolutionStatusInvalidEmployeeNo {
 		t.Fatalf("ResolutionStatus = %q", got.ResolutionStatus)
 	}
 	if cache.setCalls != 0 {
@@ -179,7 +197,7 @@ func TestResolverMarksMissingEmployeeNo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve error: %v", err)
 	}
-	if got.ResolutionStatus != "missing_employee_no" {
+	if got.ResolutionStatus != ResolutionStatusMissingEmployeeNo {
 		t.Fatalf("ResolutionStatus = %q", got.ResolutionStatus)
 	}
 	if cache.setCalls != 0 {
@@ -199,7 +217,7 @@ func TestResolverMarksTokenNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve error: %v", err)
 	}
-	if got.ResolutionStatus != "not_found" {
+	if got.ResolutionStatus != ResolutionStatusNotFound {
 		t.Fatalf("ResolutionStatus = %q", got.ResolutionStatus)
 	}
 	if got.TokenFingerprint != "fp" || got.FingerprintDisplay != "tkfp_abc" {
@@ -207,6 +225,26 @@ func TestResolverMarksTokenNotFound(t *testing.T) {
 	}
 	if cache.setCalls != 0 {
 		t.Fatalf("cache Set called %d times for token not found", cache.setCalls)
+	}
+}
+
+func TestResolverMarksWrappedTokenNotFound(t *testing.T) {
+	cache := &fakeCache{}
+	resolver := Resolver{
+		Cache:             cache,
+		Lookup:            &fakeLookup{err: fmt.Errorf("lookup failed: %w", ErrTokenNotFound)},
+		EmployeeNoPattern: employeeNoPattern,
+	}
+
+	got, err := resolver.Resolve(context.Background(), "canonical", "fp", "tkfp_abc")
+	if err != nil {
+		t.Fatalf("Resolve error: %v", err)
+	}
+	if got.ResolutionStatus != ResolutionStatusNotFound {
+		t.Fatalf("ResolutionStatus = %q", got.ResolutionStatus)
+	}
+	if cache.setCalls != 0 {
+		t.Fatalf("cache Set called %d times for wrapped token not found", cache.setCalls)
 	}
 }
 
@@ -222,10 +260,10 @@ func TestResolverMarksLookupErrorsAsDBError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve error: %v", err)
 	}
-	if got.ResolutionStatus != "db_error" {
+	if got.ResolutionStatus != ResolutionStatusDBError {
 		t.Fatalf("ResolutionStatus = %q", got.ResolutionStatus)
 	}
-	if got.IdentityCacheStatus != "miss_db_lookup" {
+	if got.IdentityCacheStatus != IdentityCacheStatusMissDBLookup {
 		t.Fatalf("IdentityCacheStatus = %q", got.IdentityCacheStatus)
 	}
 	if cache.setCalls != 0 {
@@ -245,7 +283,7 @@ func TestResolverContinuesToLookupAfterCacheGetError(t *testing.T) {
 	if lookup.calls != 1 {
 		t.Fatalf("lookup called %d times", lookup.calls)
 	}
-	if got.ResolutionStatus != "resolved" || got.IdentityCacheStatus != "cache_error_db_lookup" {
+	if got.ResolutionStatus != ResolutionStatusResolved || got.IdentityCacheStatus != IdentityCacheStatusCacheErrorDBLookup {
 		t.Fatalf("unexpected snapshot %#v", got)
 	}
 	if cache.setCalls != 1 {
@@ -265,7 +303,7 @@ func TestResolverIgnoresCacheSetError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve error: %v", err)
 	}
-	if got.ResolutionStatus != "resolved" {
+	if got.ResolutionStatus != ResolutionStatusResolved {
 		t.Fatalf("ResolutionStatus = %q", got.ResolutionStatus)
 	}
 	if cache.setCalls != 1 {
