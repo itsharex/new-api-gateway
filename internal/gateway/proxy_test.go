@@ -188,9 +188,84 @@ func TestProxyPublishesTraceCapturedJobAfterRawEvidencePersistence(t *testing.T)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	want := []string{"trace", "raw:request_body", "raw:response_body", "publish"}
+	want := []string{"trace", "raw:request_body", "raw:request_headers", "raw:response_body", "raw:response_headers", "publish"}
 	if strings.Join(events, ",") != strings.Join(want, ",") {
 		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
+func TestProxyRecordsHeaderEvidenceAndMinimalMetadata(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer sk-abc123" {
+			t.Fatalf("upstream Authorization = %q", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Upstream-Request", "upstream-1")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"id": "chatcmpl_test",
+			"usage": {
+				"prompt_tokens": 11,
+				"completion_tokens": 7,
+				"total_tokens": 18,
+				"prompt_tokens_details": {"cached_tokens": 3},
+				"completion_tokens_details": {"reasoning_tokens": 2}
+			}
+		}`))
+	}))
+	defer upstream.Close()
+
+	repo := &memoryTraceRepo{}
+	publisher := &recordingJobPublisher{}
+	handler := testHandler(upstream.URL, repo, evidence.NewFilesystemStore(t.TempDir()))
+	handler.JobPublisher = publisher
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-test","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer sk-abc123")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(repo.traces) != 1 {
+		t.Fatalf("traces = %d, want 1", len(repo.traces))
+	}
+	trace := repo.traces[0]
+	if trace.RequestHeadersRef == "" || trace.ResponseHeadersRef == "" {
+		t.Fatalf("header refs were not recorded: %+v", trace)
+	}
+	if trace.ModelRequested != "gpt-test" {
+		t.Fatalf("ModelRequested = %q", trace.ModelRequested)
+	}
+	if trace.UsagePromptTokens != 11 || trace.UsageCompletionTokens != 7 || trace.UsageTotalTokens != 18 {
+		t.Fatalf("usage = %+v", trace)
+	}
+	if trace.UsageCachedTokens != 3 || trace.UsageReasoningTokens != 2 {
+		t.Fatalf("usage details = %+v", trace)
+	}
+
+	var objectTypes []string
+	for _, object := range repo.rawEvidence {
+		objectTypes = append(objectTypes, object.ObjectType)
+	}
+	got := strings.Join(objectTypes, ",")
+	for _, want := range []string{"request_body", "request_headers", "response_body", "response_headers"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("raw evidence object types = %s, missing %s", got, want)
+		}
+	}
+	if len(publisher.jobs) != 1 {
+		t.Fatalf("jobs = %d, want 1", len(publisher.jobs))
+	}
+	job := publisher.jobs[0]
+	if job.RequestHeadersRef == "" || job.ResponseHeadersRef == "" || job.ResponseRawRef == "" {
+		t.Fatalf("job evidence refs missing: %+v", job)
+	}
+	if job.ModelRequested != "gpt-test" || job.UsageTotalTokens != 18 {
+		t.Fatalf("job metadata = %+v", job)
 	}
 }
 
@@ -394,8 +469,8 @@ func TestProxyReportsRawEvidenceInsertFailure(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	if len(auditErrors) != 2 {
-		t.Fatalf("expected 2 audit errors, got %d", len(auditErrors))
+	if len(auditErrors) != 4 {
+		t.Fatalf("expected 4 audit errors, got %d", len(auditErrors))
 	}
 	for _, err := range auditErrors {
 		if !errors.Is(err, insertErr) {
