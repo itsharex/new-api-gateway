@@ -1,0 +1,8 @@
+{
+  "type": "trace_captured",
+  "trace_id": "trace_example",
+  "route_pattern": "/v1/chat/completions",
+  "protocol_family": "openai_chat",
+  "capture_mode": "raw_and_normalized",
+  "employee_no": "E12345"
+}

@@ -1,0 +1,9 @@
+[project]
+name = "new-api-gateway-analysis-worker"
+version = "0.1.0"
+description = "Analysis worker contracts for the new-api audit gateway"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.uv]
+package = false
