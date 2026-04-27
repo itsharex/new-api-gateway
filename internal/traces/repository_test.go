@@ -138,6 +138,7 @@ func TestPostgresRepositoryNormalizesZeroResponseFinishedAtToNull(t *testing.T) 
 	assertArg(t, execer.args, 24, trace.EmployeeNoSnapshot)
 	assertArg(t, execer.args, 28, trace.UsagePromptTokens)
 	assertArg(t, execer.args, 30, trace.UsageTotalTokens)
+	assertArg(t, execer.args, 33, trace.EstimatedCost)
 	assertArg(t, execer.args, 34, trace.AnalysisStatus)
 	assertArg(t, execer.args, 35, trace.CreatedAt)
 }
@@ -216,6 +217,7 @@ func validTrace() Trace {
 		UsageTotalTokens:         30,
 		UsageReasoningTokens:     4,
 		UsageCachedTokens:        2,
+		EstimatedCost:            "0.0012",
 		AnalysisStatus:           "pending",
 		CreatedAt:                startedAt.Add(time.Second),
 	}
