@@ -552,10 +552,26 @@ func TestProxyTunnelsRealtimeWebSocketUpgrade(t *testing.T) {
 			t.Fatalf("upstream Sec-WebSocket-Key = %q", r.Header.Get("Sec-WebSocket-Key"))
 		}
 		upstreamSawUpgrade <- struct{}{}
-		w.Header().Set("Connection", "Upgrade")
-		w.Header().Set("Upgrade", "websocket")
-		w.Header().Set("Sec-WebSocket-Accept", "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
-		w.WriteHeader(http.StatusSwitchingProtocols)
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("upstream response writer does not support hijack")
+		}
+		conn, rw, err := hijacker.Hijack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		_, _ = io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\n"+
+			"Connection: Upgrade\r\n"+
+			"Upgrade: websocket\r\n"+
+			"Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"+
+			"\r\n")
+		line, err := rw.Reader.ReadString('\n')
+		if err != nil {
+			t.Errorf("upstream read tunneled line: %v", err)
+			return
+		}
+		_, _ = io.WriteString(conn, "echo: "+line)
 	}))
 	defer upstream.Close()
 
@@ -585,7 +601,8 @@ func TestProxyTunnelsRealtimeWebSocketUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	clientReader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(clientReader, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -605,6 +622,16 @@ func TestProxyTunnelsRealtimeWebSocketUpgrade(t *testing.T) {
 	case <-time.After(250 * time.Millisecond):
 		t.Fatal("upstream did not receive websocket upgrade")
 	}
+	if _, err := io.WriteString(conn, "ping\n"); err != nil {
+		t.Fatal(err)
+	}
+	echo, err := clientReader.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if echo != "echo: ping\n" {
+		t.Fatalf("tunneled echo = %q", echo)
+	}
 	_ = resp.Body.Close()
 	_ = conn.Close()
 	select {
@@ -617,6 +644,239 @@ func TestProxyTunnelsRealtimeWebSocketUpgrade(t *testing.T) {
 		}
 	case <-time.After(250 * time.Millisecond):
 		t.Fatal("websocket trace was not persisted after tunnel closed")
+	}
+}
+
+func TestProxyWebSocketHandshakeStopsWhenClientCancels(t *testing.T) {
+	upstream, accepted := newStallingTCPServer(t)
+	defer upstream.Close()
+
+	repo := &notifyingTraceRepo{traces: make(chan traces.Trace, 1)}
+	proxy := httptest.NewServer(testHandler(upstream.URL, repo, evidence.NewFilesystemStore(t.TempDir())))
+	defer proxy.Close()
+
+	proxyURL, err := url.Parse(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.Dial("tcp", proxyURL.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = io.WriteString(conn, "GET /v1/realtime HTTP/1.1\r\n"+
+		"Host: "+proxyURL.Host+"\r\n"+
+		"Authorization: Bearer sk-abc123\r\n"+
+		"Connection: Upgrade\r\n"+
+		"Upgrade: websocket\r\n"+
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"+
+		"Sec-WebSocket-Version: 13\r\n"+
+		"\r\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstreamConn := <-accepted
+	defer upstreamConn.Close()
+
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case trace := <-repo.traces:
+		if trace.StatusCode != http.StatusBadGateway {
+			t.Fatalf("trace StatusCode = %d, want 502", trace.StatusCode)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("websocket handshake did not stop after client cancellation")
+	}
+}
+
+func TestProxyWebSocketHandshakeTimesOutWhenUpstreamStalls(t *testing.T) {
+	upstream, accepted := newStallingTCPServer(t)
+	defer upstream.Close()
+
+	repo := &notifyingTraceRepo{traces: make(chan traces.Trace, 1)}
+	handler := testHandler(upstream.URL, repo, evidence.NewFilesystemStore(t.TempDir()))
+	handler.WebSocketHandshakeTimeout = 10 * time.Millisecond
+	proxy := httptest.NewServer(handler)
+	defer proxy.Close()
+
+	proxyURL, err := url.Parse(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.Dial("tcp", proxyURL.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_, err = io.WriteString(conn, "GET /v1/realtime HTTP/1.1\r\n"+
+		"Host: "+proxyURL.Host+"\r\n"+
+		"Authorization: Bearer sk-abc123\r\n"+
+		"Connection: Upgrade\r\n"+
+		"Upgrade: websocket\r\n"+
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"+
+		"Sec-WebSocket-Version: 13\r\n"+
+		"\r\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstreamConn := <-accepted
+	defer upstreamConn.Close()
+
+	select {
+	case trace := <-repo.traces:
+		if trace.StatusCode != http.StatusBadGateway {
+			t.Fatalf("trace StatusCode = %d, want 502", trace.StatusCode)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("websocket handshake did not honor timeout")
+	}
+}
+
+func TestProxyWebSocketTunnelStripsHopByHopRequestHeaders(t *testing.T) {
+	upstreamHeaders := make(chan http.Header, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHeaders <- r.Header.Clone()
+		w.Header().Set("Connection", "Upgrade")
+		w.Header().Set("Upgrade", "websocket")
+		w.Header().Set("Sec-WebSocket-Accept", "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
+		w.WriteHeader(http.StatusSwitchingProtocols)
+	}))
+	defer upstream.Close()
+
+	repo := &notifyingTraceRepo{traces: make(chan traces.Trace, 1)}
+	proxy := httptest.NewServer(testHandler(upstream.URL, repo, evidence.NewFilesystemStore(t.TempDir())))
+	defer proxy.Close()
+
+	proxyURL, err := url.Parse(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.Dial("tcp", proxyURL.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	_, err = io.WriteString(conn, "GET /v1/realtime HTTP/1.1\r\n"+
+		"Host: "+proxyURL.Host+"\r\n"+
+		"Authorization: Bearer sk-abc123\r\n"+
+		"Connection: keep-alive, X-Request-Hop, Upgrade\r\n"+
+		"Keep-Alive: timeout=5\r\n"+
+		"Proxy-Connection: keep-alive\r\n"+
+		"TE: trailers\r\n"+
+		"Trailer: X-Trailer\r\n"+
+		"Transfer-Encoding: chunked\r\n"+
+		"Upgrade: websocket\r\n"+
+		"X-Request-Hop: strip-me\r\n"+
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"+
+		"Sec-WebSocket-Version: 13\r\n"+
+		"Sec-WebSocket-Protocol: realtime, openai-insecure-api-key.sk-abc123\r\n"+
+		"\r\n"+
+		"0\r\n\r\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	_ = conn.Close()
+
+	var headers http.Header
+	select {
+	case headers = <-upstreamHeaders:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("upstream did not receive websocket request")
+	}
+	for _, name := range []string{"Keep-Alive", "Proxy-Connection", "TE", "Trailer", "Transfer-Encoding", "X-Request-Hop"} {
+		if headers.Get(name) != "" {
+			t.Fatalf("upstream header %s = %q, want stripped", name, headers.Get(name))
+		}
+	}
+	if got := headers.Values("Connection"); len(got) != 1 || !strings.EqualFold(got[0], "Upgrade") {
+		t.Fatalf("upstream Connection = %q, want only Upgrade", got)
+	}
+	if !strings.EqualFold(headers.Get("Upgrade"), "websocket") {
+		t.Fatalf("upstream Upgrade = %q", headers.Get("Upgrade"))
+	}
+	if headers.Get("Authorization") != "Bearer sk-abc123" {
+		t.Fatalf("upstream Authorization = %q", headers.Get("Authorization"))
+	}
+	if headers.Get("Sec-WebSocket-Key") != "dGhlIHNhbXBsZSBub25jZQ==" {
+		t.Fatalf("upstream Sec-WebSocket-Key = %q", headers.Get("Sec-WebSocket-Key"))
+	}
+	if headers.Get("Sec-WebSocket-Version") != "13" {
+		t.Fatalf("upstream Sec-WebSocket-Version = %q", headers.Get("Sec-WebSocket-Version"))
+	}
+	if headers.Get("Sec-WebSocket-Protocol") != "realtime, openai-insecure-api-key.sk-abc123" {
+		t.Fatalf("upstream Sec-WebSocket-Protocol = %q", headers.Get("Sec-WebSocket-Protocol"))
+	}
+}
+
+func TestProxyForwardsNonSwitchingWebSocketResponseWithoutTunnel(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("X-Upstream-Reason", "denied")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, "denied\n")
+	}))
+	defer upstream.Close()
+
+	repo := &notifyingTraceRepo{traces: make(chan traces.Trace, 1)}
+	proxy := httptest.NewServer(testHandler(upstream.URL, repo, evidence.NewFilesystemStore(t.TempDir())))
+	defer proxy.Close()
+
+	proxyURL, err := url.Parse(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.Dial("tcp", proxyURL.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	_, err = io.WriteString(conn, "GET /v1/realtime HTTP/1.1\r\n"+
+		"Host: "+proxyURL.Host+"\r\n"+
+		"Authorization: Bearer sk-abc123\r\n"+
+		"Connection: Upgrade\r\n"+
+		"Upgrade: websocket\r\n"+
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"+
+		"Sec-WebSocket-Version: 13\r\n"+
+		"\r\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+	if string(body) != "denied\n" {
+		t.Fatalf("body = %q, want denied", string(body))
+	}
+	if resp.Header.Get("X-Upstream-Reason") != "denied" {
+		t.Fatalf("X-Upstream-Reason = %q", resp.Header.Get("X-Upstream-Reason"))
+	}
+	select {
+	case trace := <-repo.traces:
+		if trace.StatusCode != http.StatusForbidden {
+			t.Fatalf("trace StatusCode = %d, want 403", trace.StatusCode)
+		}
+		if trace.UpstreamStatusCode != http.StatusForbidden {
+			t.Fatalf("trace UpstreamStatusCode = %d, want 403", trace.UpstreamStatusCode)
+		}
+		if !trace.Stream {
+			t.Fatal("trace Stream = false, want true")
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("websocket non-101 trace was not persisted")
 	}
 }
 
@@ -1078,6 +1338,40 @@ func (s *contextRejectingEvidenceStore) Put(ctx context.Context, req evidence.Pu
 
 func (s *contextRejectingEvidenceStore) Get(ctx context.Context, objectRef string) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(nil)), nil
+}
+
+type stallingTCPServer struct {
+	URL      string
+	listener net.Listener
+	done     chan struct{}
+}
+
+func newStallingTCPServer(t *testing.T) (*stallingTCPServer, <-chan net.Conn) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &stallingTCPServer{
+		URL:      "http://" + listener.Addr().String(),
+		listener: listener,
+		done:     make(chan struct{}),
+	}
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		defer close(server.done)
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		accepted <- conn
+	}()
+	return server, accepted
+}
+
+func (s *stallingTCPServer) Close() {
+	_ = s.listener.Close()
+	<-s.done
 }
 
 type cancelOnEOFReadCloser struct {

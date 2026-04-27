@@ -31,22 +31,26 @@ type IdentityResolver interface {
 }
 
 type Handler struct {
-	UpstreamBaseURL     string
-	Registry            routes.Registry
-	EvidenceStore       evidence.Store
-	TraceRepo           traces.Repository
-	IdentityResolver    IdentityResolver
-	AuditSecret         string
-	Client              *http.Client
-	Now                 func() time.Time
-	AuditError          func(ctx context.Context, err error)
-	MaxRequestBodyBytes int64
-	AuditTimeout        time.Duration
-	JobPublisher        jobs.Publisher
-	CoverageEmitter     alerts.Emitter
+	UpstreamBaseURL           string
+	Registry                  routes.Registry
+	EvidenceStore             evidence.Store
+	TraceRepo                 traces.Repository
+	IdentityResolver          IdentityResolver
+	AuditSecret               string
+	Client                    *http.Client
+	Now                       func() time.Time
+	AuditError                func(ctx context.Context, err error)
+	MaxRequestBodyBytes       int64
+	AuditTimeout              time.Duration
+	WebSocketHandshakeTimeout time.Duration
+	JobPublisher              jobs.Publisher
+	CoverageEmitter           alerts.Emitter
 }
 
-const defaultAuditTimeout = 5 * time.Second
+const (
+	defaultAuditTimeout              = 5 * time.Second
+	defaultWebSocketHandshakeTimeout = 10 * time.Second
+)
 
 func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	startedAt := h.now()
@@ -316,14 +320,7 @@ func (h Handler) serveWebSocketTunnel(w http.ResponseWriter, req *http.Request, 
 	}
 	defer upstreamConn.Close()
 
-	if err := upstreamReq.Write(upstreamConn); err != nil {
-		http.Error(w, "upstream request failed", http.StatusBadGateway)
-		h.recordWebSocketTrace(req, record, http.StatusBadGateway, 0)
-		return
-	}
-
-	upstreamReader := bufio.NewReader(upstreamConn)
-	upstreamResp, err := http.ReadResponse(upstreamReader, upstreamReq)
+	upstreamResp, upstreamReader, err := h.readWebSocketUpstreamHandshake(req.Context(), upstreamConn, upstreamReq)
 	if err != nil {
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
 		h.recordWebSocketTrace(req, record, http.StatusBadGateway, 0)
@@ -376,8 +373,47 @@ func (h Handler) newWebSocketUpstreamRequest(req *http.Request) (*http.Request, 
 		return nil, err
 	}
 	upstreamReq.Header = req.Header.Clone()
+	stripHopByHopHeaders(upstreamReq.Header)
+	upstreamReq.Header.Set("Connection", "Upgrade")
+	upstreamReq.Header.Set("Upgrade", "websocket")
 	upstreamReq.Host = target.Host
 	return upstreamReq, nil
+}
+
+func (h Handler) readWebSocketUpstreamHandshake(ctx context.Context, upstreamConn net.Conn, upstreamReq *http.Request) (*http.Response, *bufio.Reader, error) {
+	if err := upstreamConn.SetDeadline(time.Now().Add(h.websocketHandshakeTimeout())); err != nil {
+		return nil, nil, err
+	}
+	handshakeDone := make(chan struct{})
+	defer close(handshakeDone)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = upstreamConn.Close()
+		case <-handshakeDone:
+		}
+	}()
+
+	if err := upstreamReq.Write(upstreamConn); err != nil {
+		return nil, nil, err
+	}
+	upstreamReader := bufio.NewReader(upstreamConn)
+	upstreamResp, err := http.ReadResponse(upstreamReader, upstreamReq)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := upstreamConn.SetDeadline(time.Time{}); err != nil {
+		_ = upstreamResp.Body.Close()
+		return nil, nil, err
+	}
+	return upstreamResp, upstreamReader, nil
+}
+
+func (h Handler) websocketHandshakeTimeout() time.Duration {
+	if h.WebSocketHandshakeTimeout > 0 {
+		return h.WebSocketHandshakeTimeout
+	}
+	return defaultWebSocketHandshakeTimeout
 }
 
 func dialUpstream(ctx context.Context, target *url.URL) (net.Conn, error) {
