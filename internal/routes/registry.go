@@ -98,12 +98,20 @@ func matchSegmentPath(pattern, path string) bool {
 		return false
 	}
 	if patternSegments[len(patternSegments)-1] == "*" {
-		if len(pathSegments) < len(patternSegments) {
+		if len(pathSegments) <= len(patternSegments)-1 {
 			return false
 		}
+		for _, pathSegment := range pathSegments[len(patternSegments)-1:] {
+			if pathSegment == "" {
+				return false
+			}
+		}
+		pathSegments = pathSegments[:len(patternSegments)-1]
 		patternSegments = patternSegments[:len(patternSegments)-1]
-		pathSegments = pathSegments[:len(patternSegments)]
 	} else if len(patternSegments) != len(pathSegments) {
+		return false
+	}
+	if strings.HasSuffix(pattern, "/") != strings.HasSuffix(path, "/") {
 		return false
 	}
 	if len(patternSegments) != len(pathSegments) {
@@ -126,9 +134,9 @@ func matchSegmentPath(pattern, path string) bool {
 }
 
 func splitPath(path string) []string {
-	trimmed := strings.Trim(path, "/")
-	if trimmed == "" {
+	withoutLeadingSlash := strings.TrimPrefix(path, "/")
+	if withoutLeadingSlash == "" {
 		return nil
 	}
-	return strings.Split(trimmed, "/")
+	return strings.Split(withoutLeadingSlash, "/")
 }

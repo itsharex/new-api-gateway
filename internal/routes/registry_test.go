@@ -190,7 +190,13 @@ func TestRouteSegmentParametersRequireNonEmptySegment(t *testing.T) {
 	if _, ok := registry.Match("GET", "/v1/videos//content"); ok {
 		t.Fatal("expected no match for empty task id")
 	}
+	if _, ok := registry.Match("GET", "/v1/videos/task_123/content/"); ok {
+		t.Fatal("expected no match for trailing slash content path")
+	}
 	if _, ok := registry.Match("POST", "/relay/mj/"); ok {
 		t.Fatal("expected no match for empty mj child path")
+	}
+	if _, ok := registry.Match("POST", "/relay/mj//submit"); ok {
+		t.Fatal("expected no match for empty mj wildcard segment")
 	}
 }
