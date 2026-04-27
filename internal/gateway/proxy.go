@@ -3,7 +3,9 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -31,6 +33,7 @@ type Handler struct {
 	AuditSecret      string
 	Client           *http.Client
 	Now              func() time.Time
+	AuditError       func(ctx context.Context, err error)
 }
 
 func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -53,10 +56,16 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	snapshot := h.resolveIdentity(req)
+	authResult, hasAuth := authkeys.Extract(req)
+	if hasAuth && len(h.AuditSecret) < 32 {
+		http.Error(w, "audit secret is not configured", http.StatusInternalServerError)
+		return
+	}
+	snapshot := h.resolveIdentity(req.Context(), authResult, hasAuth)
 
 	requestObject, err := h.putEvidence(req.Context(), traceID, "request_body", capturedReq.ContentType, capturedReq.BodyBytes)
 	if err != nil {
+		h.reportAuditError(req.Context(), err)
 		http.Error(w, "failed to store request evidence", http.StatusInternalServerError)
 		return
 	}
@@ -89,6 +98,20 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	responseBody, err := io.ReadAll(upstreamResp.Body)
 	if err != nil {
+		h.reportAuditError(req.Context(), err)
+		finishedAt := h.now()
+		_ = h.insertTrace(req.Context(), traceRecord{
+			traceID:       traceID,
+			req:           req,
+			entry:         entry,
+			statusCode:    http.StatusBadGateway,
+			upstreamCode:  upstreamResp.StatusCode,
+			startedAt:     startedAt,
+			finishedAt:    finishedAt,
+			requestObject: requestObject,
+			requestSize:   capturedReq.SizeBytes,
+			snapshot:      snapshot,
+		})
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
 		return
 	}
@@ -96,11 +119,10 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	responseObject, err := h.putEvidence(req.Context(), traceID, "response_body", upstreamResp.Header.Get("Content-Type"), responseBody)
 	if err != nil {
-		http.Error(w, "failed to store response evidence", http.StatusInternalServerError)
-		return
+		h.reportAuditError(req.Context(), err)
 	}
 
-	h.insertTrace(req.Context(), traceRecord{
+	_ = h.insertTrace(req.Context(), traceRecord{
 		traceID:        traceID,
 		req:            req,
 		entry:          entry,
@@ -136,9 +158,9 @@ type traceRecord struct {
 	snapshot       identity.Snapshot
 }
 
-func (h Handler) insertTrace(ctx context.Context, record traceRecord) {
+func (h Handler) insertTrace(ctx context.Context, record traceRecord) error {
 	if h.TraceRepo == nil {
-		return
+		return nil
 	}
 	trace := traces.Trace{
 		TraceID:                  record.traceID,
@@ -169,18 +191,27 @@ func (h Handler) insertTrace(ctx context.Context, record traceRecord) {
 		AnalysisStatus:           "pending",
 		CreatedAt:                record.startedAt,
 	}
-	_ = h.TraceRepo.InsertTrace(ctx, trace)
-	h.insertEvidenceObject(ctx, record.traceID, "request_body", record.requestObject)
-	if record.responseObject.ObjectRef != "" {
-		h.insertEvidenceObject(ctx, record.traceID, "response_body", record.responseObject)
+	var errs []error
+	if err := h.TraceRepo.InsertTrace(ctx, trace); err != nil {
+		h.reportAuditError(ctx, err)
+		errs = append(errs, err)
 	}
+	if err := h.insertEvidenceObject(ctx, record.traceID, "request_body", record.requestObject); err != nil {
+		errs = append(errs, err)
+	}
+	if record.responseObject.ObjectRef != "" {
+		if err := h.insertEvidenceObject(ctx, record.traceID, "response_body", record.responseObject); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
-func (h Handler) insertEvidenceObject(ctx context.Context, traceID, objectType string, object evidence.Object) {
+func (h Handler) insertEvidenceObject(ctx context.Context, traceID, objectType string, object evidence.Object) error {
 	if object.CreatedAt.IsZero() {
-		return
+		return nil
 	}
-	_ = h.TraceRepo.InsertRawEvidence(ctx, traces.RawEvidenceObject{
+	err := h.TraceRepo.InsertRawEvidence(ctx, traces.RawEvidenceObject{
 		TraceID:        traceID,
 		ObjectType:     objectType,
 		ObjectRef:      object.ObjectRef,
@@ -190,11 +221,14 @@ func (h Handler) insertEvidenceObject(ctx context.Context, traceID, objectType s
 		SHA256:         object.SHA256,
 		CreatedAt:      object.CreatedAt,
 	})
+	if err != nil {
+		h.reportAuditError(ctx, err)
+	}
+	return err
 }
 
-func (h Handler) resolveIdentity(req *http.Request) identity.Snapshot {
-	result, ok := authkeys.Extract(req)
-	if !ok {
+func (h Handler) resolveIdentity(ctx context.Context, result authkeys.Result, hasAuth bool) identity.Snapshot {
+	if !hasAuth {
 		return identity.Snapshot{ResolutionStatus: "extract_failed"}
 	}
 	fp := fingerprint.Compute(result.CanonicalKey, h.AuditSecret)
@@ -205,7 +239,7 @@ func (h Handler) resolveIdentity(req *http.Request) identity.Snapshot {
 			ResolutionStatus:   "resolve_failed",
 		}
 	}
-	snapshot, err := h.IdentityResolver.Resolve(req.Context(), result.CanonicalKey, fp.Value, fp.Display)
+	snapshot, err := h.IdentityResolver.Resolve(ctx, result.CanonicalKey, fp.Value, fp.Display)
 	if err != nil {
 		return identity.Snapshot{
 			TokenFingerprint:   fp.Value,
@@ -238,6 +272,7 @@ func (h Handler) newUpstreamRequest(req *http.Request, body []byte) (*http.Reque
 		return nil, err
 	}
 	upstreamReq.Header = req.Header.Clone()
+	stripHopByHopHeaders(upstreamReq.Header)
 	return upstreamReq, nil
 }
 
@@ -267,10 +302,53 @@ func (h Handler) now() time.Time {
 	return time.Now().UTC()
 }
 
+func (h Handler) reportAuditError(ctx context.Context, err error) {
+	if err == nil {
+		return
+	}
+	if h.AuditError != nil {
+		h.AuditError(ctx, err)
+		return
+	}
+	log.Printf("audit error: %v", err)
+}
+
 func copyHeaders(dst, src http.Header) {
-	for key, values := range src {
+	headers := src.Clone()
+	stripHopByHopHeaders(headers)
+	for key, values := range headers {
 		for _, value := range values {
 			dst.Add(key, value)
+		}
+	}
+}
+
+func stripHopByHopHeaders(header http.Header) {
+	for _, value := range header.Values("Connection") {
+		for _, name := range strings.Split(value, ",") {
+			if name = strings.TrimSpace(name); name != "" {
+				delHeader(header, name)
+			}
+		}
+	}
+	for _, name := range []string{
+		"Connection",
+		"Proxy-Connection",
+		"Keep-Alive",
+		"TE",
+		"Trailer",
+		"Transfer-Encoding",
+		"Upgrade",
+	} {
+		delHeader(header, name)
+	}
+}
+
+func delHeader(header http.Header, name string) {
+	header.Del(name)
+	for key := range header {
+		if strings.EqualFold(key, name) {
+			delete(header, key)
 		}
 	}
 }
