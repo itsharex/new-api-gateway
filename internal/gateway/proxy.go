@@ -11,11 +11,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/your-company/new-api-gateway/internal/alerts"
 	"github.com/your-company/new-api-gateway/internal/authkeys"
 	"github.com/your-company/new-api-gateway/internal/evidence"
 	"github.com/your-company/new-api-gateway/internal/fingerprint"
 	"github.com/your-company/new-api-gateway/internal/identity"
 	"github.com/your-company/new-api-gateway/internal/ids"
+	"github.com/your-company/new-api-gateway/internal/jobs"
 	"github.com/your-company/new-api-gateway/internal/routes"
 	"github.com/your-company/new-api-gateway/internal/traces"
 )
@@ -25,15 +27,18 @@ type IdentityResolver interface {
 }
 
 type Handler struct {
-	UpstreamBaseURL  string
-	Registry         routes.Registry
-	EvidenceStore    evidence.Store
-	TraceRepo        traces.Repository
-	IdentityResolver IdentityResolver
-	AuditSecret      string
-	Client           *http.Client
-	Now              func() time.Time
-	AuditError       func(ctx context.Context, err error)
+	UpstreamBaseURL     string
+	Registry            routes.Registry
+	EvidenceStore       evidence.Store
+	TraceRepo           traces.Repository
+	IdentityResolver    IdentityResolver
+	AuditSecret         string
+	Client              *http.Client
+	Now                 func() time.Time
+	AuditError          func(ctx context.Context, err error)
+	MaxRequestBodyBytes int64
+	JobPublisher        jobs.Publisher
+	CoverageEmitter     alerts.Emitter
 }
 
 func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -41,6 +46,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	traceID := ids.NewTraceID()
 
 	entry, ok := h.Registry.Match(req.Method, req.URL.Path)
+	unknownRoute := !ok
 	if !ok {
 		entry = routes.Entry{
 			Method:         req.Method,
@@ -50,8 +56,12 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	capturedReq, err := captureRequestBody(req)
+	capturedReq, err := captureRequestBody(req, h.maxRequestBodyBytes())
 	if err != nil {
+		if errors.Is(err, ErrRequestBodyTooLarge) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
 		return
 	}
@@ -90,11 +100,29 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			requestObject: requestObject,
 			requestSize:   capturedReq.SizeBytes,
 			snapshot:      snapshot,
+			unknownRoute:  unknownRoute,
 		})
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
 		return
 	}
 	defer upstreamResp.Body.Close()
+
+	if isStreamingResponse(upstreamResp) {
+		h.serveStreamingResponse(w, req, upstreamResp, traceRecord{
+			traceID:       traceID,
+			req:           req,
+			entry:         entry,
+			statusCode:    upstreamResp.StatusCode,
+			upstreamCode:  upstreamResp.StatusCode,
+			startedAt:     startedAt,
+			requestObject: requestObject,
+			requestSize:   capturedReq.SizeBytes,
+			snapshot:      snapshot,
+			stream:        true,
+			unknownRoute:  unknownRoute,
+		})
+		return
+	}
 
 	responseBody, err := io.ReadAll(upstreamResp.Body)
 	if err != nil {
@@ -111,6 +139,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			requestObject: requestObject,
 			requestSize:   capturedReq.SizeBytes,
 			snapshot:      snapshot,
+			unknownRoute:  unknownRoute,
 		})
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
 		return
@@ -135,6 +164,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		requestSize:    capturedReq.SizeBytes,
 		responseSize:   int64(len(responseBody)),
 		snapshot:       snapshot,
+		unknownRoute:   unknownRoute,
 	})
 
 	copyHeaders(w.Header(), upstreamResp.Header)
@@ -156,6 +186,8 @@ type traceRecord struct {
 	requestSize    int64
 	responseSize   int64
 	snapshot       identity.Snapshot
+	stream         bool
+	unknownRoute   bool
 }
 
 func (h Handler) insertTrace(ctx context.Context, record traceRecord) error {
@@ -171,7 +203,7 @@ func (h Handler) insertTrace(ctx context.Context, record traceRecord) error {
 		CaptureMode:              string(record.entry.CaptureMode),
 		StatusCode:               record.statusCode,
 		UpstreamStatusCode:       record.upstreamCode,
-		Stream:                   false,
+		Stream:                   record.stream,
 		RequestStartedAt:         record.startedAt,
 		ResponseFinishedAt:       record.finishedAt,
 		DurationMillis:           record.finishedAt.Sub(record.startedAt).Milliseconds(),
@@ -192,19 +224,126 @@ func (h Handler) insertTrace(ctx context.Context, record traceRecord) error {
 		CreatedAt:                record.startedAt,
 	}
 	var errs []error
+	traceInserted := false
 	if err := h.TraceRepo.InsertTrace(ctx, trace); err != nil {
 		h.reportAuditError(ctx, err)
 		errs = append(errs, err)
-	}
-	if err := h.insertEvidenceObject(ctx, record.traceID, "request_body", record.requestObject); err != nil {
-		errs = append(errs, err)
-	}
-	if record.responseObject.ObjectRef != "" {
-		if err := h.insertEvidenceObject(ctx, record.traceID, "response_body", record.responseObject); err != nil {
+	} else {
+		traceInserted = true
+		if h.JobPublisher != nil {
+			job := jobs.NewTraceCaptured(
+				record.traceID,
+				record.entry.PathPattern,
+				record.entry.ProtocolFamily,
+				string(record.entry.CaptureMode),
+				record.snapshot.EmployeeNo,
+			)
+			if err := h.JobPublisher.PublishTraceCaptured(ctx, job); err != nil {
+				h.reportAuditError(ctx, err)
+				errs = append(errs, err)
+			}
+		}
+		if err := h.emitCoverageAlert(ctx, record); err != nil {
 			errs = append(errs, err)
 		}
 	}
+	if traceInserted {
+		if err := h.insertEvidenceObject(ctx, record.traceID, "request_body", record.requestObject); err != nil {
+			errs = append(errs, err)
+		}
+		if record.responseObject.ObjectRef != "" {
+			if err := h.insertEvidenceObject(ctx, record.traceID, "response_body", record.responseObject); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
 	return errors.Join(errs...)
+}
+
+func (h Handler) serveStreamingResponse(w http.ResponseWriter, req *http.Request, upstreamResp *http.Response, record traceRecord) {
+	copyHeaders(w.Header(), upstreamResp.Header)
+	w.Header().Set("x-audit-trace-id", record.traceID)
+	w.WriteHeader(upstreamResp.StatusCode)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+
+	var responseObject evidence.Object
+	var responseErr error
+	var captureErr error
+	clientWriter := flushWriter{writer: w}
+	if flusher, ok := w.(http.Flusher); ok {
+		clientWriter.flusher = flusher
+	}
+
+	var written int64
+	if h.EvidenceStore == nil {
+		written, responseErr, captureErr = copyStreamToClientAndCapture(upstreamResp.Body, clientWriter, nil)
+	} else {
+		pr, pw := io.Pipe()
+		storeDone := make(chan struct {
+			object evidence.Object
+			err    error
+		}, 1)
+		go func() {
+			defer pr.Close()
+			object, err := h.EvidenceStore.Put(req.Context(), evidence.PutRequest{
+				TraceID:     record.traceID,
+				ObjectType:  "response_body",
+				ContentType: upstreamResp.Header.Get("Content-Type"),
+				Reader:      pr,
+			})
+			storeDone <- struct {
+				object evidence.Object
+				err    error
+			}{object: object, err: err}
+		}()
+
+		written, responseErr, captureErr = copyStreamToClientAndCapture(upstreamResp.Body, clientWriter, pw)
+		if responseErr != nil {
+			_ = pw.CloseWithError(responseErr)
+		} else {
+			_ = pw.Close()
+		}
+		result := <-storeDone
+		responseObject = result.object
+		if result.err != nil {
+			h.reportAuditError(req.Context(), result.err)
+		} else if captureErr != nil {
+			h.reportAuditError(req.Context(), captureErr)
+		}
+	}
+	if responseErr != nil {
+		h.reportAuditError(req.Context(), responseErr)
+	}
+	if h.EvidenceStore == nil && captureErr != nil {
+		h.reportAuditError(req.Context(), captureErr)
+	}
+
+	record.finishedAt = h.now()
+	record.responseObject = responseObject
+	record.responseSize = written
+	_ = h.insertTrace(req.Context(), record)
+}
+
+func (h Handler) emitCoverageAlert(ctx context.Context, record traceRecord) error {
+	if h.CoverageEmitter == nil {
+		return nil
+	}
+	var alert alerts.CoverageAlert
+	switch {
+	case record.unknownRoute:
+		alert = alerts.UnknownRoute(record.req.Method, record.req.URL.Path, record.req.Header.Get("Content-Type"), record.traceID)
+	case record.entry.UnsupportedAlertCode == "known_route_raw_first":
+		alert = alerts.KnownRawFirst(record.req.Method, record.entry.PathPattern, record.req.URL.Path, record.entry.ProtocolFamily, record.traceID)
+	default:
+		return nil
+	}
+	if err := h.CoverageEmitter.EmitCoverageAlert(ctx, alert); err != nil {
+		h.reportAuditError(ctx, err)
+		return err
+	}
+	return nil
 }
 
 func (h Handler) insertEvidenceObject(ctx context.Context, traceID, objectType string, object evidence.Object) error {
@@ -300,6 +439,13 @@ func (h Handler) now() time.Time {
 		return h.Now().UTC()
 	}
 	return time.Now().UTC()
+}
+
+func (h Handler) maxRequestBodyBytes() int64 {
+	if h.MaxRequestBodyBytes > 0 {
+		return h.MaxRequestBodyBytes
+	}
+	return DefaultMaxRequestBodyBytes
 }
 
 func (h Handler) reportAuditError(ctx context.Context, err error) {
