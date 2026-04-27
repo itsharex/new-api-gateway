@@ -1,4 +1,4 @@
-.PHONY: test run tidy
+.PHONY: test run tidy smoke
 
 test:
 	go test ./...
@@ -8,3 +8,6 @@ run:
 
 tidy:
 	go mod tidy
+
+smoke:
+	./scripts/smoke_proxy.sh
