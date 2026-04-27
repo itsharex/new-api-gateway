@@ -290,13 +290,13 @@ func (h Handler) insertTrace(ctx context.Context, record traceRecord) error {
 		errs = append(errs, err)
 	}
 	if h.JobPublisher != nil {
-		job := jobs.NewTraceCaptured(
-			record.traceID,
-			record.entry.PathPattern,
-			record.entry.ProtocolFamily,
-			string(record.entry.CaptureMode),
-			record.snapshot.EmployeeNo,
-		)
+		job := jobs.NewTraceCaptured(jobs.TraceCapturedInput{
+			TraceID:        record.traceID,
+			RoutePattern:   record.entry.PathPattern,
+			ProtocolFamily: record.entry.ProtocolFamily,
+			CaptureMode:    string(record.entry.CaptureMode),
+			EmployeeNo:     record.snapshot.EmployeeNo,
+		})
 		if err := h.JobPublisher.PublishTraceCaptured(ctx, job); err != nil {
 			h.reportAuditError(ctx, err)
 			errs = append(errs, err)
