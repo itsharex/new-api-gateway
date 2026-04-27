@@ -27,7 +27,7 @@ class TraceCapturedJob:
 
 def parse_job(line: str) -> TraceCapturedJob:
     data = json.loads(line)
-    known = {field: data.get(field, TraceCapturedJob.__dataclass_fields__[field].default) for field in TraceCapturedJob.__dataclass_fields__}
+    known = {field: data[field] for field in TraceCapturedJob.__dataclass_fields__ if field in data}
     return TraceCapturedJob(**known)
 
 
