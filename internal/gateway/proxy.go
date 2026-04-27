@@ -512,8 +512,10 @@ func (h Handler) serveStreamingResponse(w http.ResponseWriter, req *http.Request
 
 	if storeErr != nil {
 		h.reportAuditError(auditCtx, storeErr)
+		record.skipPostPersistence = true
 	} else if captureErr != nil {
 		h.reportAuditError(auditCtx, captureErr)
+		record.skipPostPersistence = true
 	}
 	if responseErr != nil {
 		h.reportAuditError(auditCtx, responseErr)

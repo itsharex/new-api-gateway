@@ -1153,20 +1153,51 @@ func TestProxyStreamingAuditTimeoutStartsAfterStreamEnds(t *testing.T) {
 }
 
 func TestProxyStreamingResponseEvidenceFailureDoesNotMaskClientResponse(t *testing.T) {
-	storeErr := errors.New("stream evidence failed")
-	store := &selectiveEvidenceStore{
-		objects: map[string]evidence.Object{
-			"request_body": {
-				ObjectRef:      "request.bin",
-				StorageBackend: "test",
-				SizeBytes:      2,
-				SHA256:         "request-sha",
-				CreatedAt:      time.Unix(1000, 0).UTC(),
+	t.Run("store failure suppresses downstream work", func(t *testing.T) {
+		storeErr := errors.New("stream evidence failed")
+		store := &selectiveEvidenceStore{
+			objects: map[string]evidence.Object{
+				"request_body": {
+					ObjectRef:      "request.bin",
+					StorageBackend: "test",
+					SizeBytes:      2,
+					SHA256:         "request-sha",
+					CreatedAt:      time.Unix(1000, 0).UTC(),
+				},
 			},
-		},
-		errs: map[string]error{"response_body": storeErr},
-	}
+			errs: map[string]error{"response_body": storeErr},
+		}
+		assertStreamingEvidenceFailureDoesNotMaskClientResponse(t, store, storeErr, "")
+	})
+
+	t.Run("capture failure suppresses downstream work", func(t *testing.T) {
+		store := &selectiveEvidenceStore{
+			objects: map[string]evidence.Object{
+				"request_body": {
+					ObjectRef:      "request.bin",
+					StorageBackend: "test",
+					SizeBytes:      2,
+					SHA256:         "request-sha",
+					CreatedAt:      time.Unix(1000, 0).UTC(),
+				},
+				"response_body": {
+					ObjectRef:      "response.bin",
+					StorageBackend: "test",
+					SizeBytes:      int64(len("data: one\n\n")),
+					SHA256:         "response-sha",
+					CreatedAt:      time.Unix(1000, 0).UTC(),
+				},
+			},
+		}
+		assertStreamingEvidenceFailureDoesNotMaskClientResponse(t, store, io.ErrClosedPipe, "response.bin")
+	})
+}
+
+func assertStreamingEvidenceFailureDoesNotMaskClientResponse(t *testing.T, store evidence.Store, wantAuditErr error, wantResponseRawRef string) {
+	t.Helper()
 	repo := &memoryTraceRepo{}
+	publisher := &recordingJobPublisher{}
+	emitter := &recordingCoverageEmitter{}
 	var auditErrors []error
 	handler := testHandler("https://upstream.test", repo, store)
 	handler.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -1177,11 +1208,13 @@ func TestProxyStreamingResponseEvidenceFailureDoesNotMaskClientResponse(t *testi
 			Request:    req,
 		}, nil
 	})}
+	handler.JobPublisher = publisher
+	handler.CoverageEmitter = emitter
 	handler.AuditError = func(ctx context.Context, err error) {
 		auditErrors = append(auditErrors, err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
+	req := httptest.NewRequest(http.MethodPost, "/mj/submit/imagine", strings.NewReader(`{}`))
 	req.Header.Set("Authorization", "Bearer sk-abc123")
 	rec := httptest.NewRecorder()
 	done := make(chan struct{})
@@ -1193,7 +1226,7 @@ func TestProxyStreamingResponseEvidenceFailureDoesNotMaskClientResponse(t *testi
 	select {
 	case <-done:
 	case <-time.After(250 * time.Millisecond):
-		t.Fatal("streaming response blocked after evidence store failure")
+		t.Fatal("streaming response blocked after evidence failure")
 	}
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
@@ -1204,11 +1237,17 @@ func TestProxyStreamingResponseEvidenceFailureDoesNotMaskClientResponse(t *testi
 	if len(repo.traces) != 1 {
 		t.Fatalf("expected 1 trace, got %d", len(repo.traces))
 	}
-	if repo.traces[0].ResponseRawRef != "" {
-		t.Fatalf("ResponseRawRef = %q", repo.traces[0].ResponseRawRef)
+	if repo.traces[0].ResponseRawRef != wantResponseRawRef {
+		t.Fatalf("ResponseRawRef = %q, want %q", repo.traces[0].ResponseRawRef, wantResponseRawRef)
 	}
-	if len(auditErrors) == 0 || !errors.Is(auditErrors[0], storeErr) {
-		t.Fatalf("audit errors = %v, want %v", auditErrors, storeErr)
+	if len(auditErrors) == 0 || !errors.Is(auditErrors[0], wantAuditErr) {
+		t.Fatalf("audit errors = %v, want %v", auditErrors, wantAuditErr)
+	}
+	if len(publisher.jobs) != 0 {
+		t.Fatalf("published jobs = %d, want 0", len(publisher.jobs))
+	}
+	if len(emitter.alerts) != 0 {
+		t.Fatalf("coverage alerts = %d, want 0", len(emitter.alerts))
 	}
 }
 
