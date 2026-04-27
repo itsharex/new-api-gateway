@@ -651,18 +651,10 @@ func TestProxyStreamsSSEBeforeUpstreamEOFAndRecordsStreamTrace(t *testing.T) {
 	}()
 
 	streamBody.send([]byte("data: one\n\n"))
-	select {
-	case <-rec.headerWritten:
-	case <-time.After(250 * time.Millisecond):
-		streamBody.close()
-		<-done
-		t.Fatal("streaming response was not written before upstream EOF")
-	}
+	waitForObservedHeader(t, rec, streamBody, done)
+	waitForObservedFlushes(t, rec, 2, streamBody, done)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
-	}
-	if !rec.Flushed {
-		t.Fatal("expected streaming response to flush")
 	}
 
 	streamBody.close()
@@ -682,6 +674,55 @@ func TestProxyStreamsSSEBeforeUpstreamEOFAndRecordsStreamTrace(t *testing.T) {
 	}
 	if repo.traces[0].ResponseRawRef == "" {
 		t.Fatal("ResponseRawRef is empty")
+	}
+}
+
+func TestProxyStreamingAuditTimeoutStartsAfterStreamEnds(t *testing.T) {
+	streamBody := newControlledReadCloser()
+	repo := &contextRejectingTraceRepo{}
+	publisher := &recordingJobPublisher{}
+	handler := testHandler("https://upstream.test", repo, &selectiveEvidenceStore{})
+	handler.AuditTimeout = time.Millisecond
+	handler.JobPublisher = publisher
+	handler.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       streamBody,
+			Request:    req,
+		}, nil
+	})}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer sk-abc123")
+	rec := newObservedRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handler.ServeHTTP(rec, req)
+	}()
+
+	streamBody.send([]byte("data: one\n\n"))
+	waitForObservedFlushes(t, rec, 2, streamBody, done)
+	time.Sleep(10 * time.Millisecond)
+	streamBody.close()
+
+	select {
+	case <-done:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("streaming response did not finish")
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(repo.traces) != 1 {
+		t.Fatalf("expected 1 trace after long stream, got %d", len(repo.traces))
+	}
+	if repo.traces[0].ResponseRawRef == "" {
+		t.Fatal("ResponseRawRef is empty")
+	}
+	if len(publisher.jobs) != 1 {
+		t.Fatalf("published jobs = %d, want 1", len(publisher.jobs))
 	}
 }
 
@@ -916,29 +957,59 @@ func (e *recordingCoverageEmitter) EmitCoverageAlert(ctx context.Context, alert 
 type observedRecorder struct {
 	*httptest.ResponseRecorder
 	headerWritten chan struct{}
-	once          sync.Once
+	flushes       chan struct{}
+	headerOnce    sync.Once
 }
 
 func newObservedRecorder() *observedRecorder {
 	return &observedRecorder{
 		ResponseRecorder: httptest.NewRecorder(),
 		headerWritten:    make(chan struct{}),
+		flushes:          make(chan struct{}, 16),
 	}
 }
 
 func (r *observedRecorder) WriteHeader(code int) {
 	r.ResponseRecorder.WriteHeader(code)
-	r.once.Do(func() { close(r.headerWritten) })
+	r.headerOnce.Do(func() { close(r.headerWritten) })
 }
 
 func (r *observedRecorder) Write(p []byte) (int, error) {
 	n, err := r.ResponseRecorder.Write(p)
-	r.once.Do(func() { close(r.headerWritten) })
+	r.headerOnce.Do(func() { close(r.headerWritten) })
 	return n, err
 }
 
 func (r *observedRecorder) Flush() {
 	r.ResponseRecorder.Flush()
+	select {
+	case r.flushes <- struct{}{}:
+	default:
+	}
+}
+
+func waitForObservedHeader(t *testing.T, rec *observedRecorder, streamBody *controlledReadCloser, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-rec.headerWritten:
+	case <-time.After(250 * time.Millisecond):
+		streamBody.close()
+		<-done
+		t.Fatal("streaming response was not written before upstream EOF")
+	}
+}
+
+func waitForObservedFlushes(t *testing.T, rec *observedRecorder, want int, streamBody *controlledReadCloser, done <-chan struct{}) {
+	t.Helper()
+	for i := 0; i < want; i++ {
+		select {
+		case <-rec.flushes:
+		case <-time.After(250 * time.Millisecond):
+			streamBody.close()
+			<-done
+			t.Fatal("streaming response was not flushed before upstream EOF")
+		}
+	}
 }
 
 type controlledReadCloser struct {

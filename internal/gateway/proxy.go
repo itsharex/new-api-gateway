@@ -265,9 +265,6 @@ func (h Handler) insertTrace(ctx context.Context, record traceRecord) error {
 }
 
 func (h Handler) serveStreamingResponse(w http.ResponseWriter, req *http.Request, upstreamResp *http.Response, record traceRecord) {
-	auditCtx, cancelAudit := h.auditContext(req.Context())
-	defer cancelAudit()
-
 	copyHeaders(w.Header(), upstreamResp.Header)
 	w.Header().Set("x-audit-trace-id", record.traceID)
 	w.WriteHeader(upstreamResp.StatusCode)
@@ -278,6 +275,7 @@ func (h Handler) serveStreamingResponse(w http.ResponseWriter, req *http.Request
 	var responseObject evidence.Object
 	var responseErr error
 	var captureErr error
+	var storeErr error
 	clientWriter := flushWriter{writer: w}
 	if flusher, ok := w.(http.Flusher); ok {
 		clientWriter.flusher = flusher
@@ -287,6 +285,8 @@ func (h Handler) serveStreamingResponse(w http.ResponseWriter, req *http.Request
 	if h.EvidenceStore == nil {
 		written, responseErr, captureErr = copyStreamToClientAndCapture(upstreamResp.Body, clientWriter, nil)
 	} else {
+		captureCtx, cancelCapture := context.WithCancel(context.WithoutCancel(req.Context()))
+		defer cancelCapture()
 		pr, pw := io.Pipe()
 		storeDone := make(chan struct {
 			object evidence.Object
@@ -294,7 +294,7 @@ func (h Handler) serveStreamingResponse(w http.ResponseWriter, req *http.Request
 		}, 1)
 		go func() {
 			defer pr.Close()
-			object, err := h.EvidenceStore.Put(auditCtx, evidence.PutRequest{
+			object, err := h.EvidenceStore.Put(captureCtx, evidence.PutRequest{
 				TraceID:     record.traceID,
 				ObjectType:  "response_body",
 				ContentType: upstreamResp.Header.Get("Content-Type"),
@@ -314,17 +314,18 @@ func (h Handler) serveStreamingResponse(w http.ResponseWriter, req *http.Request
 		}
 		result := <-storeDone
 		responseObject = result.object
-		if result.err != nil {
-			h.reportAuditError(auditCtx, result.err)
-		} else if captureErr != nil {
-			h.reportAuditError(auditCtx, captureErr)
-		}
+		storeErr = result.err
+	}
+	auditCtx, cancelAudit := h.auditContext(req.Context())
+	defer cancelAudit()
+
+	if storeErr != nil {
+		h.reportAuditError(auditCtx, storeErr)
+	} else if captureErr != nil {
+		h.reportAuditError(auditCtx, captureErr)
 	}
 	if responseErr != nil {
 		h.reportAuditError(auditCtx, responseErr)
-	}
-	if h.EvidenceStore == nil && captureErr != nil {
-		h.reportAuditError(auditCtx, captureErr)
 	}
 
 	record.finishedAt = h.now()
