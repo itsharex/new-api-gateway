@@ -8,11 +8,17 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+var ErrPostgresTokenLookupPoolRequired = errors.New("identity postgres token lookup pool is nil")
+
 type PostgresTokenLookup struct {
 	Pool *pgxpool.Pool
 }
 
 func (l PostgresTokenLookup) FindByCanonicalKey(ctx context.Context, canonicalKey string) (NewAPIToken, error) {
+	if l.Pool == nil {
+		return NewAPIToken{}, ErrPostgresTokenLookupPoolRequired
+	}
+
 	var token NewAPIToken
 	err := l.Pool.QueryRow(ctx, newAPITokenQuery(), canonicalKey).Scan(
 		&token.TokenID,
