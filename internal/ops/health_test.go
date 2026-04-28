@@ -122,6 +122,36 @@ func TestHandlerReturnsStatusCodes(t *testing.T) {
 	}
 }
 
+func TestHandlerSanitizesReadinessErrors(t *testing.T) {
+	now := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
+	service := healthyService(now)
+	service.PostgresCheck = func(context.Context) error {
+		return errors.New(`connect postgres://audit:Bearer sk-secret@db.internal:5432/audit failed`)
+	}
+	service.WorkerHeartbeatCheck = func(context.Context) (WorkerHeartbeatStatus, error) {
+		return WorkerHeartbeatStatus{}, errors.New("query failed with token Bearer sk-worker-secret")
+	}
+	service.QueueLagCheck = func(context.Context) (QueueLagStatus, error) {
+		return QueueLagStatus{}, errors.New("/var/private/queue/state contains Bearer sk-queue-secret")
+	}
+	handler := Handler(service, true)
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+
+	if body := recorder.Body.String(); strings.Contains(body, "Bearer") || strings.Contains(body, "postgres://") || strings.Contains(body, "/var/private") {
+		t.Fatalf("/readyz body leaked raw error details:\n%s", body)
+	}
+
+	var response HealthResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("decode ready response: %v", err)
+	}
+	assertDownCheck(t, response, "postgres", "postgres check failed")
+	assertDownCheck(t, response, "worker_heartbeat", "worker heartbeat check failed")
+	assertDownCheck(t, response, "queue_lag", "queue lag check failed")
+}
+
 func healthyService(now time.Time) Service {
 	return Service{
 		Now:           nowFunc(now),
@@ -142,6 +172,17 @@ func healthyService(now time.Time) Service {
 				WarnThreshold: 1000,
 			}, nil
 		},
+	}
+}
+
+func assertDownCheck(t *testing.T, response HealthResponse, name string, message string) {
+	t.Helper()
+	check := response.Checks[name]
+	if check.Status != "down" {
+		t.Fatalf("%s status = %q, want down", name, check.Status)
+	}
+	if check.Message != message {
+		t.Fatalf("%s message = %q, want %q", name, check.Message, message)
 	}
 }
 

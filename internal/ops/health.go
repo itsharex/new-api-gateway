@@ -72,9 +72,9 @@ func (s Service) Liveness() HealthResponse {
 
 func (s Service) Readiness(ctx context.Context) HealthResponse {
 	checks := map[string]CheckStatus{
-		"postgres":         s.simpleCheck(ctx, s.PostgresCheck),
-		"redis":            s.simpleCheck(ctx, s.RedisCheck),
-		"evidence":         s.simpleCheck(ctx, s.EvidenceCheck),
+		"postgres":         s.simpleCheck(ctx, "postgres", s.PostgresCheck),
+		"redis":            s.simpleCheck(ctx, "redis", s.RedisCheck),
+		"evidence":         s.simpleCheck(ctx, "evidence", s.EvidenceCheck),
 		"worker_heartbeat": s.workerHeartbeatCheck(ctx),
 		"queue_lag":        s.queueLagCheck(ctx),
 	}
@@ -111,12 +111,12 @@ func Handler(service Service, metricsEnabled bool) http.Handler {
 	return mux
 }
 
-func (s Service) simpleCheck(ctx context.Context, check func(context.Context) error) CheckStatus {
+func (s Service) simpleCheck(ctx context.Context, dependency string, check func(context.Context) error) CheckStatus {
 	if check == nil {
 		return CheckStatus{Status: statusDegraded, Message: "check is not configured"}
 	}
 	if err := check(ctx); err != nil {
-		return CheckStatus{Status: statusDown, Message: err.Error()}
+		return CheckStatus{Status: statusDown, Message: fmt.Sprintf("%s check failed", dependency)}
 	}
 	return CheckStatus{Status: statusOK}
 }
@@ -127,7 +127,7 @@ func (s Service) workerHeartbeatCheck(ctx context.Context) CheckStatus {
 	}
 	heartbeat, err := s.WorkerHeartbeatCheck(ctx)
 	if err != nil {
-		return CheckStatus{Status: statusDown, Message: err.Error()}
+		return CheckStatus{Status: statusDown, Message: "worker heartbeat check failed"}
 	}
 	if heartbeat.WorkerCount == 0 {
 		return CheckStatus{
@@ -170,7 +170,7 @@ func (s Service) queueLagCheck(ctx context.Context) CheckStatus {
 	}
 	queue, err := s.QueueLagCheck(ctx)
 	if err != nil {
-		return CheckStatus{Status: statusDown, Message: err.Error()}
+		return CheckStatus{Status: statusDown, Message: "queue lag check failed"}
 	}
 	metrics := CheckMetrics{
 		QueueName:     queue.QueueName,

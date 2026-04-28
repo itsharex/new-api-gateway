@@ -92,6 +92,14 @@ func TestRenderMetricsUsesStructuredValuesWhenMessagesAreHumanReadable(t *testin
 	}
 }
 
+func TestRenderMetricsClampsInvalidUptime(t *testing.T) {
+	now := time.Date(2026, 4, 28, 12, 2, 0, 0, time.UTC)
+	response := HealthResponse{Status: "ok", CheckedAt: now, Checks: map[string]CheckStatus{}}
+
+	containsAll(t, RenderMetrics(response, time.Time{}, now), "audit_gateway_uptime_seconds 0")
+	containsAll(t, RenderMetrics(response, now.Add(time.Minute), now), "audit_gateway_uptime_seconds 0")
+}
+
 func TestMetricsEndpointCanBeDisabled(t *testing.T) {
 	handler := Handler(Service{Now: time.Now}, false)
 

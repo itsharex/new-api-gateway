@@ -11,7 +11,7 @@ func RenderMetrics(response HealthResponse, startedAt time.Time, now time.Time) 
 	var builder strings.Builder
 
 	fmt.Fprintf(&builder, "audit_gateway_up %d\n", gatewayUp(response.Status))
-	fmt.Fprintf(&builder, "audit_gateway_uptime_seconds %.0f\n", now.Sub(startedAt).Seconds())
+	fmt.Fprintf(&builder, "audit_gateway_uptime_seconds %.0f\n", uptimeSeconds(startedAt, now))
 
 	for _, key := range sortedDependencyKeys(response.Checks) {
 		fmt.Fprintf(&builder, "audit_gateway_dependency_up{dependency=%q} %d\n", key, checkUp(response.Checks[key].Status))
@@ -33,6 +33,13 @@ func RenderMetrics(response HealthResponse, startedAt time.Time, now time.Time) 
 	}
 
 	return builder.String()
+}
+
+func uptimeSeconds(startedAt time.Time, now time.Time) float64 {
+	if startedAt.IsZero() || startedAt.After(now) {
+		return 0
+	}
+	return now.Sub(startedAt).Seconds()
 }
 
 func gatewayUp(status string) int {
