@@ -295,7 +295,7 @@ func (h Handler) getRawEvidence(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		metadata = []byte(`{}`)
 	}
-	_ = h.repo.InsertAuditActionLog(r.Context(), AuditActionLog{
+	if err := h.repo.InsertAuditActionLog(r.Context(), AuditActionLog{
 		ActorUserID:   principal.UserID,
 		ActorUsername: principal.Username,
 		Action:        "raw_evidence_access",
@@ -304,7 +304,10 @@ func (h Handler) getRawEvidence(w http.ResponseWriter, r *http.Request) {
 		TraceID:       object.TraceID,
 		MetadataJSON:  string(metadata),
 		CreatedAt:     h.auth.now(),
-	})
+	}); err != nil {
+		http.Error(w, "failed to audit raw evidence access", http.StatusInternalServerError)
+		return
+	}
 	if object.ContentType != "" {
 		w.Header().Set("Content-Type", object.ContentType)
 	}

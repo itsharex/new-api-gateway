@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -115,6 +116,60 @@ func TestRepositoryListTracesBuildsBoundedQuery(t *testing.T) {
 	}
 }
 
+func TestRepositoryLookupTokenSummaryReturnsIdentityScanError(t *testing.T) {
+	db := &recordingAdminDB{
+		rowQueue: []pgx.Row{scanErrorRow{err: errors.New("identity scan failed")}},
+	}
+	repo := NewRepository(db)
+
+	_, err := repo.LookupTokenSummary(context.Background(), "fingerprint-value", "tkfp_example")
+
+	if err == nil {
+		t.Fatal("LookupTokenSummary returned nil error for identity scan failure")
+	}
+}
+
+func TestRepositoryLookupTokenSummaryReturnsAnomalyCountScanError(t *testing.T) {
+	db := &recordingAdminDB{
+		rowQueue: []pgx.Row{
+			scanFuncRow{scan: scanTokenIdentity("E10001", 42, "prod key", 1)},
+			scanErrorRow{err: errors.New("anomaly count failed")},
+		},
+	}
+	repo := NewRepository(db)
+
+	_, err := repo.LookupTokenSummary(context.Background(), "fingerprint-value", "tkfp_example")
+
+	if err == nil {
+		t.Fatal("LookupTokenSummary returned nil error for anomaly count scan failure")
+	}
+}
+
+func TestRepositoryLookupTokenSummaryToleratesMissingIdentityCacheRow(t *testing.T) {
+	db := &recordingAdminDB{
+		rowQueue: []pgx.Row{
+			scanErrorRow{err: pgx.ErrNoRows},
+			scanFuncRow{scan: scanAnomalyCount(3)},
+		},
+	}
+	repo := NewRepository(db)
+
+	summary, err := repo.LookupTokenSummary(context.Background(), "fingerprint-value", "tkfp_example")
+
+	if err != nil {
+		t.Fatalf("LookupTokenSummary error: %v", err)
+	}
+	if summary.TokenFingerprint != "fingerprint-value" || summary.FingerprintDisplay != "tkfp_example" {
+		t.Fatalf("summary fingerprint fields = %#v", summary)
+	}
+	if summary.EmployeeNo != "" || summary.NewAPITokenID != 0 || summary.TokenName != "" || summary.TokenStatus != 0 {
+		t.Fatalf("identity fields were populated for missing cache row: %#v", summary)
+	}
+	if summary.OpenAnomalyCount != 3 {
+		t.Fatalf("OpenAnomalyCount = %d, want 3", summary.OpenAnomalyCount)
+	}
+}
+
 type recordingAdminDB struct {
 	sql       string
 	args      []any
@@ -122,6 +177,7 @@ type recordingAdminDB struct {
 	queryArgs []any
 	rows      pgx.Rows
 	row       pgx.Row
+	rowQueue  []pgx.Row
 }
 
 func (db *recordingAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -142,6 +198,11 @@ func (db *recordingAdminDB) Query(ctx context.Context, sql string, args ...any) 
 func (db *recordingAdminDB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
 	db.querySQL = sql
 	db.queryArgs = append([]any(nil), args...)
+	if len(db.rowQueue) > 0 {
+		row := db.rowQueue[0]
+		db.rowQueue = db.rowQueue[1:]
+		return row
+	}
 	if db.row != nil {
 		return db.row
 	}
@@ -163,6 +224,35 @@ func (r *fakeRows) Conn() *pgx.Conn                              { return nil }
 type fakeRow struct{}
 
 func (fakeRow) Scan(dest ...any) error { return pgx.ErrNoRows }
+
+type scanErrorRow struct {
+	err error
+}
+
+func (r scanErrorRow) Scan(dest ...any) error { return r.err }
+
+type scanFuncRow struct {
+	scan func(dest ...any) error
+}
+
+func (r scanFuncRow) Scan(dest ...any) error { return r.scan(dest...) }
+
+func scanTokenIdentity(employeeNo string, tokenID int, tokenName string, tokenStatus int) func(dest ...any) error {
+	return func(dest ...any) error {
+		*(dest[0].(*string)) = employeeNo
+		*(dest[1].(*int)) = tokenID
+		*(dest[2].(*string)) = tokenName
+		*(dest[3].(*int)) = tokenStatus
+		return nil
+	}
+}
+
+func scanAnomalyCount(count int) func(dest ...any) error {
+	return func(dest ...any) error {
+		*(dest[0].(*int)) = count
+		return nil
+	}
+}
 
 func anyStrings(values []any) []string {
 	out := make([]string, 0, len(values))

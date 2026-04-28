@@ -251,20 +251,25 @@ func (r Repository) LookupTokenSummary(ctx context.Context, tokenFingerprint, fi
 		return LookupSummary{}, ErrAdminDBRequired
 	}
 	summary := LookupSummary{TokenFingerprint: tokenFingerprint, FingerprintDisplay: fingerprintDisplay}
-	_ = r.db.QueryRow(ctx, `
+	err := r.db.QueryRow(ctx, `
 SELECT employee_no, new_api_token_id, token_name_raw, token_status
 FROM token_identity_cache
 WHERE token_fingerprint = $1
 LIMIT 1`, tokenFingerprint).Scan(&summary.EmployeeNo, &summary.NewAPITokenID, &summary.TokenName, &summary.TokenStatus)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return LookupSummary{}, err
+	}
 	traces, err := r.ListTraces(ctx, TraceFilter{TokenFingerprint: tokenFingerprint, Limit: 20})
 	if err != nil {
 		return LookupSummary{}, err
 	}
 	summary.RecentTraces = traces
-	_ = r.db.QueryRow(ctx, `
+	if err := r.db.QueryRow(ctx, `
 SELECT count(*)
 FROM usage_anomalies
-WHERE token_fingerprint = $1 AND status = 'open'`, tokenFingerprint).Scan(&summary.OpenAnomalyCount)
+WHERE token_fingerprint = $1 AND status = 'open'`, tokenFingerprint).Scan(&summary.OpenAnomalyCount); err != nil {
+		return LookupSummary{}, err
+	}
 	return summary, nil
 }
 

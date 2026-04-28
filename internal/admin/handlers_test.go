@@ -444,6 +444,33 @@ func TestRawEvidenceAccessLookupErrorReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestRawEvidenceAccessAuditFailureDoesNotStreamObject(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleRawAccess, "audit-secret-0123456789abcdef", fakeEvidenceStore{
+		body: "raw evidence bytes",
+	})
+	db.rawEvidenceObject = EvidenceObjectSummary{
+		TraceID:     "trace_123",
+		ObjectType:  "request_body",
+		ObjectRef:   "raw/trace_123/request_body.bin",
+		ContentType: "application/json",
+		SHA256:      "abc123",
+	}
+	db.auditErr = errors.New("audit insert failed")
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/raw-evidence/trace_123/request_body", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "raw evidence bytes") {
+		t.Fatal("raw evidence bytes were streamed despite audit failure")
+	}
+}
+
 func newAuthenticatedReviewHandler(t *testing.T) (Handler, *memoryAdminDB, *http.Cookie) {
 	return newAuthenticatedAdminHandler(t, RoleAuditor, "", nil)
 }
@@ -504,6 +531,7 @@ type memoryAdminDB struct {
 	rawEvidenceObject      EvidenceObjectSummary
 	rawEvidenceErr         error
 	lookupTokenFingerprint string
+	auditErr               error
 	findUserErr            error
 	revokeErr              error
 }
@@ -522,6 +550,9 @@ func (m *memoryAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgco
 		}
 		m.revokedSessionID = args[0].(string)
 	case strings.Contains(sql, "INSERT INTO audit_action_logs"):
+		if m.auditErr != nil {
+			return pgconn.CommandTag{}, m.auditErr
+		}
 		m.auditActions = append(m.auditActions, args[2].(string))
 		m.auditMetadata = append(m.auditMetadata, args[10].(string))
 		m.auditLogs = append(m.auditLogs, AuditActionLog{
