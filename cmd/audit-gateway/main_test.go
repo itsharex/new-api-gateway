@@ -4,7 +4,9 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,6 +47,28 @@ func TestBuildHandlerWiresGatewayRuntimeDependencies(t *testing.T) {
 	}
 	if handler.AuditError == nil {
 		t.Fatal("AuditError is nil")
+	}
+}
+
+func TestBuildHTTPHandlerRoutesAdminBeforeProxy(t *testing.T) {
+	cfg := config.Config{
+		ListenAddr:         "127.0.0.1:8080",
+		NewAPIBaseURL:      "https://new-api.example.test/base",
+		AuditHMACSecret:    "0123456789abcdef0123456789abcdef",
+		AdminSessionSecret: "admin-session-secret-0123456789abcdef",
+		AdminCookieName:    "audit_admin_session",
+		EvidenceStorageDir: t.TempDir(),
+		EmployeeNoPattern:  regexp.MustCompile(`^E[0-9]+$`),
+	}
+
+	handler := buildHTTPHandler(cfg, nil, nil, log.New(ioDiscard{}, "", 0))
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/login", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusBadGateway {
+		t.Fatal("admin route fell through to proxy")
 	}
 }
 

@@ -8,11 +8,13 @@ import (
 	"net/http"
 	"os/signal"
 	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"github.com/your-company/new-api-gateway/internal/admin"
 	"github.com/your-company/new-api-gateway/internal/alerts"
 	"github.com/your-company/new-api-gateway/internal/config"
 	"github.com/your-company/new-api-gateway/internal/evidence"
@@ -48,7 +50,7 @@ func run(ctx context.Context, cfg config.Config, logger *log.Logger) error {
 	redisClient := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
 	defer redisClient.Close()
 
-	handler := buildHandler(cfg, pool, redisClient, logger)
+	handler := buildHTTPHandler(cfg, pool, redisClient, logger)
 	server := &http.Server{
 		Addr:    cfg.ListenAddr,
 		Handler: handler,
@@ -111,6 +113,40 @@ func buildHandler(cfg config.Config, pool *pgxpool.Pool, redisClient *redis.Clie
 		JobPublisher:    jobs.NewRedisListPublisher(redisClient, jobs.DefaultRedisListName),
 		CoverageEmitter: alerts.NewPostgresRepository(pool),
 	}
+}
+
+func buildHTTPHandler(cfg config.Config, pool *pgxpool.Pool, redisClient *redis.Client, logger *log.Logger) http.Handler {
+	gatewayHandler := buildHandler(cfg, pool, redisClient, logger)
+	if pool == nil {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/admin/api/") {
+				http.Error(w, "admin database unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			gatewayHandler.ServeHTTP(w, r)
+		})
+	}
+
+	adminRepo := admin.NewRepository(pool)
+	adminAuth := admin.Auth{
+		Repo:          adminRepo,
+		SessionSecret: cfg.AdminSessionSecret,
+		CookieName:    cfg.AdminCookieName,
+		CookieSecure:  cfg.AdminCookieSecure,
+	}
+	adminHandler := admin.NewHandler(admin.HandlerConfig{
+		Repo:          adminRepo,
+		Auth:          adminAuth,
+		AuditSecret:   cfg.AuditHMACSecret,
+		EvidenceStore: evidence.NewFilesystemStore(cfg.EvidenceStorageDir),
+	})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/admin/api/") {
+			adminHandler.ServeHTTP(w, r)
+			return
+		}
+		gatewayHandler.ServeHTTP(w, r)
+	})
 }
 
 func auditErrorLogger(logger *log.Logger) func(context.Context, error) {

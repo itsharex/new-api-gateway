@@ -111,3 +111,34 @@ Run the Docker Compose work relevance check:
 ```bash
 ./scripts/e2e_worker_work_relevance.sh
 ```
+
+## Admin API MVP
+
+Admin API routes live under `/admin/api/*` in the same Go process as the proxy. Required local settings:
+
+```bash
+export ADMIN_SESSION_SECRET=admin-session-secret-0123456789abcdef
+export ADMIN_COOKIE_NAME=audit_admin_session
+export ADMIN_COOKIE_SECURE=false
+```
+
+Create a local admin user for the password `change-me-admin-password`:
+
+```sql
+INSERT INTO audit_users (username, password_hash, display_name, email, role, status)
+VALUES ('admin', '$2a$10$NJhAxMc8237jiQCEz483Oe2jF8UwU.AM22x2GQSMtro6ADmiHfs0u', 'Local Admin', 'admin@example.test', 'admin', 'active')
+ON CONFLICT (username) DO NOTHING;
+```
+
+Smoke login:
+
+```bash
+curl -i -c /tmp/audit.cookies \
+  -H 'content-type: application/json' \
+  -d '{"username":"admin","password":"change-me-admin-password"}' \
+  http://localhost:8080/admin/api/login
+
+curl -b /tmp/audit.cookies http://localhost:8080/admin/api/me
+```
+
+API key lookup computes the same HMAC fingerprint used by the gateway and clears the submitted plaintext key before writing the audit log.
