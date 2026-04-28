@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -73,6 +74,27 @@ func TestBuildHTTPHandlerRoutesAdminBeforeProxy(t *testing.T) {
 				t.Fatal("admin route fell through to proxy")
 			}
 		})
+	}
+}
+
+func TestBuildHTTPHandlerServesAdminUIWithoutInterceptingAPIOrProxy(t *testing.T) {
+	handler := buildHTTPHandler(config.Config{}, nil, nil, log.New(io.Discard, "", 0))
+
+	adminReq := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	adminRec := httptest.NewRecorder()
+	handler.ServeHTTP(adminRec, adminReq)
+	if adminRec.Code != http.StatusOK {
+		t.Fatalf("/admin status = %d, body = %s", adminRec.Code, adminRec.Body.String())
+	}
+	if !strings.Contains(adminRec.Body.String(), `id="app"`) {
+		t.Fatalf("/admin did not return app shell: %s", adminRec.Body.String())
+	}
+
+	apiReq := httptest.NewRequest(http.MethodGet, "/admin/api/me", nil)
+	apiRec := httptest.NewRecorder()
+	handler.ServeHTTP(apiRec, apiReq)
+	if apiRec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("/admin/api/me status = %d, want 503 when database unavailable", apiRec.Code)
 	}
 }
 

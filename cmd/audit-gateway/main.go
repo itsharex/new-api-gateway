@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"github.com/your-company/new-api-gateway/internal/admin"
+	"github.com/your-company/new-api-gateway/internal/adminui"
 	"github.com/your-company/new-api-gateway/internal/alerts"
 	"github.com/your-company/new-api-gateway/internal/config"
 	"github.com/your-company/new-api-gateway/internal/evidence"
@@ -117,10 +118,15 @@ func buildHandler(cfg config.Config, pool *pgxpool.Pool, redisClient *redis.Clie
 
 func buildHTTPHandler(cfg config.Config, pool *pgxpool.Pool, redisClient *redis.Client, logger *log.Logger) http.Handler {
 	gatewayHandler := buildHandler(cfg, pool, redisClient, logger)
+	uiHandler := adminui.Handler()
 	if pool == nil {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if isAdminAPIPath(r.URL.Path) {
 				http.Error(w, "admin database unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			if isAdminUIPath(r.URL.Path) {
+				uiHandler.ServeHTTP(w, r)
 				return
 			}
 			gatewayHandler.ServeHTTP(w, r)
@@ -145,12 +151,20 @@ func buildHTTPHandler(cfg config.Config, pool *pgxpool.Pool, redisClient *redis.
 			adminHandler.ServeHTTP(w, r)
 			return
 		}
+		if isAdminUIPath(r.URL.Path) {
+			uiHandler.ServeHTTP(w, r)
+			return
+		}
 		gatewayHandler.ServeHTTP(w, r)
 	})
 }
 
 func isAdminAPIPath(path string) bool {
 	return path == "/admin/api" || strings.HasPrefix(path, "/admin/api/")
+}
+
+func isAdminUIPath(path string) bool {
+	return path == "/admin" || strings.HasPrefix(path, "/admin/")
 }
 
 func auditErrorLogger(logger *log.Logger) func(context.Context, error) {
