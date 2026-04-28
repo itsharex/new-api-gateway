@@ -117,7 +117,7 @@ Run the Docker Compose work relevance check:
 Admin API routes live under `/admin/api/*` in the same Go process as the proxy. The values below are for local smoke testing only; do not deploy these secrets or credentials to any shared environment. Required local settings:
 
 ```bash
-export ADMIN_SESSION_SECRET=admin-session-secret-0123456789abcdef
+export ADMIN_SESSION_SECRET=<at-least-32-character-local-secret>
 export ADMIN_COOKIE_NAME=audit_admin_session
 export ADMIN_COOKIE_SECURE=false
 ```
