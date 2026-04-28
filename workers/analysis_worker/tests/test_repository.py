@@ -122,3 +122,15 @@ def test_repository_inserts_messages_results_aggregates_anomalies_and_coverage()
     assert "INSERT INTO coverage_alerts" in queries
     assert "ON CONFLICT" in queries
     assert conn.committed is True
+
+    coverage_queries = [
+        query for query, _ in conn.cursor_obj.executed if "INSERT INTO coverage_alerts" in query
+    ]
+    assert len(coverage_queries) == 1
+    coverage_query = coverage_queries[0]
+    assert "coverage_alerts.occurrence_count + 1" in coverage_query
+    assert "SELECT DISTINCT unnest(coverage_alerts.sample_trace_ids || EXCLUDED.sample_trace_ids)" in coverage_query
+    assert (
+        "affected_trace_count = coverage_alerts.affected_trace_count + EXCLUDED.affected_trace_count"
+        not in coverage_query
+    )

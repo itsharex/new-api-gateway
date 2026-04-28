@@ -192,7 +192,11 @@ class PostgresAnalysisRepository:
                         )
                     ),
                     message = EXCLUDED.message,
-                    affected_trace_count = coverage_alerts.affected_trace_count + EXCLUDED.affected_trace_count,
+                    affected_trace_count = cardinality(
+                        ARRAY(
+                            SELECT DISTINCT unnest(coverage_alerts.sample_trace_ids || EXCLUDED.sample_trace_ids)
+                        )
+                    ),
                     affected_token_count = GREATEST(coverage_alerts.affected_token_count, EXCLUDED.affected_token_count),
                     affected_employee_count = GREATEST(coverage_alerts.affected_employee_count, EXCLUDED.affected_employee_count),
                     updated_at = now()
