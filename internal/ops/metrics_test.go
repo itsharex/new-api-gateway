@@ -1,6 +1,7 @@
 package ops
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,9 +16,26 @@ func TestRenderMetricsIncludesDependencyAndQueueValues(t *testing.T) {
 		Status:    "ok",
 		CheckedAt: now,
 		Checks: map[string]CheckStatus{
-			"postgres":         {Status: "ok"},
-			"worker_heartbeat": {Status: "ok", Message: "workers=2 age=1m0s"},
-			"queue_lag":        {Status: "ok", Message: "queue=analysis_jobs depth=42"},
+			"postgres": {Status: "ok"},
+			"worker_heartbeat": {
+				Status:  "ok",
+				Message: "workers=2 age=1m0s",
+				Metrics: CheckMetrics{
+					WorkerCount:           2,
+					HasWorkerCount:        true,
+					WorkerHeartbeatAge:    time.Minute,
+					HasWorkerHeartbeatAge: true,
+				},
+			},
+			"queue_lag": {
+				Status:  "ok",
+				Message: "queue=analysis_jobs depth=42",
+				Metrics: CheckMetrics{
+					QueueName:     "analysis_jobs",
+					QueueDepth:    42,
+					HasQueueDepth: true,
+				},
+			},
 		},
 	}
 
@@ -33,6 +51,43 @@ func TestRenderMetricsIncludesDependencyAndQueueValues(t *testing.T) {
 	)
 }
 
+func TestRenderMetricsUsesStructuredValuesWhenMessagesAreHumanReadable(t *testing.T) {
+	now := time.Date(2026, 4, 28, 12, 2, 0, 0, time.UTC)
+	response := HealthResponse{
+		Status:    "degraded",
+		CheckedAt: now,
+		Checks: map[string]CheckStatus{
+			"worker_heartbeat": {
+				Status:  "degraded",
+				Message: "no analysis worker heartbeat rows found",
+				Metrics: CheckMetrics{
+					WorkerCount:    0,
+					HasWorkerCount: true,
+				},
+			},
+			"queue_lag": {
+				Status:  "degraded",
+				Message: "analysis queue is above the configured warning threshold",
+				Metrics: CheckMetrics{
+					QueueName:     "analysis_jobs",
+					QueueDepth:    1201,
+					HasQueueDepth: true,
+				},
+			},
+		},
+	}
+
+	body := RenderMetrics(response, now.Add(-time.Minute), now)
+
+	containsAll(t, body,
+		"audit_gateway_worker_count 0",
+		`audit_gateway_analysis_queue_depth{queue="analysis_jobs"} 1201`,
+	)
+	if strings.Contains(body, "audit_gateway_worker_heartbeat_age_seconds") {
+		t.Fatalf("body contains heartbeat age without structured heartbeat age:\n%s", body)
+	}
+}
+
 func TestMetricsEndpointCanBeDisabled(t *testing.T) {
 	handler := Handler(Service{Now: time.Now}, false)
 
@@ -42,6 +97,50 @@ func TestMetricsEndpointCanBeDisabled(t *testing.T) {
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("/metrics status = %d, want 404", recorder.Code)
 	}
+}
+
+func TestMetricsEndpointCanBeEnabled(t *testing.T) {
+	now := time.Date(2026, 4, 28, 12, 2, 0, 0, time.UTC)
+	service := healthyService(now)
+	service.StartedAt = now.Add(-120 * time.Second)
+	handler := Handler(service, true)
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("/metrics status = %d, want 200", recorder.Code)
+	}
+	if contentType := recorder.Header().Get("Content-Type"); contentType != "text/plain; version=0.0.4; charset=utf-8" {
+		t.Fatalf("content type = %q, want text/plain; version=0.0.4; charset=utf-8", contentType)
+	}
+	containsAll(t, recorder.Body.String(),
+		"audit_gateway_up 1",
+		"audit_gateway_uptime_seconds 120",
+		`audit_gateway_analysis_queue_depth{queue="analysis_jobs"} 42`,
+	)
+}
+
+func TestServiceReadinessIncludesStructuredMetricsForDegradedChecks(t *testing.T) {
+	now := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
+	service := healthyService(now)
+	service.WorkerHeartbeatCheck = func(context.Context) (WorkerHeartbeatStatus, error) {
+		return WorkerHeartbeatStatus{WorkerCount: 0, MaxAge: 5 * time.Minute}, nil
+	}
+	service.QueueLagCheck = func(context.Context) (QueueLagStatus, error) {
+		return QueueLagStatus{
+			QueueName:     "analysis_jobs",
+			Depth:         1201,
+			WarnThreshold: 1000,
+		}, nil
+	}
+
+	response := service.Readiness(context.Background())
+
+	containsAll(t, RenderMetrics(response, now.Add(-time.Minute), now),
+		"audit_gateway_worker_count 0",
+		`audit_gateway_analysis_queue_depth{queue="analysis_jobs"} 1201`,
+	)
 }
 
 func containsAll(t *testing.T, body string, values ...string) {

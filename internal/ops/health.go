@@ -15,8 +15,19 @@ const (
 )
 
 type CheckStatus struct {
-	Status  string `json:"status"`
-	Message string `json:"message,omitempty"`
+	Status  string       `json:"status"`
+	Message string       `json:"message,omitempty"`
+	Metrics CheckMetrics `json:"-"`
+}
+
+type CheckMetrics struct {
+	WorkerCount           int64
+	HasWorkerCount        bool
+	WorkerHeartbeatAge    time.Duration
+	HasWorkerHeartbeatAge bool
+	QueueName             string
+	QueueDepth            int64
+	HasQueueDepth         bool
 }
 
 type HealthResponse struct {
@@ -119,17 +130,38 @@ func (s Service) workerHeartbeatCheck(ctx context.Context) CheckStatus {
 		return CheckStatus{Status: statusDown, Message: err.Error()}
 	}
 	if heartbeat.WorkerCount == 0 {
-		return CheckStatus{Status: statusDegraded, Message: "no analysis worker heartbeat rows found"}
+		return CheckStatus{
+			Status:  statusDegraded,
+			Message: "no analysis worker heartbeat rows found",
+			Metrics: CheckMetrics{
+				WorkerCount:    0,
+				HasWorkerCount: true,
+			},
+		}
 	}
 
 	age := s.now().UTC().Sub(heartbeat.LastSeenAt.UTC())
 	if age < 0 {
 		age = 0
 	}
-	if heartbeat.MaxAge > 0 && age > heartbeat.MaxAge {
-		return CheckStatus{Status: statusDegraded, Message: fmt.Sprintf("analysis worker heartbeat is stale workers=%d age=%s max_age=%s", heartbeat.WorkerCount, age, heartbeat.MaxAge)}
+	metrics := CheckMetrics{
+		WorkerCount:           heartbeat.WorkerCount,
+		HasWorkerCount:        true,
+		WorkerHeartbeatAge:    age,
+		HasWorkerHeartbeatAge: true,
 	}
-	return CheckStatus{Status: statusOK, Message: fmt.Sprintf("workers=%d age=%s", heartbeat.WorkerCount, age)}
+	if heartbeat.MaxAge > 0 && age > heartbeat.MaxAge {
+		return CheckStatus{
+			Status:  statusDegraded,
+			Message: fmt.Sprintf("analysis worker heartbeat is stale workers=%d age=%s max_age=%s", heartbeat.WorkerCount, age, heartbeat.MaxAge),
+			Metrics: metrics,
+		}
+	}
+	return CheckStatus{
+		Status:  statusOK,
+		Message: fmt.Sprintf("workers=%d age=%s", heartbeat.WorkerCount, age),
+		Metrics: metrics,
+	}
 }
 
 func (s Service) queueLagCheck(ctx context.Context) CheckStatus {
@@ -140,10 +172,23 @@ func (s Service) queueLagCheck(ctx context.Context) CheckStatus {
 	if err != nil {
 		return CheckStatus{Status: statusDown, Message: err.Error()}
 	}
-	if queue.Depth > queue.WarnThreshold {
-		return CheckStatus{Status: statusDegraded, Message: fmt.Sprintf("queue=%s depth=%d threshold=%d", queue.QueueName, queue.Depth, queue.WarnThreshold)}
+	metrics := CheckMetrics{
+		QueueName:     queue.QueueName,
+		QueueDepth:    queue.Depth,
+		HasQueueDepth: true,
 	}
-	return CheckStatus{Status: statusOK, Message: fmt.Sprintf("queue=%s depth=%d", queue.QueueName, queue.Depth)}
+	if queue.Depth > queue.WarnThreshold {
+		return CheckStatus{
+			Status:  statusDegraded,
+			Message: fmt.Sprintf("queue=%s depth=%d threshold=%d", queue.QueueName, queue.Depth, queue.WarnThreshold),
+			Metrics: metrics,
+		}
+	}
+	return CheckStatus{
+		Status:  statusOK,
+		Message: fmt.Sprintf("queue=%s depth=%d", queue.QueueName, queue.Depth),
+		Metrics: metrics,
+	}
 }
 
 func (s Service) now() time.Time {
