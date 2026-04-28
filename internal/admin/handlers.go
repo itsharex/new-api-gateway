@@ -2,8 +2,11 @@ package admin
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 type HandlerConfig struct {
@@ -25,7 +28,7 @@ func NewHandler(cfg HandlerConfig) Handler {
 	h := Handler{repo: cfg.Repo, auth: auth, mux: http.NewServeMux()}
 	h.mux.HandleFunc("POST /admin/api/login", h.login)
 	h.mux.Handle("GET /admin/api/me", h.auth.Middleware(http.HandlerFunc(h.me)))
-	h.mux.Handle("POST /admin/api/logout", h.auth.Middleware(http.HandlerFunc(h.logout)))
+	h.mux.HandleFunc("POST /admin/api/logout", h.logout)
 	return h
 }
 
@@ -43,7 +46,15 @@ func (h Handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, err := h.repo.FindActiveUserByUsername(r.Context(), input.Username)
-	if err != nil || CheckPassword(user.PasswordHash, input.Password) != nil {
+	if errors.Is(err, pgx.ErrNoRows) {
+		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to load user", http.StatusInternalServerError)
+		return
+	}
+	if CheckPassword(user.PasswordHash, input.Password) != nil {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
@@ -78,22 +89,28 @@ func (h Handler) me(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) logout(w http.ResponseWriter, r *http.Request) {
+	now := h.auth.now()
+	http.SetCookie(w, h.auth.clearCookie())
+
 	if cookie, err := r.Cookie(h.auth.CookieName); err == nil {
 		if sessionID, ok := h.auth.verifyCookie(cookie.Value); ok {
-			_ = h.repo.RevokeSession(r.Context(), sessionID, h.auth.now())
+			principal, principalErr := h.repo.PrincipalBySession(r.Context(), sessionID, now)
+			if err := h.repo.RevokeSession(r.Context(), sessionID, now); err != nil {
+				http.Error(w, "failed to revoke session", http.StatusInternalServerError)
+				return
+			}
+			if principalErr == nil {
+				_ = h.repo.InsertAuditActionLog(r.Context(), AuditActionLog{
+					ActorUserID:   principal.UserID,
+					ActorUsername: principal.Username,
+					Action:        "logout",
+					TargetType:    "audit_user",
+					TargetID:      principal.Username,
+					CreatedAt:     now,
+				})
+			}
 		}
 	}
-	if principal, ok := PrincipalFromContext(r.Context()); ok {
-		_ = h.repo.InsertAuditActionLog(r.Context(), AuditActionLog{
-			ActorUserID:   principal.UserID,
-			ActorUsername: principal.Username,
-			Action:        "logout",
-			TargetType:    "audit_user",
-			TargetID:      principal.Username,
-			CreatedAt:     h.auth.now(),
-		})
-	}
-	http.SetCookie(w, h.auth.clearCookie())
 	w.WriteHeader(http.StatusNoContent)
 }
 

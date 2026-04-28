@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -82,11 +83,152 @@ func TestLoginMeLogoutFlow(t *testing.T) {
 	}
 }
 
+func TestLogoutClearsMalformedAndStaleCookies(t *testing.T) {
+	db := &memoryAdminDB{
+		user: User{ID: 1, Username: "alice", DisplayName: "Alice", Role: RoleAuditor, Status: "active"},
+	}
+	repo := NewRepository(db)
+	auth := Auth{
+		Repo:          repo,
+		SessionSecret: "session-secret-0123456789abcdef",
+		CookieName:    "audit_admin_session",
+		Now: func() time.Time {
+			return time.Unix(1000, 0).UTC()
+		},
+	}
+	handler := NewHandler(HandlerConfig{Repo: repo, Auth: auth})
+
+	tests := []struct {
+		name   string
+		cookie *http.Cookie
+	}{
+		{
+			name:   "malformed",
+			cookie: &http.Cookie{Name: "audit_admin_session", Value: "not-a-signed-cookie"},
+		},
+		{
+			name:   "stale",
+			cookie: auth.sessionCookie("sess_stale", time.Unix(2000, 0).UTC()),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/admin/api/logout", nil)
+			req.AddCookie(tt.cookie)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+			}
+			assertClearSessionCookie(t, rec.Result().Cookies())
+		})
+	}
+}
+
+func TestLogoutReportsRevocationFailureAndClearsCookie(t *testing.T) {
+	passwordHash, err := HashPassword("secret-password")
+	if err != nil {
+		t.Fatalf("HashPassword error: %v", err)
+	}
+	db := &memoryAdminDB{
+		user: User{ID: 1, Username: "alice", PasswordHash: passwordHash, DisplayName: "Alice", Role: RoleAuditor, Status: "active"},
+	}
+	repo := NewRepository(db)
+	auth := Auth{
+		Repo:          repo,
+		SessionSecret: "session-secret-0123456789abcdef",
+		CookieName:    "audit_admin_session",
+		Now: func() time.Time {
+			return time.Unix(1000, 0).UTC()
+		},
+	}
+	handler := NewHandler(HandlerConfig{Repo: repo, Auth: auth})
+
+	loginReq := httptest.NewRequest(http.MethodPost, "/admin/api/login", bytes.NewBufferString(`{"username":"alice","password":"secret-password"}`))
+	loginRec := httptest.NewRecorder()
+	handler.ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusOK {
+		t.Fatalf("login status = %d, body = %s", loginRec.Code, loginRec.Body.String())
+	}
+	cookie := loginRec.Result().Cookies()[0]
+
+	db.revokeErr = errors.New("database unavailable")
+	logoutReq := httptest.NewRequest(http.MethodPost, "/admin/api/logout", nil)
+	logoutReq.AddCookie(cookie)
+	logoutRec := httptest.NewRecorder()
+	handler.ServeHTTP(logoutRec, logoutReq)
+
+	if logoutRec.Code != http.StatusInternalServerError {
+		t.Fatalf("logout status = %d, want 500", logoutRec.Code)
+	}
+	assertClearSessionCookie(t, logoutRec.Result().Cookies())
+}
+
+func TestLoginDistinguishesCredentialAndRepositoryFailures(t *testing.T) {
+	passwordHash, err := HashPassword("secret-password")
+	if err != nil {
+		t.Fatalf("HashPassword error: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		db         *memoryAdminDB
+		body       string
+		wantStatus int
+	}{
+		{
+			name:       "not found",
+			db:         &memoryAdminDB{user: User{ID: 1, Username: "alice", PasswordHash: passwordHash, Role: RoleAuditor, Status: "active"}},
+			body:       `{"username":"missing","password":"secret-password"}`,
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "bad password",
+			db:         &memoryAdminDB{user: User{ID: 1, Username: "alice", PasswordHash: passwordHash, Role: RoleAuditor, Status: "active"}},
+			body:       `{"username":"alice","password":"wrong-password"}`,
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "repository failure",
+			db:         &memoryAdminDB{findUserErr: errors.New("database unavailable")},
+			body:       `{"username":"alice","password":"secret-password"}`,
+			wantStatus: http.StatusInternalServerError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := NewRepository(tt.db)
+			auth := Auth{
+				Repo:          repo,
+				SessionSecret: "session-secret-0123456789abcdef",
+				CookieName:    "audit_admin_session",
+			}
+			handler := NewHandler(HandlerConfig{Repo: repo, Auth: auth})
+
+			req := httptest.NewRequest(http.MethodPost, "/admin/api/login", bytes.NewBufferString(tt.body))
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d, body = %s", rec.Code, tt.wantStatus, rec.Body.String())
+			}
+			if strings.Contains(rec.Body.String(), "secret-password") || strings.Contains(rec.Body.String(), passwordHash) {
+				t.Fatalf("response leaked credential material: %q", rec.Body.String())
+			}
+		})
+	}
+}
+
 type memoryAdminDB struct {
 	user             User
 	session          Session
 	revokedSessionID string
 	auditActions     []string
+	findUserErr      error
+	revokeErr        error
 }
 
 func (m *memoryAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -98,6 +240,9 @@ func (m *memoryAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgco
 			ExpiresAt: args[2].(time.Time),
 		}
 	case strings.Contains(sql, "UPDATE audit_sessions SET revoked_at"):
+		if m.revokeErr != nil {
+			return pgconn.CommandTag{}, m.revokeErr
+		}
 		m.revokedSessionID = args[0].(string)
 	case strings.Contains(sql, "INSERT INTO audit_action_logs"):
 		m.auditActions = append(m.auditActions, args[2].(string))
@@ -121,6 +266,9 @@ type memoryAdminRow struct {
 
 func (r memoryAdminRow) Scan(dest ...any) error {
 	if strings.Contains(r.sql, "FROM audit_users") {
+		if r.db.findUserErr != nil {
+			return r.db.findUserErr
+		}
 		username := r.args[0].(string)
 		if username != r.db.user.Username || r.db.user.Status != "active" {
 			return pgx.ErrNoRows
@@ -149,4 +297,18 @@ func (r memoryAdminRow) Scan(dest ...any) error {
 		return nil
 	}
 	return pgx.ErrNoRows
+}
+
+func assertClearSessionCookie(t *testing.T, cookies []*http.Cookie) {
+	t.Helper()
+	for _, cookie := range cookies {
+		if cookie.Name != "audit_admin_session" {
+			continue
+		}
+		if cookie.Value != "" || cookie.MaxAge >= 0 {
+			t.Fatalf("clear cookie = %#v", cookie)
+		}
+		return
+	}
+	t.Fatalf("clear cookie not found in %#v", cookies)
 }
