@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import socket
 import sys
 from pathlib import Path
 
@@ -9,6 +10,7 @@ import redis
 
 from context_repository import PostgresContextRepository
 from evidence import FileEvidenceStore
+from heartbeat import HeartbeatRepository
 from models import ContextCatalogEntry, TraceCapturedJob, UsageAggregateDelta, bucket_start_day, bucket_start_hour, parse_job
 from normalizers import normalize_json_trace
 from repository import PostgresAnalysisRepository
@@ -129,19 +131,64 @@ def process_contract_stdin() -> int:
     return 0
 
 
-def process_redis_once(redis_url: str, list_name: str, evidence_root: str, postgres_dsn: str, timeout_seconds: int) -> int:
+def worker_id() -> str:
+    configured = os.environ.get("ANALYSIS_WORKER_ID", "").strip()
+    if configured:
+        return configured
+    return f"{socket.gethostname()}:{os.getpid()}"
+
+
+def process_redis_once(
+    redis_url: str,
+    list_name: str,
+    evidence_root: str,
+    postgres_dsn: str,
+    timeout_seconds: int,
+    connection_factory=psycopg.connect,
+) -> int:
     client = redis.Redis.from_url(redis_url, decode_responses=True)
     item = client.blpop(list_name, timeout=timeout_seconds)
-    if item is None:
-        print(json.dumps({"worker_status": "idle", "list": list_name}, sort_keys=True))
-        return 0
-    _, payload = item
-    with psycopg.connect(postgres_dsn) as connection:
-        result = process_job_line(
-            payload,
-            FileEvidenceStore(evidence_root),
-            PostgresAnalysisRepository(connection),
-            PostgresContextRepository(connection),
+    with connection_factory(postgres_dsn) as connection:
+        heartbeat = HeartbeatRepository(connection)
+        if item is None:
+            heartbeat.record(
+                worker_id=worker_id(),
+                worker_kind="analysis",
+                status="idle",
+                queue_name=list_name,
+                processed_count=0,
+                error_count=0,
+                metadata={"redis_url": redis_url},
+            )
+            print(json.dumps({"worker_status": "idle", "list": list_name}, sort_keys=True))
+            return 0
+        _, payload = item
+        try:
+            result = process_job_line(
+                payload,
+                FileEvidenceStore(evidence_root),
+                PostgresAnalysisRepository(connection),
+                PostgresContextRepository(connection),
+            )
+        except Exception as exc:
+            heartbeat.record(
+                worker_id=worker_id(),
+                worker_kind="analysis",
+                status="error",
+                queue_name=list_name,
+                processed_count=0,
+                error_count=1,
+                metadata={"error_type": exc.__class__.__name__},
+            )
+            raise
+        heartbeat.record(
+            worker_id=worker_id(),
+            worker_kind="analysis",
+            status="processed",
+            queue_name=list_name,
+            processed_count=1,
+            error_count=0,
+            metadata={"trace_id": result.get("accepted_trace_id", "")},
         )
     print(json.dumps(result, sort_keys=True))
     return 0

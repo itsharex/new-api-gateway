@@ -282,3 +282,110 @@ def test_arbitrary_stdin_without_services_requires_config(monkeypatch):
 
     assert completed.returncode != 0
     assert "config" in completed.stderr.lower()
+
+
+def test_process_redis_once_records_idle_heartbeat(monkeypatch):
+    from main import process_redis_once
+
+    class FakeRedisClient:
+        def blpop(self, list_name, timeout):
+            assert list_name == "analysis_jobs"
+            assert timeout == 1
+            return None
+
+    class FakeRedisModule:
+        @staticmethod
+        def from_url(url, decode_responses):
+            assert url == "redis://localhost:6379/0"
+            assert decode_responses is True
+            return FakeRedisClient()
+
+    class FakeHeartbeatRepository:
+        calls = []
+
+        def __init__(self, connection):
+            self.connection = connection
+
+        def record(self, **kwargs):
+            self.calls.append(kwargs)
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr("main.redis.Redis", FakeRedisModule)
+    monkeypatch.setattr("main.HeartbeatRepository", FakeHeartbeatRepository)
+    monkeypatch.setenv("ANALYSIS_WORKER_ID", "worker-test")
+
+    exit_code = process_redis_once(
+        "redis://localhost:6379/0",
+        "analysis_jobs",
+        "/tmp/evidence-unused",
+        "postgres://unused",
+        1,
+        connection_factory=lambda dsn: FakeConnection(),
+    )
+
+    assert exit_code == 0
+    assert FakeHeartbeatRepository.calls[0]["worker_id"] == "worker-test"
+    assert FakeHeartbeatRepository.calls[0]["status"] == "idle"
+    assert FakeHeartbeatRepository.calls[0]["queue_name"] == "analysis_jobs"
+
+
+def test_process_redis_once_records_error_heartbeat_without_exception_message(monkeypatch):
+    from main import process_redis_once
+
+    class FakeRedisClient:
+        def blpop(self, list_name, timeout):
+            return (list_name, "{\"trace_id\":\"trace-secret\"}")
+
+    class FakeRedisModule:
+        @staticmethod
+        def from_url(url, decode_responses):
+            return FakeRedisClient()
+
+    class FakeHeartbeatRepository:
+        calls = []
+
+        def __init__(self, connection):
+            self.connection = connection
+
+        def record(self, **kwargs):
+            self.calls.append(kwargs)
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fail_process_job_line(*args, **kwargs):
+        raise RuntimeError("secret evidence ref raw/2026/04/28/trace-secret/request_body.bin")
+
+    monkeypatch.setattr("main.redis.Redis", FakeRedisModule)
+    monkeypatch.setattr("main.HeartbeatRepository", FakeHeartbeatRepository)
+    monkeypatch.setattr("main.process_job_line", fail_process_job_line)
+    monkeypatch.setenv("ANALYSIS_WORKER_ID", "worker-test")
+
+    try:
+        process_redis_once(
+            "redis://localhost:6379/0",
+            "analysis_jobs",
+            "/tmp/evidence-unused",
+            "postgres://unused",
+            1,
+            connection_factory=lambda dsn: FakeConnection(),
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("expected RuntimeError")
+
+    assert FakeHeartbeatRepository.calls[0]["worker_id"] == "worker-test"
+    assert FakeHeartbeatRepository.calls[0]["status"] == "error"
+    assert FakeHeartbeatRepository.calls[0]["error_count"] == 1
+    assert FakeHeartbeatRepository.calls[0]["metadata"] == {"error_type": "RuntimeError"}
