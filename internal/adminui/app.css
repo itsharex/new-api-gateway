@@ -264,6 +264,7 @@ td {
   padding: 9px 8px;
   text-align: left;
   vertical-align: top;
+  overflow-wrap: anywhere;
 }
 
 th {
@@ -325,6 +326,7 @@ tr:last-child td {
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 10px;
+  overflow-wrap: anywhere;
 }
 
 .meta-item span {

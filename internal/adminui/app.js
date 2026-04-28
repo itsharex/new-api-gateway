@@ -44,7 +44,7 @@ function escapeHTML(value) {
 function table(headers, rows) {
   const safeHeaders = headers.map((header) => `<th>${escapeHTML(header)}</th>`).join("");
   const cell = (value) => {
-    if (value && typeof value === "object" && value.html !== undefined) {
+    if (value && typeof value === "object" && value.safeHTML === true) {
       return value.html;
     }
     return escapeHTML(value);
@@ -65,7 +65,7 @@ function money(value) {
   if (value === null || value === undefined || value === "") {
     return "";
   }
-  return `$${escapeHTML(value)}`;
+  return `$${value}`;
 }
 
 function arrayValue(value) {
@@ -75,11 +75,22 @@ function arrayValue(value) {
 function badge(value) {
   const text = escapeHTML(value || "unknown");
   const severity = String(value || "unknown").toLowerCase();
-  return { html: `<span class="badge ${escapeHTML(severity)}">${text}</span>` };
+  return safeHTML(`<span class="badge ${escapeHTML(severity)}">${text}</span>`);
 }
 
-function html(value) {
-  return { html: value };
+function safeHTML(value) {
+  return { safeHTML: true, html: value };
+}
+
+function traceButton(traceID) {
+  return safeHTML(`<button type="button" data-trace-id="${escapeHTML(traceID)}">${escapeHTML(traceID)}</button>`);
+}
+
+function rawEvidenceLink(traceID, objectType) {
+  const safeTraceID = encodeURIComponent(traceID || "");
+  const safeObjectType = encodeURIComponent(objectType || "");
+  const href = `/admin/api/raw-evidence/${safeTraceID}/${safeObjectType}`;
+  return `<a href="${href}" target="_blank" rel="noreferrer">${escapeHTML(objectType)}</a>`;
 }
 
 function page(title, content, action = "") {
@@ -256,7 +267,7 @@ function renderUsage(body) {
     item.route_pattern,
     formatNumber(item.request_count),
     formatNumber(item.total_tokens),
-    html(money(item.estimated_cost)),
+    money(item.estimated_cost),
   ]);
   renderShell(page("Usage", `<section class="panel">${table(["Bucket", "Employee", "Model", "Route", "Requests", "Tokens", "Cost"], rows)}</section>`));
 }
@@ -264,7 +275,7 @@ function renderUsage(body) {
 function renderTraces(body) {
   body = body || {};
   const rows = arrayValue(body.traces).map((trace) => [
-    html(`<button type="button" data-trace-id="${escapeHTML(trace.trace_id)}">${escapeHTML(trace.trace_id)}</button>`),
+    traceButton(trace.trace_id),
     trace.employee_no || trace.fingerprint_display,
     trace.model_requested,
     trace.route_pattern || trace.path,
@@ -274,8 +285,12 @@ function renderTraces(body) {
   renderShell(page("Traces", `<section class="panel">${table(["Trace", "Employee", "Model", "Route", "Status", "Tokens"], rows)}</section>`));
   document.querySelectorAll("[data-trace-id]").forEach((button) => {
     button.addEventListener("click", async () => {
-      const body = await api(`/traces/${encodeURIComponent(button.dataset.traceId)}`);
-      renderTraceDetail(body);
+      try {
+        const body = await api(`/traces/${encodeURIComponent(button.dataset.traceId)}`);
+        renderTraceDetail(body);
+      } catch (error) {
+        renderShell(page("Traces", `<section class="panel error">${escapeHTML(error.message)}</section>`));
+      }
     });
   });
 }
@@ -289,8 +304,7 @@ function renderTraceDetail(body) {
       if (!refName) {
         return "";
       }
-      const href = `/admin/api/raw-evidence/${encodeURIComponent(trace.trace_id)}/${type}`;
-      return `<a href="${href}" target="_blank" rel="noreferrer">${escapeHTML(type)}</a>`;
+      return rawEvidenceLink(trace.trace_id, type);
     })
     .filter(Boolean)
     .join(" ");
@@ -389,11 +403,12 @@ function renderLookup(result = "") {
     event.preventDefault();
     const apiKeyInput = event.currentTarget.elements.api_key;
     try {
+      const apiKey = apiKeyInput.value;
+      apiKeyInput.value = "";
       const body = await api("/api-key-lookup", {
         method: "POST",
-        body: JSON.stringify({ api_key: apiKeyInput.value }),
+        body: JSON.stringify({ api_key: apiKey }),
       });
-      apiKeyInput.value = "";
       const lookup = body.lookup || {};
       renderLookup(`
         <section class="panel">
@@ -406,13 +421,12 @@ function renderLookup(result = "") {
         </section>
       `);
     } catch (error) {
-      apiKeyInput.value = "";
       renderLookup(`<section class="panel error">${escapeHTML(error.message)}</section>`);
     }
   });
 }
 
-function renderContext(body) {
+function renderContext(body, message = "") {
   body = body || {};
   const rows = arrayValue(body.context_catalog).map((item) => [
     item.context_type,
@@ -427,6 +441,7 @@ function renderContext(body) {
       "Context Catalog",
       `
         <section class="panel">${table(["Type", "Name", "Owner", "Keywords", "Usage", "Status"], rows)}</section>
+        ${message}
         <section class="panel">
           <h2>Create Context</h2>
           <form id="context-form" class="filters">
@@ -476,23 +491,27 @@ function renderContext(body) {
       .split(",")
       .map((keyword) => keyword.trim())
       .filter(Boolean);
-    await api("/context-catalog", {
-      method: "POST",
-      body: JSON.stringify({
-        context_type: form.get("context_type"),
-        name: form.get("name"),
-        description: form.get("description"),
-        keywords,
-        aliases: [],
-        owner: form.get("owner"),
-        expected_task_categories: [],
-        expected_models: [],
-        expected_usage_level: form.get("expected_usage_level"),
-        active: true,
-      }),
-    });
-    const refreshed = await api("/context-catalog");
-    renderContext(refreshed);
+    try {
+      await api("/context-catalog", {
+        method: "POST",
+        body: JSON.stringify({
+          context_type: form.get("context_type"),
+          name: form.get("name"),
+          description: form.get("description"),
+          keywords,
+          aliases: [],
+          owner: form.get("owner"),
+          expected_task_categories: [],
+          expected_models: [],
+          expected_usage_level: form.get("expected_usage_level"),
+          active: true,
+        }),
+      });
+      const refreshed = await api("/context-catalog");
+      renderContext(refreshed);
+    } catch (error) {
+      renderContext(body, `<section class="panel error">${escapeHTML(error.message)}</section>`);
+    }
   });
 }
 
