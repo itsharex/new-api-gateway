@@ -139,6 +139,26 @@ def test_contract_example_processes_from_stdin_without_services(monkeypatch):
     assert response["coverage_alert_count"] == 0
 
 
+def test_modified_contract_trace_id_without_services_requires_config(monkeypatch):
+    worker_dir = Path(__file__).parents[1]
+    monkeypatch.delenv("EVIDENCE_STORAGE_DIR", raising=False)
+    monkeypatch.delenv("POSTGRES_DSN", raising=False)
+    modified_contract = json.loads((worker_dir / "contract_example.json").read_text(encoding="utf-8"))
+    modified_contract["employee_no"] = "E99999"
+
+    completed = subprocess.run(
+        [sys.executable, "main.py"],
+        cwd=worker_dir,
+        input=json.dumps(modified_contract),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "config" in completed.stderr.lower()
+
+
 def test_arbitrary_stdin_without_services_requires_config(monkeypatch):
     worker_dir = Path(__file__).parents[1]
     monkeypatch.delenv("EVIDENCE_STORAGE_DIR", raising=False)

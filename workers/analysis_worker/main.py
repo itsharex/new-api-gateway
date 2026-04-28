@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 
 import psycopg
 import redis
@@ -93,13 +94,10 @@ def process_contract_stdin() -> int:
         return 0
     try:
         data = json.loads(payload)
+        contract_data = json.loads((Path(__file__).with_name("contract_example.json")).read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise SystemExit("service config required for stdin jobs outside contract validation") from exc
-    if not (
-        isinstance(data, dict)
-        and data.get("type") == "trace_captured"
-        and data.get("trace_id") == "trace_example"
-    ):
+    if data != contract_data:
         raise SystemExit("service config required for stdin jobs outside contract validation")
     result = process_contract_validation_line(payload)
     print(json.dumps(result, sort_keys=True))
