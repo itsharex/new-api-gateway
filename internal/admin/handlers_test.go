@@ -471,6 +471,59 @@ func TestRawEvidenceAccessAuditFailureDoesNotStreamObject(t *testing.T) {
 	}
 }
 
+func TestOverviewRequiresAggregatePermission(t *testing.T) {
+	handler, _, cookie := newAuthenticatedAdminHandler(t, RoleViewer, "", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestContextCatalogCreateRequiresReviewPermissionAndWritesActor(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleAuditor, "", nil)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/context-catalog", bytes.NewBufferString(`{
+		"context_type":"repo",
+		"name":"new-api-gateway",
+		"description":"Audit gateway repository",
+		"keywords":["gateway","new-api"],
+		"aliases":["audit gateway"],
+		"owner":"platform",
+		"expected_task_categories":["coding","debugging"],
+		"expected_models":["gpt-5.2"],
+		"expected_usage_level":"medium",
+		"active":true
+	}`))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body = %s", rec.Code, rec.Body.String())
+	}
+	if db.contextEntry.Name != "new-api-gateway" || db.contextEntry.CreatedBy != "alice" || db.contextEntry.UpdatedBy != "alice" {
+		t.Fatalf("context entry = %#v", db.contextEntry)
+	}
+}
+
+func TestAuditLogsRequireAdminRole(t *testing.T) {
+	handler, _, cookie := newAuthenticatedAdminHandler(t, RoleAuditor, "", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/audit-logs", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+}
+
 func newAuthenticatedReviewHandler(t *testing.T) (Handler, *memoryAdminDB, *http.Cookie) {
 	return newAuthenticatedAdminHandler(t, RoleAuditor, "", nil)
 }
@@ -528,6 +581,7 @@ type memoryAdminDB struct {
 	auditMetadata          []string
 	auditLogs              []AuditActionLog
 	reviewDecisions        []ReviewDecision
+	contextEntry           ContextCatalogEntry
 	rawEvidenceObject      EvidenceObjectSummary
 	rawEvidenceErr         error
 	lookupTokenFingerprint string
@@ -579,6 +633,21 @@ func (m *memoryAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgco
 			Note:             args[5].(string),
 			CreatedAt:        args[6].(time.Time),
 		})
+	case strings.Contains(sql, "INSERT INTO context_catalog"):
+		m.contextEntry = ContextCatalogEntry{
+			ContextType:            args[0].(string),
+			Name:                   args[1].(string),
+			Description:            args[2].(string),
+			Keywords:               args[3].([]string),
+			Aliases:                args[4].([]string),
+			Owner:                  args[5].(string),
+			ExpectedTaskCategories: args[6].([]string),
+			ExpectedModels:         args[7].([]string),
+			ExpectedUsageLevel:     args[8].(string),
+			Active:                 args[9].(bool),
+			CreatedBy:              args[10].(string),
+			UpdatedBy:              args[11].(string),
+		}
 	}
 	return pgconn.NewCommandTag("INSERT 0 1"), nil
 }
@@ -639,13 +708,6 @@ func (r memoryAdminRow) Scan(dest ...any) error {
 		}
 		return nil
 	}
-	if strings.Contains(r.sql, "FROM usage_anomalies") {
-		r.db.lookupTokenFingerprint = r.args[0].(string)
-		if len(dest) >= 1 {
-			*(dest[0].(*int)) = 0
-		}
-		return nil
-	}
 	if strings.Contains(r.sql, "FROM raw_evidence_objects") {
 		if r.db.rawEvidenceErr != nil {
 			return r.db.rawEvidenceErr
@@ -659,6 +721,23 @@ func (r memoryAdminRow) Scan(dest ...any) error {
 		*(dest[3].(*string)) = r.db.rawEvidenceObject.ContentType
 		*(dest[4].(*int64)) = r.db.rawEvidenceObject.SizeBytes
 		*(dest[5].(*string)) = r.db.rawEvidenceObject.SHA256
+		return nil
+	}
+	if strings.Contains(r.sql, "FROM traces") {
+		*(dest[0].(*int64)) = 0
+		*(dest[1].(*int64)) = 0
+		*(dest[2].(*int64)) = 0
+		*(dest[3].(*int64)) = 0
+		*(dest[4].(*int64)) = 0
+		*(dest[5].(*int64)) = 0
+		*(dest[6].(*int64)) = 0
+		return nil
+	}
+	if strings.Contains(r.sql, "FROM usage_anomalies") {
+		r.db.lookupTokenFingerprint = r.args[0].(string)
+		if len(dest) >= 1 {
+			*(dest[0].(*int)) = 0
+		}
 		return nil
 	}
 	return pgx.ErrNoRows

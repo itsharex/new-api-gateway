@@ -37,6 +37,12 @@ func NewHandler(cfg HandlerConfig) Handler {
 	h := Handler{repo: cfg.Repo, auth: auth, auditSecret: cfg.AuditSecret, evidenceStore: cfg.EvidenceStore, mux: http.NewServeMux()}
 	h.mux.HandleFunc("POST /admin/api/login", h.login)
 	h.mux.Handle("GET /admin/api/me", h.auth.Middleware(http.HandlerFunc(h.me)))
+	h.mux.Handle("GET /admin/api/overview", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.overview))))
+	h.mux.Handle("GET /admin/api/usage", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.listUsage))))
+	h.mux.Handle("GET /admin/api/traces/{trace_id}", h.auth.Middleware(h.auth.Require(PermissionViewNormalizedTraces, http.HandlerFunc(h.getTraceDetail))))
+	h.mux.Handle("GET /admin/api/context-catalog", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.listContextCatalog))))
+	h.mux.Handle("POST /admin/api/context-catalog", h.auth.Middleware(h.auth.Require(PermissionReview, http.HandlerFunc(h.createContextCatalogEntry))))
+	h.mux.Handle("GET /admin/api/audit-logs", h.auth.Middleware(h.auth.Require(PermissionManageUsers, http.HandlerFunc(h.listAuditLogs))))
 	h.mux.HandleFunc("POST /admin/api/logout", h.logout)
 	h.mux.Handle("GET /admin/api/traces", h.auth.Middleware(h.auth.Require(PermissionViewNormalizedTraces, http.HandlerFunc(h.listTraces))))
 	h.mux.Handle("GET /admin/api/anomalies", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.listAnomalies))))
@@ -144,6 +150,118 @@ func (h Handler) listTraces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"traces": items})
+}
+
+func (h Handler) overview(w http.ResponseWriter, r *http.Request) {
+	summary, err := h.repo.OverviewSummary(r.Context(), h.auth.now())
+	if err != nil {
+		http.Error(w, "failed to load overview", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"overview": summary})
+}
+
+func (h Handler) listUsage(w http.ResponseWriter, r *http.Request) {
+	filter := UsageFilter{
+		EmployeeNo:       r.URL.Query().Get("employee_no"),
+		TokenFingerprint: r.URL.Query().Get("token_fingerprint"),
+		Model:            r.URL.Query().Get("model"),
+		RoutePattern:     r.URL.Query().Get("route_pattern"),
+		BucketSize:       r.URL.Query().Get("bucket_size"),
+		Limit:            100,
+	}
+	items, err := h.repo.ListUsageAggregates(r.Context(), filter)
+	if err != nil {
+		http.Error(w, "failed to list usage", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"usage": items})
+}
+
+func (h Handler) getTraceDetail(w http.ResponseWriter, r *http.Request) {
+	traceID := strings.TrimSpace(r.PathValue("trace_id"))
+	if traceID == "" {
+		http.Error(w, "trace_id is required", http.StatusBadRequest)
+		return
+	}
+	detail, err := h.repo.GetTraceDetail(r.Context(), traceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		http.Error(w, "trace not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to load trace", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"trace": detail})
+}
+
+func (h Handler) listContextCatalog(w http.ResponseWriter, r *http.Request) {
+	activeOnly := r.URL.Query().Get("active") != "false"
+	items, err := h.repo.ListContextCatalog(r.Context(), activeOnly, 100)
+	if err != nil {
+		http.Error(w, "failed to list context catalog", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"context_catalog": items})
+}
+
+func (h Handler) createContextCatalogEntry(w http.ResponseWriter, r *http.Request) {
+	principal, _ := PrincipalFromContext(r.Context())
+	var input ContextCatalogEntry
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	input.ContextType = strings.TrimSpace(input.ContextType)
+	input.Name = strings.TrimSpace(input.Name)
+	input.ExpectedUsageLevel = strings.TrimSpace(input.ExpectedUsageLevel)
+	if !validContextCatalogEntry(input) {
+		http.Error(w, "invalid context catalog entry", http.StatusBadRequest)
+		return
+	}
+	input.CreatedBy = principal.Username
+	input.UpdatedBy = principal.Username
+	if err := h.repo.InsertContextCatalogEntry(r.Context(), input); err != nil {
+		http.Error(w, "failed to save context catalog entry", http.StatusInternalServerError)
+		return
+	}
+	_ = h.repo.InsertAuditActionLog(r.Context(), AuditActionLog{
+		ActorUserID:   principal.UserID,
+		ActorUsername: principal.Username,
+		Action:        "context_catalog_upsert",
+		TargetType:    "context_catalog",
+		TargetID:      input.ContextType + ":" + input.Name,
+		MetadataJSON:  `{"source":"admin_api"}`,
+		CreatedAt:     h.auth.now(),
+	})
+	writeJSON(w, http.StatusCreated, map[string]any{"context": input})
+}
+
+func validContextCatalogEntry(input ContextCatalogEntry) bool {
+	switch input.ContextType {
+	case "repo", "project", "product", "service", "team", "keyword_set":
+	default:
+		return false
+	}
+	if input.Name == "" {
+		return false
+	}
+	switch input.ExpectedUsageLevel {
+	case "", "low", "medium", "high":
+		return true
+	default:
+		return false
+	}
+}
+
+func (h Handler) listAuditLogs(w http.ResponseWriter, r *http.Request) {
+	items, err := h.repo.ListAuditActionLogs(r.Context(), 100)
+	if err != nil {
+		http.Error(w, "failed to list audit logs", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"audit_logs": items})
 }
 
 func (h Handler) listAnomalies(w http.ResponseWriter, r *http.Request) {
