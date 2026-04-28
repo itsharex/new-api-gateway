@@ -89,6 +89,18 @@ func TestLoadFromEnvRejectsShortAdminSessionSecret(t *testing.T) {
 	assertErrorContains(t, err, "ADMIN_SESSION_SECRET must be at least 32 characters")
 }
 
+func TestLoadFromEnvRejectsInvalidAdminCookieName(t *testing.T) {
+	for _, cookieName := range []string{"bad name", "bad;name", "会话"} {
+		t.Run(cookieName, func(t *testing.T) {
+			setValidEnv(t)
+			t.Setenv("ADMIN_COOKIE_NAME", cookieName)
+
+			_, err := LoadFromEnv()
+			assertErrorContains(t, err, "ADMIN_COOKIE_NAME")
+		})
+	}
+}
+
 func TestLoadFromEnvUsesListenAndRedisDefaultsWhenUnset(t *testing.T) {
 	setValidEnv(t)
 	unsetEnv(t, "AUDIT_GATEWAY_LISTEN_ADDR")

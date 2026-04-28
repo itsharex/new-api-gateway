@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"regexp"
@@ -71,6 +72,9 @@ func LoadFromEnv() (Config, error) {
 	adminCookieName, err := getenvDefault("ADMIN_COOKIE_NAME", "audit_admin_session")
 	if err != nil {
 		return Config{}, err
+	}
+	if err := (&http.Cookie{Name: adminCookieName, Value: "x"}).Valid(); err != nil {
+		return Config{}, fmt.Errorf("invalid ADMIN_COOKIE_NAME: %w", err)
 	}
 
 	adminCookieSecureRaw, err := getenvDefault("ADMIN_COOKIE_SECURE", "false")
