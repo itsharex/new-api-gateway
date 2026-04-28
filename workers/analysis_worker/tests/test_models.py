@@ -1,6 +1,7 @@
 import json
+from datetime import datetime, timedelta, timezone
 
-from models import TraceCapturedJob, anomaly_id, bucket_start_hour, coverage_alert_id, parse_job
+from models import TraceCapturedJob, anomaly_id, bucket_start_hour, coverage_alert_id, parse_job, window_end_from_start
 
 
 def test_parse_job_keeps_gateway_contract_fields():
@@ -79,3 +80,11 @@ def test_coverage_alert_id_groups_by_alert_route_and_shape():
     assert first == second
     assert first != other
     assert first.startswith("cov_normalization_gap_")
+
+
+def test_window_end_from_start_empty_value_honors_offset():
+    before = datetime.now(timezone.utc) + timedelta(seconds=60)
+    parsed = datetime.fromisoformat(window_end_from_start("", seconds=60))
+    after = datetime.now(timezone.utc) + timedelta(seconds=60)
+
+    assert before <= parsed <= after

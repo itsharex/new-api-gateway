@@ -148,7 +148,7 @@ def coverage_alert_id(alert_code: str, route_pattern: str, payload_shape_hash: s
 
 def window_end_from_start(value: str, seconds: int = 60) -> str:
     if not value:
-        return datetime.now(timezone.utc).isoformat()
+        return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     return (parsed.astimezone(timezone.utc) + timedelta(seconds=seconds)).isoformat()
 
