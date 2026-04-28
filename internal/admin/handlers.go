@@ -208,34 +208,61 @@ func (h Handler) listContextCatalog(w http.ResponseWriter, r *http.Request) {
 
 func (h Handler) createContextCatalogEntry(w http.ResponseWriter, r *http.Request) {
 	principal, _ := PrincipalFromContext(r.Context())
-	var input ContextCatalogEntry
+	var input struct {
+		ContextType            string   `json:"context_type"`
+		Name                   string   `json:"name"`
+		Description            string   `json:"description"`
+		Keywords               []string `json:"keywords"`
+		Aliases                []string `json:"aliases"`
+		Owner                  string   `json:"owner"`
+		ExpectedTaskCategories []string `json:"expected_task_categories"`
+		ExpectedModels         []string `json:"expected_models"`
+		ExpectedUsageLevel     string   `json:"expected_usage_level"`
+		Active                 *bool    `json:"active"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	input.ContextType = strings.TrimSpace(input.ContextType)
-	input.Name = strings.TrimSpace(input.Name)
-	input.ExpectedUsageLevel = strings.TrimSpace(input.ExpectedUsageLevel)
-	if !validContextCatalogEntry(input) {
+	active := true
+	if input.Active != nil {
+		active = *input.Active
+	}
+	entry := ContextCatalogEntry{
+		ContextType:            strings.TrimSpace(input.ContextType),
+		Name:                   strings.TrimSpace(input.Name),
+		Description:            input.Description,
+		Keywords:               input.Keywords,
+		Aliases:                input.Aliases,
+		Owner:                  input.Owner,
+		ExpectedTaskCategories: input.ExpectedTaskCategories,
+		ExpectedModels:         input.ExpectedModels,
+		ExpectedUsageLevel:     strings.TrimSpace(input.ExpectedUsageLevel),
+		Active:                 active,
+		CreatedBy:              principal.Username,
+		UpdatedBy:              principal.Username,
+	}
+	if !validContextCatalogEntry(entry) {
 		http.Error(w, "invalid context catalog entry", http.StatusBadRequest)
 		return
 	}
-	input.CreatedBy = principal.Username
-	input.UpdatedBy = principal.Username
-	if err := h.repo.InsertContextCatalogEntry(r.Context(), input); err != nil {
+	if err := h.repo.InsertContextCatalogEntry(r.Context(), entry); err != nil {
 		http.Error(w, "failed to save context catalog entry", http.StatusInternalServerError)
 		return
 	}
-	_ = h.repo.InsertAuditActionLog(r.Context(), AuditActionLog{
+	if err := h.repo.InsertAuditActionLog(r.Context(), AuditActionLog{
 		ActorUserID:   principal.UserID,
 		ActorUsername: principal.Username,
 		Action:        "context_catalog_upsert",
 		TargetType:    "context_catalog",
-		TargetID:      input.ContextType + ":" + input.Name,
+		TargetID:      entry.ContextType + ":" + entry.Name,
 		MetadataJSON:  `{"source":"admin_api"}`,
 		CreatedAt:     h.auth.now(),
-	})
-	writeJSON(w, http.StatusCreated, map[string]any{"context": input})
+	}); err != nil {
+		http.Error(w, "failed to audit context catalog entry", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"context": entry})
 }
 
 func validContextCatalogEntry(input ContextCatalogEntry) bool {

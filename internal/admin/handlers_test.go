@@ -511,6 +511,131 @@ func TestContextCatalogCreateRequiresReviewPermissionAndWritesActor(t *testing.T
 	}
 }
 
+func TestContextCatalogCreateDefaultsOmittedActiveToTrue(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleAuditor, "", nil)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/context-catalog", bytes.NewBufferString(`{
+		"context_type":"repo",
+		"name":"default-active",
+		"expected_usage_level":"low"
+	}`))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body = %s", rec.Code, rec.Body.String())
+	}
+	if !db.contextEntry.Active {
+		t.Fatalf("active = false, want true for omitted active")
+	}
+}
+
+func TestContextCatalogCreatePersistsExplicitActiveFalse(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleAuditor, "", nil)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/context-catalog", bytes.NewBufferString(`{
+		"context_type":"repo",
+		"name":"inactive-repo",
+		"expected_usage_level":"low",
+		"active":false
+	}`))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body = %s", rec.Code, rec.Body.String())
+	}
+	if db.contextEntry.Active {
+		t.Fatalf("active = true, want false for explicit active false")
+	}
+}
+
+func TestContextCatalogCreateAuditFailureReturnsErrorAfterUpsert(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleAuditor, "", nil)
+	db.auditErr = errors.New("audit insert failed")
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/context-catalog", bytes.NewBufferString(`{
+		"context_type":"repo",
+		"name":"audit-failure",
+		"expected_usage_level":"medium"
+	}`))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500, body = %s", rec.Code, rec.Body.String())
+	}
+	if db.contextEntry.Name != "audit-failure" {
+		t.Fatalf("context entry was not upserted before audit failure: %#v", db.contextEntry)
+	}
+}
+
+func TestContextCatalogCreateRejectsInvalidInput(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleAuditor, "", nil)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/context-catalog", bytes.NewBufferString(`{
+		"context_type":"unknown",
+		"name":"invalid-context"
+	}`))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body = %s", rec.Code, rec.Body.String())
+	}
+	if db.contextEntry.Name != "" {
+		t.Fatalf("context entry inserted for invalid input: %#v", db.contextEntry)
+	}
+}
+
+func TestContextCatalogCreateResponseDoesNotEchoServerManagedFields(t *testing.T) {
+	handler, _, cookie := newAuthenticatedAdminHandler(t, RoleAuditor, "", nil)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/context-catalog", bytes.NewBufferString(`{
+		"id":99,
+		"context_type":"repo",
+		"name":"server-fields",
+		"created_at":"client-created",
+		"updated_at":"client-updated"
+	}`))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body = %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "99") || strings.Contains(rec.Body.String(), "client-created") || strings.Contains(rec.Body.String(), "client-updated") {
+		t.Fatalf("response echoed client-supplied server-managed fields: %s", rec.Body.String())
+	}
+}
+
+func TestContextCatalogListReturnsJSONEnvelope(t *testing.T) {
+	handler, _, cookie := newAuthenticatedAdminHandler(t, RoleViewer, "", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/context-catalog", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		ContextCatalog []ContextCatalogEntry `json:"context_catalog"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.ContextCatalog == nil {
+		t.Fatalf("context_catalog envelope missing in body: %s", rec.Body.String())
+	}
+}
+
 func TestAuditLogsRequireAdminRole(t *testing.T) {
 	handler, _, cookie := newAuthenticatedAdminHandler(t, RoleAuditor, "", nil)
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/audit-logs", nil)
