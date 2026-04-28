@@ -21,6 +21,9 @@ type Config struct {
 	PostgresDSN        string
 	RedisAddr          string
 	EmployeeNoPattern  *regexp.Regexp
+	AdminSessionSecret string
+	AdminCookieName    string
+	AdminCookieSecure  bool
 }
 
 func LoadFromEnv() (Config, error) {
@@ -53,6 +56,31 @@ func LoadFromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	if len(auditHMACSecret) < 32 {
+		return Config{}, errors.New("AUDIT_HMAC_SECRET must be at least 32 characters")
+	}
+
+	adminSessionSecret, err := getenvDefault("ADMIN_SESSION_SECRET", auditHMACSecret)
+	if err != nil {
+		return Config{}, err
+	}
+	if len(adminSessionSecret) < 32 {
+		return Config{}, errors.New("ADMIN_SESSION_SECRET must be at least 32 characters")
+	}
+
+	adminCookieName, err := getenvDefault("ADMIN_COOKIE_NAME", "audit_admin_session")
+	if err != nil {
+		return Config{}, err
+	}
+
+	adminCookieSecureRaw, err := getenvDefault("ADMIN_COOKIE_SECURE", "false")
+	if err != nil {
+		return Config{}, err
+	}
+	adminCookieSecure, err := strconv.ParseBool(adminCookieSecureRaw)
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid ADMIN_COOKIE_SECURE: must be true or false")
+	}
 
 	evidenceStorageDir, err := requiredEnv("EVIDENCE_STORAGE_DIR")
 	if err != nil {
@@ -83,9 +111,9 @@ func LoadFromEnv() (Config, error) {
 		PostgresDSN:        postgresDSN,
 		RedisAddr:          redisAddr,
 		EmployeeNoPattern:  compiled,
-	}
-	if len(cfg.AuditHMACSecret) < 32 {
-		return Config{}, errors.New("AUDIT_HMAC_SECRET must be at least 32 characters")
+		AdminSessionSecret: adminSessionSecret,
+		AdminCookieName:    adminCookieName,
+		AdminCookieSecure:  adminCookieSecure,
 	}
 	return cfg, nil
 }

@@ -60,6 +60,35 @@ func TestLoadFromEnvRejectsShortSecret(t *testing.T) {
 	assertErrorContains(t, err, "AUDIT_HMAC_SECRET must be at least 32 characters")
 }
 
+func TestLoadFromEnvLoadsAdminSettings(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("ADMIN_SESSION_SECRET", "admin-session-secret-0123456789abcdef")
+	t.Setenv("ADMIN_COOKIE_NAME", "audit_admin_session")
+	t.Setenv("ADMIN_COOKIE_SECURE", "true")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv returned error: %v", err)
+	}
+	if cfg.AdminSessionSecret != "admin-session-secret-0123456789abcdef" {
+		t.Fatalf("AdminSessionSecret = %q", cfg.AdminSessionSecret)
+	}
+	if cfg.AdminCookieName != "audit_admin_session" {
+		t.Fatalf("AdminCookieName = %q", cfg.AdminCookieName)
+	}
+	if !cfg.AdminCookieSecure {
+		t.Fatal("AdminCookieSecure = false, want true")
+	}
+}
+
+func TestLoadFromEnvRejectsShortAdminSessionSecret(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("ADMIN_SESSION_SECRET", "short")
+
+	_, err := LoadFromEnv()
+	assertErrorContains(t, err, "ADMIN_SESSION_SECRET must be at least 32 characters")
+}
+
 func TestLoadFromEnvUsesListenAndRedisDefaultsWhenUnset(t *testing.T) {
 	setValidEnv(t)
 	unsetEnv(t, "AUDIT_GATEWAY_LISTEN_ADDR")
