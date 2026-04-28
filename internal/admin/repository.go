@@ -245,3 +245,42 @@ LIMIT $1`, limit)
 	}
 	return items, rows.Err()
 }
+
+func (r Repository) LookupTokenSummary(ctx context.Context, tokenFingerprint, fingerprintDisplay string) (LookupSummary, error) {
+	if r.db == nil {
+		return LookupSummary{}, ErrAdminDBRequired
+	}
+	summary := LookupSummary{TokenFingerprint: tokenFingerprint, FingerprintDisplay: fingerprintDisplay}
+	_ = r.db.QueryRow(ctx, `
+SELECT employee_no, new_api_token_id, token_name_raw, token_status
+FROM token_identity_cache
+WHERE token_fingerprint = $1
+LIMIT 1`, tokenFingerprint).Scan(&summary.EmployeeNo, &summary.NewAPITokenID, &summary.TokenName, &summary.TokenStatus)
+	traces, err := r.ListTraces(ctx, TraceFilter{TokenFingerprint: tokenFingerprint, Limit: 20})
+	if err != nil {
+		return LookupSummary{}, err
+	}
+	summary.RecentTraces = traces
+	_ = r.db.QueryRow(ctx, `
+SELECT count(*)
+FROM usage_anomalies
+WHERE token_fingerprint = $1 AND status = 'open'`, tokenFingerprint).Scan(&summary.OpenAnomalyCount)
+	return summary, nil
+}
+
+func (r Repository) FindRawEvidenceObject(ctx context.Context, traceID, objectType string) (EvidenceObjectSummary, error) {
+	if r.db == nil {
+		return EvidenceObjectSummary{}, ErrAdminDBRequired
+	}
+	var object EvidenceObjectSummary
+	err := r.db.QueryRow(ctx, `
+SELECT trace_id, object_type, object_ref, content_type, size_bytes, sha256
+FROM raw_evidence_objects
+WHERE trace_id = $1 AND object_type = $2
+ORDER BY created_at DESC
+LIMIT 1`, traceID, objectType).Scan(
+		&object.TraceID, &object.ObjectType, &object.ObjectRef,
+		&object.ContentType, &object.SizeBytes, &object.SHA256,
+	)
+	return object, err
+}

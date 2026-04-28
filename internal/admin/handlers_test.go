@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/your-company/new-api-gateway/internal/evidence"
+	"github.com/your-company/new-api-gateway/internal/fingerprint"
 )
 
 func TestLoginMeLogoutFlow(t *testing.T) {
@@ -313,14 +316,129 @@ func TestCreateReviewWritesValidAuditMetadata(t *testing.T) {
 	}
 }
 
+func TestAPIKeyLookupDoesNotPersistPlaintextKeyInAuditLog(t *testing.T) {
+	const plaintextKey = "sk-secret-plain-text"
+	const auditSecret = "audit-secret-0123456789abcdef"
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleRawAccess, auditSecret, nil)
+	db.auditLogs = nil
+	db.auditActions = nil
+	db.auditMetadata = nil
+	wantFingerprint := fingerprint.Compute("secret-plain-text", auditSecret)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/api-key-lookup", bytes.NewBufferString(`{"api_key":"`+plaintextKey+`"}`))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), plaintextKey) {
+		t.Fatal("lookup response leaked plaintext key")
+	}
+	if db.lookupTokenFingerprint != wantFingerprint.Value {
+		t.Fatalf("lookup fingerprint = %q, want computed fingerprint", db.lookupTokenFingerprint)
+	}
+	if !strings.Contains(rec.Body.String(), wantFingerprint.Display) {
+		t.Fatalf("lookup response did not include computed display fingerprint")
+	}
+	if len(db.auditLogs) != 1 {
+		t.Fatalf("audit logs = %#v, want one lookup audit log", db.auditLogs)
+	}
+	log := db.auditLogs[0]
+	if log.Action != "api_key_lookup" || log.TargetID != wantFingerprint.Display {
+		t.Fatalf("audit log = %#v", log)
+	}
+	auditText := strings.Join([]string{
+		log.TargetID,
+		log.TokenFingerprint,
+		log.FingerprintDisplay,
+		log.TraceID,
+		log.MetadataJSON,
+		strings.Join(db.auditMetadata, " "),
+	}, " ")
+	if strings.Contains(auditText, plaintextKey) {
+		t.Fatal("audit log persisted plaintext key")
+	}
+}
+
+func TestRawEvidenceAccessStreamsObjectAndWritesAuditLog(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleRawAccess, "audit-secret-0123456789abcdef", fakeEvidenceStore{
+		body: "raw evidence bytes",
+	})
+	db.rawEvidenceObject = EvidenceObjectSummary{
+		TraceID:     "trace_123",
+		ObjectType:  "request_body",
+		ObjectRef:   "raw/trace_123/request_body.bin",
+		ContentType: "application/json",
+		SizeBytes:   18,
+		SHA256:      "abc123",
+	}
+	db.auditLogs = nil
+	db.auditActions = nil
+	db.auditMetadata = nil
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/raw-evidence/trace_123/request_body", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	if rec.Body.String() != "raw evidence bytes" {
+		t.Fatalf("body = %q", rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("content type = %q", got)
+	}
+	if got := rec.Header().Get("X-Audit-Evidence-SHA256"); got != "abc123" {
+		t.Fatalf("sha header = %q", got)
+	}
+	if len(db.auditLogs) != 1 {
+		t.Fatalf("audit logs = %#v, want one raw evidence audit log", db.auditLogs)
+	}
+	log := db.auditLogs[0]
+	if log.Action != "raw_evidence_access" || log.TraceID != "trace_123" || log.TargetID != "request_body" {
+		t.Fatalf("audit log = %#v", log)
+	}
+}
+
+func TestRawEvidenceAccessWithoutStoreReturnsUnavailable(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleRawAccess, "audit-secret-0123456789abcdef", nil)
+	db.rawEvidenceObject = EvidenceObjectSummary{
+		TraceID:     "trace_123",
+		ObjectType:  "request_body",
+		ObjectRef:   "raw/trace_123/request_body.bin",
+		ContentType: "application/json",
+		SHA256:      "abc123",
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/raw-evidence/trace_123/request_body", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+}
+
 func newAuthenticatedReviewHandler(t *testing.T) (Handler, *memoryAdminDB, *http.Cookie) {
+	return newAuthenticatedAdminHandler(t, RoleAuditor, "", nil)
+}
+
+func newAuthenticatedAdminHandler(t *testing.T, role Role, auditSecret string, evidenceStore evidence.Store) (Handler, *memoryAdminDB, *http.Cookie) {
 	t.Helper()
 	passwordHash, err := HashPassword("secret-password")
 	if err != nil {
 		t.Fatalf("HashPassword error: %v", err)
 	}
 	db := &memoryAdminDB{
-		user: User{ID: 1, Username: "alice", PasswordHash: passwordHash, DisplayName: "Alice", Role: RoleAuditor, Status: "active"},
+		user: User{ID: 1, Username: "alice", PasswordHash: passwordHash, DisplayName: "Alice", Role: role, Status: "active"},
 	}
 	repo := NewRepository(db)
 	auth := Auth{
@@ -331,7 +449,7 @@ func newAuthenticatedReviewHandler(t *testing.T) (Handler, *memoryAdminDB, *http
 			return time.Unix(1000, 0).UTC()
 		},
 	}
-	handler := NewHandler(HandlerConfig{Repo: repo, Auth: auth})
+	handler := NewHandler(HandlerConfig{Repo: repo, Auth: auth, AuditSecret: auditSecret, EvidenceStore: evidenceStore})
 
 	loginReq := httptest.NewRequest(http.MethodPost, "/admin/api/login", bytes.NewBufferString(`{"username":"alice","password":"secret-password"}`))
 	loginRec := httptest.NewRecorder()
@@ -342,15 +460,34 @@ func newAuthenticatedReviewHandler(t *testing.T) (Handler, *memoryAdminDB, *http
 	return handler, db, loginRec.Result().Cookies()[0]
 }
 
+type fakeEvidenceStore struct {
+	body string
+	err  error
+}
+
+func (s fakeEvidenceStore) Put(ctx context.Context, req evidence.PutRequest) (evidence.Object, error) {
+	return evidence.Object{}, errors.New("not implemented")
+}
+
+func (s fakeEvidenceStore) Get(ctx context.Context, objectRef string) (io.ReadCloser, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return io.NopCloser(strings.NewReader(s.body)), nil
+}
+
 type memoryAdminDB struct {
-	user             User
-	session          Session
-	revokedSessionID string
-	auditActions     []string
-	auditMetadata    []string
-	reviewDecisions  []ReviewDecision
-	findUserErr      error
-	revokeErr        error
+	user                   User
+	session                Session
+	revokedSessionID       string
+	auditActions           []string
+	auditMetadata          []string
+	auditLogs              []AuditActionLog
+	reviewDecisions        []ReviewDecision
+	rawEvidenceObject      EvidenceObjectSummary
+	lookupTokenFingerprint string
+	findUserErr            error
+	revokeErr              error
 }
 
 func (m *memoryAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -369,6 +506,20 @@ func (m *memoryAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgco
 	case strings.Contains(sql, "INSERT INTO audit_action_logs"):
 		m.auditActions = append(m.auditActions, args[2].(string))
 		m.auditMetadata = append(m.auditMetadata, args[10].(string))
+		m.auditLogs = append(m.auditLogs, AuditActionLog{
+			ActorUserID:        args[0].(int64),
+			ActorUsername:      args[1].(string),
+			Action:             args[2].(string),
+			TargetType:         args[3].(string),
+			TargetID:           args[4].(string),
+			TokenFingerprint:   args[5].(string),
+			FingerprintDisplay: args[6].(string),
+			TraceID:            args[7].(string),
+			IPHash:             args[8].(string),
+			UserAgentHash:      args[9].(string),
+			MetadataJSON:       args[10].(string),
+			CreatedAt:          args[11].(time.Time),
+		})
 	case strings.Contains(sql, "INSERT INTO review_decisions"):
 		m.reviewDecisions = append(m.reviewDecisions, ReviewDecision{
 			TargetType:       args[0].(string),
@@ -427,6 +578,35 @@ func (r memoryAdminRow) Scan(dest ...any) error {
 		*(dest[1].(*string)) = r.db.user.Username
 		*(dest[2].(*string)) = r.db.user.DisplayName
 		*(dest[3].(*Role)) = r.db.user.Role
+		return nil
+	}
+	if strings.Contains(r.sql, "FROM token_identity_cache") {
+		r.db.lookupTokenFingerprint = r.args[0].(string)
+		if len(dest) >= 4 {
+			*(dest[0].(*string)) = "E10001"
+			*(dest[1].(*int)) = 42
+			*(dest[2].(*string)) = "prod key"
+			*(dest[3].(*int)) = 1
+		}
+		return nil
+	}
+	if strings.Contains(r.sql, "FROM usage_anomalies") {
+		r.db.lookupTokenFingerprint = r.args[0].(string)
+		if len(dest) >= 1 {
+			*(dest[0].(*int)) = 0
+		}
+		return nil
+	}
+	if strings.Contains(r.sql, "FROM raw_evidence_objects") {
+		if r.db.rawEvidenceObject.ObjectRef == "" {
+			return pgx.ErrNoRows
+		}
+		*(dest[0].(*string)) = r.db.rawEvidenceObject.TraceID
+		*(dest[1].(*string)) = r.db.rawEvidenceObject.ObjectType
+		*(dest[2].(*string)) = r.db.rawEvidenceObject.ObjectRef
+		*(dest[3].(*string)) = r.db.rawEvidenceObject.ContentType
+		*(dest[4].(*int64)) = r.db.rawEvidenceObject.SizeBytes
+		*(dest[5].(*string)) = r.db.rawEvidenceObject.SHA256
 		return nil
 	}
 	return pgx.ErrNoRows

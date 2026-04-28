@@ -133,3 +133,12 @@ type LookupSummary struct {
 	RecentTraces       []TraceSummary `json:"recent_traces"`
 	OpenAnomalyCount   int            `json:"open_anomaly_count"`
 }
+
+type EvidenceObjectSummary struct {
+	TraceID     string
+	ObjectType  string
+	ObjectRef   string
+	ContentType string
+	SizeBytes   int64
+	SHA256      string
+}
