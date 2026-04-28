@@ -1,7 +1,7 @@
 import json
 from typing import Iterable
 
-from models import AnalysisResult, NormalizedMessage, UsageAggregateDelta
+from models import AnalysisResult, AnomalyAlert, CoverageAlert, NormalizedMessage, UsageAggregateDelta
 
 
 class PostgresAnalysisRepository:
@@ -13,6 +13,8 @@ class PostgresAnalysisRepository:
         messages: Iterable[NormalizedMessage],
         results: Iterable[AnalysisResult],
         aggregates: Iterable[UsageAggregateDelta],
+        anomalies: Iterable[AnomalyAlert] = (),
+        coverage_alerts: Iterable[CoverageAlert] = (),
     ) -> None:
         cursor = self.connection.cursor()
         for message in messages:
@@ -121,6 +123,97 @@ class PostgresAnalysisRepository:
                     aggregate.cached_tokens,
                     aggregate.request_body_bytes,
                     aggregate.response_body_bytes,
+                ),
+            )
+        for anomaly in anomalies:
+            cursor.execute(
+                """
+                INSERT INTO usage_anomalies (
+                    anomaly_id, anomaly_type, severity, token_fingerprint, fingerprint_display,
+                    new_api_token_id, employee_no, token_name_snapshot, window_start, window_end,
+                    observed_value, threshold_value, baseline_value, model, route_pattern,
+                    sample_trace_ids, reason, detector_version
+                ) VALUES (
+                    %s,%s,%s,%s,%s,
+                    %s,%s,%s,%s,%s,
+                    %s,%s,%s,%s,%s,
+                    %s,%s,%s
+                )
+                ON CONFLICT (anomaly_id) DO UPDATE SET
+                    severity = EXCLUDED.severity,
+                    observed_value = EXCLUDED.observed_value,
+                    threshold_value = EXCLUDED.threshold_value,
+                    baseline_value = EXCLUDED.baseline_value,
+                    sample_trace_ids = EXCLUDED.sample_trace_ids,
+                    reason = EXCLUDED.reason,
+                    updated_at = now()
+                """,
+                (
+                    anomaly.anomaly_id,
+                    anomaly.anomaly_type,
+                    anomaly.severity,
+                    anomaly.token_fingerprint,
+                    anomaly.fingerprint_display,
+                    anomaly.new_api_token_id,
+                    anomaly.employee_no,
+                    anomaly.token_name_snapshot,
+                    anomaly.window_start,
+                    anomaly.window_end,
+                    anomaly.observed_value,
+                    anomaly.threshold_value,
+                    anomaly.baseline_value,
+                    anomaly.model,
+                    anomaly.route_pattern,
+                    anomaly.sample_trace_ids,
+                    anomaly.reason,
+                    anomaly.detector_version,
+                ),
+            )
+        for alert in coverage_alerts:
+            cursor.execute(
+                """
+                INSERT INTO coverage_alerts (
+                    alert_id, alert_code, severity, method, route_pattern, raw_path,
+                    content_type, protocol_family, payload_shape_hash, normalizer,
+                    normalizer_version, occurrence_count, sample_trace_ids, message,
+                    affected_trace_count, affected_token_count, affected_employee_count
+                ) VALUES (
+                    %s,%s,%s,%s,%s,%s,
+                    %s,%s,%s,%s,
+                    %s,1,%s,%s,
+                    %s,%s,%s
+                )
+                ON CONFLICT (alert_id) DO UPDATE SET
+                    last_seen_at = now(),
+                    occurrence_count = coverage_alerts.occurrence_count + 1,
+                    sample_trace_ids = (
+                        SELECT ARRAY(
+                            SELECT DISTINCT unnest(coverage_alerts.sample_trace_ids || EXCLUDED.sample_trace_ids)
+                        )
+                    ),
+                    message = EXCLUDED.message,
+                    affected_trace_count = coverage_alerts.affected_trace_count + EXCLUDED.affected_trace_count,
+                    affected_token_count = GREATEST(coverage_alerts.affected_token_count, EXCLUDED.affected_token_count),
+                    affected_employee_count = GREATEST(coverage_alerts.affected_employee_count, EXCLUDED.affected_employee_count),
+                    updated_at = now()
+                """,
+                (
+                    alert.alert_id,
+                    alert.alert_code,
+                    alert.severity,
+                    alert.method,
+                    alert.route_pattern,
+                    alert.raw_path,
+                    alert.content_type,
+                    alert.protocol_family,
+                    alert.payload_shape_hash,
+                    alert.normalizer,
+                    alert.normalizer_version,
+                    alert.sample_trace_ids,
+                    alert.message,
+                    alert.affected_trace_count,
+                    alert.affected_token_count,
+                    alert.affected_employee_count,
                 ),
             )
         self.connection.commit()
