@@ -276,12 +276,8 @@ func (h Handler) getRawEvidence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	object, err := h.repo.FindRawEvidenceObject(r.Context(), traceID, objectType)
-	if errors.Is(err, pgx.ErrNoRows) {
-		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
-		return
-	}
 	if err != nil {
-		http.Error(w, "failed to load raw evidence object", http.StatusInternalServerError)
+		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
 	}
 	if h.evidenceStore == nil {

@@ -427,6 +427,23 @@ func TestRawEvidenceAccessWithoutStoreReturnsUnavailable(t *testing.T) {
 	}
 }
 
+func TestRawEvidenceAccessLookupErrorReturnsNotFound(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleRawAccess, "audit-secret-0123456789abcdef", fakeEvidenceStore{
+		body: "raw evidence bytes",
+	})
+	db.rawEvidenceErr = errors.New("lookup failed")
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/raw-evidence/trace_123/request_body", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
 func newAuthenticatedReviewHandler(t *testing.T) (Handler, *memoryAdminDB, *http.Cookie) {
 	return newAuthenticatedAdminHandler(t, RoleAuditor, "", nil)
 }
@@ -485,6 +502,7 @@ type memoryAdminDB struct {
 	auditLogs              []AuditActionLog
 	reviewDecisions        []ReviewDecision
 	rawEvidenceObject      EvidenceObjectSummary
+	rawEvidenceErr         error
 	lookupTokenFingerprint string
 	findUserErr            error
 	revokeErr              error
@@ -598,6 +616,9 @@ func (r memoryAdminRow) Scan(dest ...any) error {
 		return nil
 	}
 	if strings.Contains(r.sql, "FROM raw_evidence_objects") {
+		if r.db.rawEvidenceErr != nil {
+			return r.db.rawEvidenceErr
+		}
 		if r.db.rawEvidenceObject.ObjectRef == "" {
 			return pgx.ErrNoRows
 		}
