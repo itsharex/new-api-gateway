@@ -1,5 +1,5 @@
-from models import NormalizedMessage, TraceCapturedJob
-from rules import DETECTOR_VERSION, detect_anomalies, detect_coverage_alerts
+from models import NormalizedMessage, TraceCapturedJob, WorkRelevanceAssessment
+from rules import DETECTOR_VERSION, detect_anomalies, detect_coverage_alerts, detect_work_relevance_anomalies
 
 
 def job(**overrides):
@@ -130,3 +130,44 @@ def test_no_coverage_alert_when_messages_exist():
     )
 
     assert detect_coverage_alerts(job(), [message]) == []
+
+
+def test_detects_low_work_relevance_high_cost_anomaly():
+    assessment = WorkRelevanceAssessment(
+        trace_id="trace_personal",
+        task_category="personal_chat",
+        work_related_score=0.1,
+        personal_use_score=0.8,
+        confidence=0.8,
+        matched_context=[],
+        evidence=["Detected personal category terms: birthday."],
+        needs_review=True,
+        analyzer_version="work_relevance_mvp_2026_04_28",
+    )
+    alerts = detect_work_relevance_anomalies(
+        job(trace_id="trace_personal", usage_total_tokens=25000, model_requested="gpt-4.1"),
+        assessment,
+    )
+
+    assert len(alerts) == 1
+    assert alerts[0].anomaly_type == "low_work_relevance_high_cost"
+    assert alerts[0].severity == "high"
+    assert alerts[0].observed_value == 25000
+    assert alerts[0].threshold_value == 20000
+    assert "personal use score" in alerts[0].reason
+
+
+def test_does_not_detect_low_work_relevance_high_cost_for_low_tokens():
+    assessment = WorkRelevanceAssessment(
+        trace_id="trace_personal",
+        task_category="personal_chat",
+        work_related_score=0.1,
+        personal_use_score=0.8,
+        confidence=0.8,
+        matched_context=[],
+        evidence=[],
+        needs_review=True,
+        analyzer_version="work_relevance_mvp_2026_04_28",
+    )
+
+    assert detect_work_relevance_anomalies(job(usage_total_tokens=100), assessment) == []

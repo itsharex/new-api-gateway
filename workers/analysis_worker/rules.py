@@ -3,6 +3,7 @@ from models import (
     CoverageAlert,
     NormalizedMessage,
     TraceCapturedJob,
+    WorkRelevanceAssessment,
     anomaly_id,
     bucket_start_hour,
     coverage_alert_id,
@@ -15,6 +16,8 @@ DETECTOR_VERSION = "rules_mvp_2026_04_28"
 NORMALIZER_VERSION = "normalizer_mvp_2026_04_28"
 
 HIGH_TRACE_TOKEN_THRESHOLD = 20_000
+LOW_WORK_RELEVANCE_TOKEN_THRESHOLD = 20_000
+LOW_WORK_RELEVANCE_PERSONAL_SCORE_THRESHOLD = 0.6
 RAW_ONLY_RESPONSE_BYTES_THRESHOLD = 1_048_576
 MISSING_TIMESTAMP_WINDOW_START = "1970-01-01T00:00:00+00:00"
 MISSING_TIMESTAMP_WINDOW_END = "1970-01-01T00:01:00+00:00"
@@ -68,6 +71,27 @@ def detect_anomalies(job: TraceCapturedJob) -> list[AnomalyAlert]:
             reason="trace returned a server error and may contribute to retry storms",
         ))
     return alerts
+
+
+def detect_work_relevance_anomalies(
+    job: TraceCapturedJob,
+    assessment: WorkRelevanceAssessment,
+) -> list[AnomalyAlert]:
+    if job.usage_total_tokens < LOW_WORK_RELEVANCE_TOKEN_THRESHOLD:
+        return []
+    if assessment.personal_use_score < LOW_WORK_RELEVANCE_PERSONAL_SCORE_THRESHOLD:
+        return []
+    return [_anomaly(
+        job,
+        "low_work_relevance_high_cost",
+        "high",
+        observed_value=job.usage_total_tokens,
+        threshold_value=LOW_WORK_RELEVANCE_TOKEN_THRESHOLD,
+        reason=(
+            f"trace used {job.usage_total_tokens} tokens with personal use score "
+            f"{assessment.personal_use_score:.2f}"
+        ),
+    )]
 
 
 def detect_coverage_alerts(job: TraceCapturedJob, messages: list[NormalizedMessage]) -> list[CoverageAlert]:

@@ -12,7 +12,7 @@ from evidence import FileEvidenceStore
 from models import ContextCatalogEntry, TraceCapturedJob, UsageAggregateDelta, bucket_start_day, bucket_start_hour, parse_job
 from normalizers import normalize_json_trace
 from repository import PostgresAnalysisRepository
-from rules import detect_anomalies, detect_coverage_alerts
+from rules import detect_anomalies, detect_coverage_alerts, detect_work_relevance_anomalies
 from work_relevance import classify_work_relevance
 
 
@@ -79,7 +79,10 @@ def process_trace(
     work_relevance = classify_work_relevance(job, messages, list(contexts or []))
     results.append(work_relevance.to_analysis_result())
     aggregates = aggregate_deltas(job)
-    anomalies = detect_anomalies(job)
+    anomalies = [
+        *detect_anomalies(job),
+        *detect_work_relevance_anomalies(job, work_relevance),
+    ]
     coverage_alerts = detect_coverage_alerts(job, messages)
     repository.save_trace_analysis(messages, results, aggregates, anomalies, coverage_alerts)
     return {

@@ -179,6 +179,43 @@ def test_process_job_line_persists_anomaly_and_coverage_alert(tmp_path: Path):
     assert [alert.alert_code for alert in repo.coverage_alerts] == ["normalization_gap"]
 
 
+def test_process_job_line_detects_low_work_relevance_high_cost(tmp_path: Path):
+    evidence_dir = tmp_path / "raw" / "2026" / "04" / "28" / "trace_personal"
+    evidence_dir.mkdir(parents=True)
+    (evidence_dir / "request_body.bin").write_text(json.dumps({
+        "model": "gpt-4.1",
+        "messages": [{"role": "user", "content": "Write a funny birthday party toast for my friend."}]
+    }), encoding="utf-8")
+    (evidence_dir / "response_body.bin").write_text(json.dumps({
+        "choices": [{"message": {"role": "assistant", "content": "Here is a toast."}}],
+        "usage": {"total_tokens": 25000}
+    }), encoding="utf-8")
+    repo = RecordingRepository()
+    line = json.dumps({
+        "type": "trace_captured",
+        "trace_id": "trace_personal",
+        "route_pattern": "/v1/chat/completions",
+        "protocol_family": "openai_chat",
+        "capture_mode": "raw_and_normalized",
+        "employee_no": "E10001",
+        "request_raw_ref": "raw/2026/04/28/trace_personal/request_body.bin",
+        "response_raw_ref": "raw/2026/04/28/trace_personal/response_body.bin",
+        "model_requested": "gpt-4.1",
+        "usage_total_tokens": 25000,
+        "status_code": 200,
+        "upstream_status_code": 200,
+        "request_started_at": "2026-04-28T13:45:22Z",
+    })
+
+    response = process_job_line(line, FileEvidenceStore(tmp_path), repo, RecordingContextRepository())
+
+    assert response["anomaly_count"] == 2
+    assert [alert.anomaly_type for alert in repo.anomalies] == [
+        "high_trace_tokens",
+        "low_work_relevance_high_cost",
+    ]
+
+
 def test_contract_example_processes_from_stdin_without_services(monkeypatch):
     worker_dir = Path(__file__).parents[1]
     monkeypatch.delenv("EVIDENCE_STORAGE_DIR", raising=False)
