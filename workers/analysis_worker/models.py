@@ -1,6 +1,6 @@
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from typing import Any
 
@@ -89,6 +89,68 @@ class UsageAggregateDelta:
     cached_tokens: int
     request_body_bytes: int
     response_body_bytes: int
+
+
+@dataclass(frozen=True)
+class AnomalyAlert:
+    anomaly_id: str
+    anomaly_type: str
+    severity: str
+    token_fingerprint: str
+    fingerprint_display: str
+    new_api_token_id: int
+    employee_no: str
+    token_name_snapshot: str
+    window_start: str
+    window_end: str
+    observed_value: float
+    threshold_value: float
+    baseline_value: float | None
+    model: str
+    route_pattern: str
+    sample_trace_ids: list[str]
+    reason: str
+    detector_version: str
+
+
+@dataclass(frozen=True)
+class CoverageAlert:
+    alert_id: str
+    alert_code: str
+    severity: str
+    method: str
+    route_pattern: str
+    raw_path: str
+    content_type: str
+    protocol_family: str
+    payload_shape_hash: str
+    normalizer: str
+    normalizer_version: str
+    sample_trace_ids: list[str]
+    message: str
+    affected_trace_count: int = 1
+    affected_token_count: int = 0
+    affected_employee_count: int = 0
+
+
+def stable_suffix(*parts: str) -> str:
+    joined = "\x00".join(parts)
+    return sha256(joined.encode("utf-8")).hexdigest()[:16]
+
+
+def anomaly_id(rule_key: str, trace_id: str, employee_no: str) -> str:
+    return f"anom_{rule_key}_{stable_suffix(rule_key, trace_id, employee_no)}"
+
+
+def coverage_alert_id(alert_code: str, route_pattern: str, payload_shape_hash: str) -> str:
+    return f"cov_{alert_code}_{stable_suffix(alert_code, route_pattern, payload_shape_hash)}"
+
+
+def window_end_from_start(value: str, seconds: int = 60) -> str:
+    if not value:
+        return datetime.now(timezone.utc).isoformat()
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return (parsed.astimezone(timezone.utc) + timedelta(seconds=seconds)).isoformat()
 
 
 def parse_job(line: str) -> TraceCapturedJob:

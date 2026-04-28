@@ -1,6 +1,6 @@
 import json
 
-from models import TraceCapturedJob, bucket_start_hour, parse_job
+from models import TraceCapturedJob, anomaly_id, bucket_start_hour, coverage_alert_id, parse_job
 
 
 def test_parse_job_keeps_gateway_contract_fields():
@@ -61,3 +61,21 @@ def test_parse_job_keeps_gateway_contract_fields():
 
 def test_bucket_start_hour_truncates_iso_timestamp():
     assert bucket_start_hour("2026-04-28T13:45:22Z") == "2026-04-28T13:00:00+00:00"
+
+
+def test_anomaly_id_is_stable_for_same_rule_and_trace():
+    first = anomaly_id("high_trace_tokens", "trace_123", "E10001")
+    second = anomaly_id("high_trace_tokens", "trace_123", "E10001")
+
+    assert first == second
+    assert first.startswith("anom_high_trace_tokens_")
+
+
+def test_coverage_alert_id_groups_by_alert_route_and_shape():
+    first = coverage_alert_id("normalization_gap", "/v1/chat/completions", "abc123")
+    second = coverage_alert_id("normalization_gap", "/v1/chat/completions", "abc123")
+    other = coverage_alert_id("normalization_gap", "/v1/responses", "abc123")
+
+    assert first == second
+    assert first != other
+    assert first.startswith("cov_normalization_gap_")
