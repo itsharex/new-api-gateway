@@ -8,6 +8,12 @@ Start PostgreSQL and Redis:
 docker compose -f deploy/docker-compose.yml up -d
 ```
 
+Run schema migrations in the compose network:
+
+```bash
+docker compose -f deploy/docker-compose.yml run --rm migrate
+```
+
 ## Tests
 
 ```bash
@@ -85,5 +91,13 @@ Run the worker tests:
 cd workers/analysis_worker
 uv run pytest -q
 ```
+
+Run the Docker Compose end-to-end worker anomaly/coverage check:
+
+```bash
+./scripts/e2e_worker_anomaly_coverage.sh
+```
+
+The script recreates a local `audit_gateway_e2e` database, applies all migrations, pushes a synthetic `trace_captured` Redis job, runs the worker in the `analysis-worker` compose service, and verifies that `usage_anomalies` and `coverage_alerts` rows are persisted.
 
 The MVP rules are intentionally explainable and per-trace. Baselines, semantic similarity, work relevance, and cross-trace clustering should be implemented in later plans.

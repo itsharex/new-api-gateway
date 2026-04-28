@@ -1,3 +1,5 @@
 .superpowers/
 .DS_Store
+__pycache__/
+var/
 workers/analysis_worker/uv.lock

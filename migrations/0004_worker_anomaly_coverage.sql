@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS anomaly_rules (
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     scope_type TEXT NOT NULL DEFAULT 'global',
     scope_value TEXT NOT NULL DEFAULT '',
-    window TEXT NOT NULL DEFAULT '',
+    rule_window TEXT NOT NULL DEFAULT '',
     threshold_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     severity TEXT NOT NULL DEFAULT 'medium',
     cooldown TEXT NOT NULL DEFAULT '',
@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS anomaly_rules (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-INSERT INTO anomaly_rules (rule_key, threshold_json, severity, window)
+INSERT INTO anomaly_rules (rule_key, threshold_json, severity, rule_window)
 VALUES
     ('identity_unresolved_success', '{"enabled": true}'::jsonb, 'high', 'per_trace'),
     ('invalid_employee_no', '{"enabled": true}'::jsonb, 'high', 'per_trace'),
