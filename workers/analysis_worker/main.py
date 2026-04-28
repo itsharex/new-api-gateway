@@ -10,6 +10,7 @@ from evidence import FileEvidenceStore
 from models import TraceCapturedJob, UsageAggregateDelta, bucket_start_day, bucket_start_hour, parse_job
 from normalizers import normalize_json_trace
 from repository import PostgresAnalysisRepository
+from rules import detect_anomalies, detect_coverage_alerts
 
 
 def aggregate_deltas(job: TraceCapturedJob) -> list[UsageAggregateDelta]:
@@ -47,13 +48,17 @@ def process_job_line(line: str, evidence_store: FileEvidenceStore, repository) -
     response_body = evidence_store.read_text(job.response_raw_ref) if job.response_raw_ref else ""
     messages, results = normalize_json_trace(job, request_body, response_body)
     aggregates = aggregate_deltas(job)
-    repository.save_trace_analysis(messages, results, aggregates)
+    anomalies = detect_anomalies(job)
+    coverage_alerts = detect_coverage_alerts(job, messages)
+    repository.save_trace_analysis(messages, results, aggregates, anomalies, coverage_alerts)
     return {
         "accepted_trace_id": job.trace_id,
         "worker_status": "processed",
         "normalized_message_count": len(messages),
         "analysis_result_count": len(results),
         "aggregate_count": len(aggregates),
+        "anomaly_count": len(anomalies),
+        "coverage_alert_count": len(coverage_alerts),
         "usage_total_tokens": job.usage_total_tokens,
     }
 

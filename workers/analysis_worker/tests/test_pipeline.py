@@ -10,11 +10,15 @@ class RecordingRepository:
         self.messages = []
         self.results = []
         self.aggregates = []
+        self.anomalies = []
+        self.coverage_alerts = []
 
-    def save_trace_analysis(self, messages, results, aggregates):
+    def save_trace_analysis(self, messages, results, aggregates, anomalies=(), coverage_alerts=()):
         self.messages.extend(messages)
         self.results.extend(results)
         self.aggregates.extend(aggregates)
+        self.anomalies.extend(anomalies)
+        self.coverage_alerts.extend(coverage_alerts)
 
 
 def test_process_job_line_reads_evidence_normalizes_and_persists(tmp_path: Path):
@@ -67,3 +71,46 @@ def test_process_job_line_reads_evidence_normalizes_and_persists(tmp_path: Path)
     assert repo.aggregates[0].total_tokens == 18
     assert repo.aggregates[0].request_body_bytes == 128
     assert repo.aggregates[0].response_body_bytes == 256
+
+
+def test_process_job_line_persists_anomaly_and_coverage_alert(tmp_path: Path):
+    evidence_dir = tmp_path / "raw" / "2026" / "04" / "28" / "trace_gap"
+    evidence_dir.mkdir(parents=True)
+    (evidence_dir / "request_body.bin").write_text("{}", encoding="utf-8")
+    (evidence_dir / "response_body.bin").write_text("{}", encoding="utf-8")
+    repo = RecordingRepository()
+    line = json.dumps({
+        "type": "trace_captured",
+        "trace_id": "trace_gap",
+        "route_pattern": "/v1/chat/completions",
+        "protocol_family": "openai_chat",
+        "capture_mode": "raw_and_normalized",
+        "employee_no": "",
+        "request_raw_ref": "raw/2026/04/28/trace_gap/request_body.bin",
+        "response_raw_ref": "raw/2026/04/28/trace_gap/response_body.bin",
+        "request_content_type": "application/json",
+        "response_content_type": "application/json",
+        "model_requested": "gpt-4.1",
+        "usage_total_tokens": 25001,
+        "token_fingerprint": "tkfp_raw",
+        "fingerprint_display": "tkfp_display",
+        "new_api_token_id": 42,
+        "token_name_snapshot": "",
+        "status_code": 200,
+        "upstream_status_code": 200,
+        "stream": False,
+        "request_started_at": "2026-04-28T13:45:22Z",
+        "request_body_size": 2,
+        "response_body_size": 2
+    })
+
+    response = process_job_line(line, FileEvidenceStore(tmp_path), repo)
+
+    assert response["worker_status"] == "processed"
+    assert response["anomaly_count"] == 2
+    assert response["coverage_alert_count"] == 1
+    assert [alert.anomaly_type for alert in repo.anomalies] == [
+        "identity_unresolved_success",
+        "high_trace_tokens",
+    ]
+    assert [alert.alert_code for alert in repo.coverage_alerts] == ["normalization_gap"]
