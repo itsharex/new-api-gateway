@@ -171,3 +171,34 @@ The UI uses the existing session cookie and calls these APIs:
 - `GET /admin/api/audit-logs`
 
 Raw evidence links point at `/admin/api/raw-evidence/{trace_id}/{object_type}` and require the `raw_access` or `admin` role. Successful raw evidence access and successful API key lookup write `audit_action_logs`.
+
+## Operational Health and Metrics
+
+The gateway exposes operational endpoints before admin and proxy routing:
+
+- `GET /healthz`: process liveness. Returns HTTP 200 when the gateway process can answer.
+- `GET /readyz`: readiness. Returns HTTP 200 for `ok` or `degraded`, and HTTP 503 for `down`.
+- `GET /metrics`: Prometheus text metrics when `OPS_METRICS_ENABLED=true`.
+
+Operational environment variables:
+
+- `OPS_CHECK_TIMEOUT`: dependency check timeout, default `2s`.
+- `OPS_WORKER_HEARTBEAT_MAX_AGE`: maximum fresh analysis worker heartbeat age, default `5m`.
+- `OPS_QUEUE_LAG_WARN_THRESHOLD`: Redis `analysis_jobs` depth that marks readiness degraded, default `1000`.
+- `OPS_METRICS_ENABLED`: enables `/metrics`, default `true`.
+- `ANALYSIS_WORKER_ID`: optional stable worker ID for Python analysis worker heartbeat rows.
+
+Operational notes:
+
+- `/metrics` currently computes metrics from the readiness snapshot, so each scrape runs dependency checks.
+- The filesystem evidence readiness check rewrites one bounded date-scoped `ops_healthcheck/readiness` object rather than creating unbounded final artifacts.
+
+Local smoke check:
+
+The `scripts/smoke_ops_health.sh` helper checks `/healthz`, `/readyz`, and `/metrics`.
+
+```bash
+BASE_URL=http://127.0.0.1:8080 ./scripts/smoke_ops_health.sh
+```
+
+The smoke script expects the gateway to be running. `/readyz` can report `degraded` during local development when no analysis worker has written `worker_heartbeats`; that is acceptable as long as the response includes dependency checks and `/healthz` plus `/metrics` succeed.
