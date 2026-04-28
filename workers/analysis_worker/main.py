@@ -13,6 +13,11 @@ from repository import PostgresAnalysisRepository
 from rules import detect_anomalies, detect_coverage_alerts
 
 
+class NoopAnalysisRepository:
+    def save_trace_analysis(self, messages, results, aggregates, anomalies=(), coverage_alerts=()):
+        pass
+
+
 def aggregate_deltas(job: TraceCapturedJob) -> list[UsageAggregateDelta]:
     success = 1 if 200 <= job.status_code < 400 or job.status_code == 0 else 0
     error = 0 if success else 1
@@ -46,6 +51,15 @@ def process_job_line(line: str, evidence_store: FileEvidenceStore, repository) -
     job = parse_job(line)
     request_body = evidence_store.read_text(job.request_raw_ref) if job.request_raw_ref else ""
     response_body = evidence_store.read_text(job.response_raw_ref) if job.response_raw_ref else ""
+    return process_trace(job, request_body, response_body, repository)
+
+
+def process_contract_validation_line(line: str) -> dict:
+    job = parse_job(line)
+    return process_trace(job, "", "", NoopAnalysisRepository())
+
+
+def process_trace(job: TraceCapturedJob, request_body: str, response_body: str, repository) -> dict:
     messages, results = normalize_json_trace(job, request_body, response_body)
     aggregates = aggregate_deltas(job)
     anomalies = detect_anomalies(job)
@@ -73,6 +87,15 @@ def process_stdin(evidence_root: str, postgres_dsn: str) -> int:
     return 0
 
 
+def process_contract_stdin() -> int:
+    payload = sys.stdin.read().strip()
+    if not payload:
+        return 0
+    result = process_contract_validation_line(payload)
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
 def process_redis_once(redis_url: str, list_name: str, evidence_root: str, postgres_dsn: str, timeout_seconds: int) -> int:
     client = redis.Redis.from_url(redis_url, decode_responses=True)
     item = client.blpop(list_name, timeout=timeout_seconds)
@@ -95,6 +118,8 @@ def main() -> int:
     parser.add_argument("--evidence-root", default=os.environ.get("EVIDENCE_STORAGE_DIR", ""))
     parser.add_argument("--postgres-dsn", default=os.environ.get("POSTGRES_DSN", ""))
     args = parser.parse_args()
+    if not args.redis_once and not args.evidence_root and not args.postgres_dsn:
+        return process_contract_stdin()
     if not args.evidence_root:
         raise SystemExit("EVIDENCE_STORAGE_DIR or --evidence-root is required")
     if not args.postgres_dsn:

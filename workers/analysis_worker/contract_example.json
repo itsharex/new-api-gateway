@@ -3,7 +3,7 @@
   "trace_id": "trace_example",
   "route_pattern": "/v1/chat/completions",
   "protocol_family": "openai_chat",
-  "capture_mode": "raw_and_normalized",
+  "capture_mode": "raw_only",
   "employee_no": "E12345",
   "token_fingerprint": "tkfp_raw_value",
   "fingerprint_display": "tkfp_display",

@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 from evidence import FileEvidenceStore
@@ -114,3 +116,24 @@ def test_process_job_line_persists_anomaly_and_coverage_alert(tmp_path: Path):
         "high_trace_tokens",
     ]
     assert [alert.alert_code for alert in repo.coverage_alerts] == ["normalization_gap"]
+
+
+def test_contract_example_processes_from_stdin_without_services(monkeypatch):
+    worker_dir = Path(__file__).parents[1]
+    monkeypatch.delenv("EVIDENCE_STORAGE_DIR", raising=False)
+    monkeypatch.delenv("POSTGRES_DSN", raising=False)
+
+    completed = subprocess.run(
+        [sys.executable, "main.py"],
+        cwd=worker_dir,
+        input=(worker_dir / "contract_example.json").read_text(encoding="utf-8"),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    response = json.loads(completed.stdout)
+    assert response["worker_status"] == "processed"
+    assert response["anomaly_count"] == 0
+    assert response["coverage_alert_count"] == 0
