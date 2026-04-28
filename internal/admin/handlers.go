@@ -193,6 +193,12 @@ func (h Handler) getTraceDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to load trace", http.StatusInternalServerError)
 		return
 	}
+	if principal, ok := PrincipalFromContext(r.Context()); !ok || !principal.Role.Allows(PermissionRawEvidence) {
+		detail.RequestRawRef = ""
+		detail.ResponseRawRef = ""
+		detail.RequestHeadersRef = ""
+		detail.ResponseHeadersRef = ""
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"trace": detail})
 }
 

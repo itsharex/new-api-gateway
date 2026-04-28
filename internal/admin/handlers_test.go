@@ -406,6 +406,93 @@ func TestRawEvidenceAccessStreamsObjectAndWritesAuditLog(t *testing.T) {
 	}
 }
 
+func TestTraceDetailRedactsRawRefsForAuditor(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleAuditor, "audit-secret-0123456789abcdef", nil)
+	db.traceDetail = traceDetailWithRawRefs()
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/traces/trace_123", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Trace TraceDetail `json:"trace"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode trace detail body: %v", err)
+	}
+	if body.Trace.RequestRawRef != "" || body.Trace.ResponseRawRef != "" || body.Trace.RequestHeadersRef != "" || body.Trace.ResponseHeadersRef != "" {
+		t.Fatalf("raw refs were not redacted: %#v", body.Trace)
+	}
+	for _, rawRef := range rawRefValues() {
+		if strings.Contains(rec.Body.String(), rawRef) {
+			t.Fatalf("response leaked raw ref %q: %s", rawRef, rec.Body.String())
+		}
+	}
+}
+
+func TestTraceDetailIncludesRawRefsForRawEvidenceRoles(t *testing.T) {
+	for _, role := range []Role{RoleRawAccess, RoleAdmin} {
+		t.Run(string(role), func(t *testing.T) {
+			handler, db, cookie := newAuthenticatedAdminHandler(t, role, "audit-secret-0123456789abcdef", nil)
+			db.traceDetail = traceDetailWithRawRefs()
+
+			req := httptest.NewRequest(http.MethodGet, "/admin/api/traces/trace_123", nil)
+			req.AddCookie(cookie)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+			}
+			var body struct {
+				Trace TraceDetail `json:"trace"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode trace detail body: %v", err)
+			}
+			if body.Trace.RequestRawRef != "raw/trace_123/request_body.bin" ||
+				body.Trace.ResponseRawRef != "raw/trace_123/response_body.bin" ||
+				body.Trace.RequestHeadersRef != "raw/trace_123/request_headers.json" ||
+				body.Trace.ResponseHeadersRef != "raw/trace_123/response_headers.json" {
+				t.Fatalf("raw refs = %#v", body.Trace)
+			}
+		})
+	}
+}
+
+func TestRawEvidenceAccessRequiresRawEvidencePermission(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleAuditor, "audit-secret-0123456789abcdef", fakeEvidenceStore{
+		body: "raw evidence bytes",
+	})
+	db.rawEvidenceObject = EvidenceObjectSummary{
+		TraceID:     "trace_123",
+		ObjectType:  "request_body",
+		ObjectRef:   "raw/trace_123/request_body.bin",
+		ContentType: "application/json",
+		SizeBytes:   18,
+		SHA256:      "abc123",
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/raw-evidence/trace_123/request_body", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403, body = %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "raw evidence bytes") {
+		t.Fatal("raw evidence bytes were streamed without raw evidence permission")
+	}
+}
+
 func TestRawEvidenceAccessWithoutStoreReturnsUnavailable(t *testing.T) {
 	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleRawAccess, "audit-secret-0123456789abcdef", nil)
 	db.rawEvidenceObject = EvidenceObjectSummary{
@@ -713,6 +800,7 @@ type memoryAdminDB struct {
 	auditErr               error
 	findUserErr            error
 	revokeErr              error
+	traceDetail            TraceDetail
 }
 
 func (m *memoryAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -848,6 +936,30 @@ func (r memoryAdminRow) Scan(dest ...any) error {
 		*(dest[5].(*string)) = r.db.rawEvidenceObject.SHA256
 		return nil
 	}
+	if strings.Contains(r.sql, "request_raw_ref") && strings.Contains(r.sql, "FROM traces") {
+		if r.db.traceDetail.TraceID == "" {
+			return pgx.ErrNoRows
+		}
+		detail := r.db.traceDetail
+		*(dest[0].(*string)) = detail.TraceID
+		*(dest[1].(*string)) = detail.Method
+		*(dest[2].(*string)) = detail.Path
+		*(dest[3].(*string)) = detail.RoutePattern
+		*(dest[4].(*string)) = detail.ProtocolFamily
+		*(dest[5].(*int)) = detail.StatusCode
+		*(dest[6].(*string)) = detail.EmployeeNo
+		*(dest[7].(*string)) = detail.FingerprintDisplay
+		*(dest[8].(*string)) = detail.ModelRequested
+		*(dest[9].(*int)) = detail.UsageTotalTokens
+		*(dest[10].(*string)) = detail.CreatedAt
+		*(dest[11].(*string)) = detail.RequestRawRef
+		*(dest[12].(*string)) = detail.ResponseRawRef
+		*(dest[13].(*string)) = detail.RequestHeadersRef
+		*(dest[14].(*string)) = detail.ResponseHeadersRef
+		*(dest[15].(*string)) = detail.IdentityResolutionStatus
+		*(dest[16].(*string)) = detail.AnalysisStatus
+		return nil
+	}
 	if strings.Contains(r.sql, "FROM traces") {
 		*(dest[0].(*int64)) = 0
 		*(dest[1].(*int64)) = 0
@@ -866,6 +978,39 @@ func (r memoryAdminRow) Scan(dest ...any) error {
 		return nil
 	}
 	return pgx.ErrNoRows
+}
+
+func traceDetailWithRawRefs() TraceDetail {
+	return TraceDetail{
+		TraceSummary: TraceSummary{
+			TraceID:            "trace_123",
+			Method:             http.MethodPost,
+			Path:               "/v1/chat/completions",
+			RoutePattern:       "/v1/chat/completions",
+			ProtocolFamily:     "openai",
+			StatusCode:         http.StatusOK,
+			EmployeeNo:         "E10001",
+			FingerprintDisplay: "fp_1234",
+			ModelRequested:     "gpt-5",
+			UsageTotalTokens:   42,
+			CreatedAt:          "2026-04-28 10:00:00+00",
+		},
+		RequestRawRef:            "raw/trace_123/request_body.bin",
+		ResponseRawRef:           "raw/trace_123/response_body.bin",
+		RequestHeadersRef:        "raw/trace_123/request_headers.json",
+		ResponseHeadersRef:       "raw/trace_123/response_headers.json",
+		IdentityResolutionStatus: "resolved",
+		AnalysisStatus:           "complete",
+	}
+}
+
+func rawRefValues() []string {
+	return []string{
+		"raw/trace_123/request_body.bin",
+		"raw/trace_123/response_body.bin",
+		"raw/trace_123/request_headers.json",
+		"raw/trace_123/response_headers.json",
+	}
 }
 
 func assertClearSessionCookie(t *testing.T, cookies []*http.Cookie) {
