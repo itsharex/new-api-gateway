@@ -43,3 +43,31 @@ The gateway must never log or persist plaintext API keys. Tests should assert th
 The gateway stores request body, response body, request headers, and response headers as raw evidence objects. Header evidence is JSON and redacts API-key-bearing headers before writing to storage.
 
 The Redis `analysis_jobs` list receives `trace_captured` envelopes only after the trace row and raw evidence rows are persisted. Job envelopes include evidence refs, content types, requested model, and token usage fields when the gateway can extract them from non-streaming JSON responses.
+
+## Analysis Persistence
+
+Apply migrations through your local migration runner before processing analysis jobs. The worker now writes:
+
+- `normalized_messages` for extracted request and response text.
+- `analysis_results` for deterministic usage extraction status.
+- `usage_aggregates` for hourly and daily employee/token/model/route totals.
+
+Run the worker against a single stdin job:
+
+```bash
+cd workers/analysis_worker
+uv sync
+EVIDENCE_STORAGE_DIR=/absolute/path/to/evidence \
+POSTGRES_DSN=postgres://audit:audit@localhost:5432/audit_gateway?sslmode=disable \
+uv run python main.py < contract_example.json
+```
+
+Run the worker against one Redis job:
+
+```bash
+cd workers/analysis_worker
+EVIDENCE_STORAGE_DIR=/absolute/path/to/evidence \
+POSTGRES_DSN=postgres://audit:audit@localhost:5432/audit_gateway?sslmode=disable \
+REDIS_URL=redis://localhost:6379/0 \
+uv run python main.py --redis-once
+```
