@@ -247,11 +247,108 @@ func TestViewerCannotCreateReviewDecision(t *testing.T) {
 	}
 }
 
+func TestCreateReviewRejectsInvalidInput(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "invalid target type",
+			body: `{"target_type":"user","target_id":"anom_1","decision":"acknowledge","note":"seen"}`,
+		},
+		{
+			name: "invalid decision",
+			body: `{"target_type":"anomaly","target_id":"anom_1","decision":"approve","note":"seen"}`,
+		},
+		{
+			name: "missing target id",
+			body: `{"target_type":"anomaly","target_id":"   ","decision":"acknowledge","note":"seen"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler, db, cookie := newAuthenticatedReviewHandler(t)
+			req := httptest.NewRequest(http.MethodPost, "/admin/api/reviews", bytes.NewBufferString(tt.body))
+			req.AddCookie(cookie)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400, body = %s", rec.Code, rec.Body.String())
+			}
+			if len(db.reviewDecisions) != 0 {
+				t.Fatalf("review decisions inserted for invalid input: %#v", db.reviewDecisions)
+			}
+		})
+	}
+}
+
+func TestCreateReviewWritesValidAuditMetadata(t *testing.T) {
+	handler, db, cookie := newAuthenticatedReviewHandler(t)
+	db.auditActions = nil
+	db.auditMetadata = nil
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/reviews", bytes.NewBufferString(`{"target_type":"anomaly","target_id":"anom_1","decision":"acknowledge","note":"seen"}`))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body = %s", rec.Code, rec.Body.String())
+	}
+	if len(db.reviewDecisions) != 1 {
+		t.Fatalf("review decisions = %#v, want one insert", db.reviewDecisions)
+	}
+	if len(db.auditMetadata) != 1 {
+		t.Fatalf("audit metadata = %#v, want one entry", db.auditMetadata)
+	}
+	var metadata map[string]string
+	if err := json.Unmarshal([]byte(db.auditMetadata[0]), &metadata); err != nil {
+		t.Fatalf("audit metadata is not valid JSON: %v", err)
+	}
+	if metadata["decision"] != "acknowledge" {
+		t.Fatalf("audit metadata = %#v", metadata)
+	}
+}
+
+func newAuthenticatedReviewHandler(t *testing.T) (Handler, *memoryAdminDB, *http.Cookie) {
+	t.Helper()
+	passwordHash, err := HashPassword("secret-password")
+	if err != nil {
+		t.Fatalf("HashPassword error: %v", err)
+	}
+	db := &memoryAdminDB{
+		user: User{ID: 1, Username: "alice", PasswordHash: passwordHash, DisplayName: "Alice", Role: RoleAuditor, Status: "active"},
+	}
+	repo := NewRepository(db)
+	auth := Auth{
+		Repo:          repo,
+		SessionSecret: "session-secret-0123456789abcdef",
+		CookieName:    "audit_admin_session",
+		Now: func() time.Time {
+			return time.Unix(1000, 0).UTC()
+		},
+	}
+	handler := NewHandler(HandlerConfig{Repo: repo, Auth: auth})
+
+	loginReq := httptest.NewRequest(http.MethodPost, "/admin/api/login", bytes.NewBufferString(`{"username":"alice","password":"secret-password"}`))
+	loginRec := httptest.NewRecorder()
+	handler.ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusOK {
+		t.Fatalf("login status = %d, body = %s", loginRec.Code, loginRec.Body.String())
+	}
+	return handler, db, loginRec.Result().Cookies()[0]
+}
+
 type memoryAdminDB struct {
 	user             User
 	session          Session
 	revokedSessionID string
 	auditActions     []string
+	auditMetadata    []string
+	reviewDecisions  []ReviewDecision
 	findUserErr      error
 	revokeErr        error
 }
@@ -271,6 +368,17 @@ func (m *memoryAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgco
 		m.revokedSessionID = args[0].(string)
 	case strings.Contains(sql, "INSERT INTO audit_action_logs"):
 		m.auditActions = append(m.auditActions, args[2].(string))
+		m.auditMetadata = append(m.auditMetadata, args[10].(string))
+	case strings.Contains(sql, "INSERT INTO review_decisions"):
+		m.reviewDecisions = append(m.reviewDecisions, ReviewDecision{
+			TargetType:       args[0].(string),
+			TargetID:         args[1].(string),
+			Decision:         args[2].(string),
+			ReviewerID:       args[3].(int64),
+			ReviewerUsername: args[4].(string),
+			Note:             args[5].(string),
+			CreatedAt:        args[6].(time.Time),
+		})
 	}
 	return pgconn.NewCommandTag("INSERT 0 1"), nil
 }

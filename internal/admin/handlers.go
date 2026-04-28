@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -165,6 +166,13 @@ func (h Handler) createReview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
+	input.TargetType = strings.TrimSpace(input.TargetType)
+	input.TargetID = strings.TrimSpace(input.TargetID)
+	input.Decision = strings.TrimSpace(input.Decision)
+	if !validReviewTargetType(input.TargetType) || input.TargetID == "" || !validReviewDecision(input.Decision) {
+		http.Error(w, "invalid review input", http.StatusBadRequest)
+		return
+	}
 	now := h.auth.now()
 	decision := ReviewDecision{
 		TargetType:       input.TargetType,
@@ -193,6 +201,24 @@ func (h Handler) createReview(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:     now,
 	})
 	writeJSON(w, http.StatusCreated, map[string]any{"review": decision})
+}
+
+func validReviewTargetType(targetType string) bool {
+	switch targetType {
+	case "trace", "anomaly", "coverage_alert":
+		return true
+	default:
+		return false
+	}
+}
+
+func validReviewDecision(decision string) bool {
+	switch decision {
+	case "acknowledge", "dismiss", "confirm", "mark_personal_use", "mark_abuse", "needs_normalizer", "mark_fixed", "ignore_for_now":
+		return true
+	default:
+		return false
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
