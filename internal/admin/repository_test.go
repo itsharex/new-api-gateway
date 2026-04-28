@@ -65,6 +65,28 @@ func TestRepositoryInsertAuditActionLogWritesMetadataJSON(t *testing.T) {
 	}
 }
 
+func TestRepositoryInsertReviewDecision(t *testing.T) {
+	execer := &recordingAdminDB{}
+	repo := NewRepository(execer)
+
+	err := repo.InsertReviewDecision(context.Background(), ReviewDecision{
+		TargetType:       "anomaly",
+		TargetID:         "anom_1",
+		Decision:         "acknowledge",
+		ReviewerID:       7,
+		ReviewerUsername: "alice",
+		Note:             "reviewed",
+		CreatedAt:        time.Unix(4000, 0).UTC(),
+	})
+
+	if err != nil {
+		t.Fatalf("InsertReviewDecision error: %v", err)
+	}
+	if !strings.Contains(execer.sql, "INSERT INTO review_decisions") {
+		t.Fatalf("sql = %s", execer.sql)
+	}
+}
+
 func TestRepositoryListTracesBuildsBoundedQuery(t *testing.T) {
 	db := &recordingAdminDB{}
 	repo := NewRepository(db)

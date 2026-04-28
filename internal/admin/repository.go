@@ -181,3 +181,67 @@ LIMIT $%d`, strings.Join(where, " AND "), len(args))
 	}
 	return traces, rows.Err()
 }
+
+func (r Repository) ListAnomalies(ctx context.Context, limit int) ([]AnomalySummary, error) {
+	if r.db == nil {
+		return nil, ErrAdminDBRequired
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	rows, err := r.db.Query(ctx, `
+SELECT anomaly_id, anomaly_type, severity, status, employee_no, fingerprint_display,
+       observed_value::text, threshold_value::text, reason, created_at::text
+FROM usage_anomalies
+ORDER BY created_at DESC
+LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AnomalySummary
+	for rows.Next() {
+		var item AnomalySummary
+		if err := rows.Scan(
+			&item.AnomalyID, &item.AnomalyType, &item.Severity, &item.Status,
+			&item.EmployeeNo, &item.FingerprintDisplay, &item.ObservedValue,
+			&item.ThresholdValue, &item.Reason, &item.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r Repository) ListCoverageAlerts(ctx context.Context, limit int) ([]CoverageAlertSummary, error) {
+	if r.db == nil {
+		return nil, ErrAdminDBRequired
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	rows, err := r.db.Query(ctx, `
+SELECT alert_id, alert_code, severity, status, method, route_pattern, raw_path,
+       protocol_family, occurrence_count, message, last_seen_at::text
+FROM coverage_alerts
+ORDER BY last_seen_at DESC
+LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CoverageAlertSummary
+	for rows.Next() {
+		var item CoverageAlertSummary
+		if err := rows.Scan(
+			&item.AlertID, &item.AlertCode, &item.Severity, &item.Status,
+			&item.Method, &item.RoutePattern, &item.RawPath, &item.ProtocolFamily,
+			&item.OccurrenceCount, &item.Message, &item.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}

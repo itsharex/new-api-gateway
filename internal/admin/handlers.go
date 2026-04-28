@@ -29,6 +29,10 @@ func NewHandler(cfg HandlerConfig) Handler {
 	h.mux.HandleFunc("POST /admin/api/login", h.login)
 	h.mux.Handle("GET /admin/api/me", h.auth.Middleware(http.HandlerFunc(h.me)))
 	h.mux.HandleFunc("POST /admin/api/logout", h.logout)
+	h.mux.Handle("GET /admin/api/traces", h.auth.Middleware(h.auth.Require(PermissionViewNormalizedTraces, http.HandlerFunc(h.listTraces))))
+	h.mux.Handle("GET /admin/api/anomalies", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.listAnomalies))))
+	h.mux.Handle("GET /admin/api/coverage-alerts", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.listCoverageAlerts))))
+	h.mux.Handle("POST /admin/api/reviews", h.auth.Middleware(h.auth.Require(PermissionReview, http.HandlerFunc(h.createReview))))
 	return h
 }
 
@@ -112,6 +116,83 @@ func (h Handler) logout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h Handler) listTraces(w http.ResponseWriter, r *http.Request) {
+	filter := TraceFilter{
+		TraceID:          r.URL.Query().Get("trace_id"),
+		EmployeeNo:       r.URL.Query().Get("employee_no"),
+		TokenFingerprint: r.URL.Query().Get("token_fingerprint"),
+		RoutePattern:     r.URL.Query().Get("route_pattern"),
+		Model:            r.URL.Query().Get("model"),
+		Limit:            100,
+	}
+	items, err := h.repo.ListTraces(r.Context(), filter)
+	if err != nil {
+		http.Error(w, "failed to list traces", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"traces": items})
+}
+
+func (h Handler) listAnomalies(w http.ResponseWriter, r *http.Request) {
+	items, err := h.repo.ListAnomalies(r.Context(), 100)
+	if err != nil {
+		http.Error(w, "failed to list anomalies", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"anomalies": items})
+}
+
+func (h Handler) listCoverageAlerts(w http.ResponseWriter, r *http.Request) {
+	items, err := h.repo.ListCoverageAlerts(r.Context(), 100)
+	if err != nil {
+		http.Error(w, "failed to list coverage alerts", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"coverage_alerts": items})
+}
+
+func (h Handler) createReview(w http.ResponseWriter, r *http.Request) {
+	principal, _ := PrincipalFromContext(r.Context())
+	var input struct {
+		TargetType string `json:"target_type"`
+		TargetID   string `json:"target_id"`
+		Decision   string `json:"decision"`
+		Note       string `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	now := h.auth.now()
+	decision := ReviewDecision{
+		TargetType:       input.TargetType,
+		TargetID:         input.TargetID,
+		Decision:         input.Decision,
+		ReviewerID:       principal.UserID,
+		ReviewerUsername: principal.Username,
+		Note:             input.Note,
+		CreatedAt:        now,
+	}
+	if err := h.repo.InsertReviewDecision(r.Context(), decision); err != nil {
+		http.Error(w, "failed to create review", http.StatusInternalServerError)
+		return
+	}
+	metadata, err := json.Marshal(map[string]string{"decision": input.Decision})
+	if err != nil {
+		metadata = []byte(`{}`)
+	}
+	_ = h.repo.InsertAuditActionLog(r.Context(), AuditActionLog{
+		ActorUserID:   principal.UserID,
+		ActorUsername: principal.Username,
+		Action:        "review_decision_create",
+		TargetType:    input.TargetType,
+		TargetID:      input.TargetID,
+		MetadataJSON:  string(metadata),
+		CreatedAt:     now,
+	})
+	writeJSON(w, http.StatusCreated, map[string]any{"review": decision})
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

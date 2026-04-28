@@ -96,6 +96,33 @@ type TraceSummary struct {
 	CreatedAt          string `json:"created_at"`
 }
 
+type AnomalySummary struct {
+	AnomalyID          string `json:"anomaly_id"`
+	AnomalyType        string `json:"anomaly_type"`
+	Severity           string `json:"severity"`
+	Status             string `json:"status"`
+	EmployeeNo         string `json:"employee_no"`
+	FingerprintDisplay string `json:"fingerprint_display"`
+	ObservedValue      string `json:"observed_value"`
+	ThresholdValue     string `json:"threshold_value"`
+	Reason             string `json:"reason"`
+	CreatedAt          string `json:"created_at"`
+}
+
+type CoverageAlertSummary struct {
+	AlertID         string `json:"alert_id"`
+	AlertCode       string `json:"alert_code"`
+	Severity        string `json:"severity"`
+	Status          string `json:"status"`
+	Method          string `json:"method"`
+	RoutePattern    string `json:"route_pattern"`
+	RawPath         string `json:"raw_path"`
+	ProtocolFamily  string `json:"protocol_family"`
+	OccurrenceCount int64  `json:"occurrence_count"`
+	Message         string `json:"message"`
+	LastSeenAt      string `json:"last_seen_at"`
+}
+
 type LookupSummary struct {
 	FingerprintDisplay string         `json:"fingerprint_display"`
 	TokenFingerprint   string         `json:"token_fingerprint"`

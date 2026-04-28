@@ -222,6 +222,31 @@ func TestLoginDistinguishesCredentialAndRepositoryFailures(t *testing.T) {
 	}
 }
 
+func TestViewerCannotCreateReviewDecision(t *testing.T) {
+	db := &memoryAdminDB{
+		user: User{ID: 2, Username: "viewer", PasswordHash: "$2a$10$012345678901234567890uRZMFv4I2rGgbJ5h1x3zsmYqzqzqzqzq", DisplayName: "Viewer", Role: RoleViewer, Status: "active"},
+	}
+	repo := NewRepository(db)
+	auth := Auth{
+		Repo:          repo,
+		SessionSecret: "session-secret-0123456789abcdef",
+		CookieName:    "audit_admin_session",
+		Now: func() time.Time {
+			return time.Unix(1000, 0).UTC()
+		},
+	}
+	handler := NewHandler(HandlerConfig{Repo: repo, Auth: auth})
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/reviews", bytes.NewBufferString(`{"target_type":"anomaly","target_id":"anom_1","decision":"acknowledge","note":"seen"}`))
+	req = req.WithContext(WithPrincipal(req.Context(), Principal{UserID: 2, Username: "viewer", Role: RoleViewer}))
+	rec := httptest.NewRecorder()
+
+	handler.auth.Require(PermissionReview, http.HandlerFunc(handler.createReview)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+}
+
 type memoryAdminDB struct {
 	user             User
 	session          Session
