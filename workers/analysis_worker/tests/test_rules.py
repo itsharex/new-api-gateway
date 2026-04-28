@@ -36,6 +36,19 @@ def test_detects_identity_unresolved_success():
     assert alerts[0].detector_version == DETECTOR_VERSION
 
 
+def test_anomaly_windows_are_deterministic_without_request_timestamp():
+    alerts = detect_anomalies(job(
+        employee_no="",
+        request_started_at="",
+        status_code=200,
+        upstream_status_code=200,
+    ))
+
+    assert [alert.anomaly_type for alert in alerts] == ["identity_unresolved_success"]
+    assert alerts[0].window_start == "1970-01-01T00:00:00+00:00"
+    assert alerts[0].window_end == "1970-01-01T00:01:00+00:00"
+
+
 def test_detects_high_trace_tokens():
     alerts = detect_anomalies(job(usage_total_tokens=25000))
 

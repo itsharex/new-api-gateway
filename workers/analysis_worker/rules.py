@@ -16,6 +16,8 @@ NORMALIZER_VERSION = "normalizer_mvp_2026_04_28"
 
 HIGH_TRACE_TOKEN_THRESHOLD = 20_000
 RAW_ONLY_RESPONSE_BYTES_THRESHOLD = 1_048_576
+MISSING_TIMESTAMP_WINDOW_START = "1970-01-01T00:00:00+00:00"
+MISSING_TIMESTAMP_WINDOW_END = "1970-01-01T00:01:00+00:00"
 
 
 def detect_anomalies(job: TraceCapturedJob) -> list[AnomalyAlert]:
@@ -114,6 +116,16 @@ def _anomaly(
     threshold_value: float,
     reason: str,
 ) -> AnomalyAlert:
+    window_start = (
+        bucket_start_hour(job.request_started_at)
+        if job.request_started_at
+        else MISSING_TIMESTAMP_WINDOW_START
+    )
+    window_end = (
+        window_end_from_start(job.request_started_at)
+        if job.request_started_at
+        else MISSING_TIMESTAMP_WINDOW_END
+    )
     return AnomalyAlert(
         anomaly_id=anomaly_id(anomaly_type, job.trace_id, job.employee_no),
         anomaly_type=anomaly_type,
@@ -123,8 +135,8 @@ def _anomaly(
         new_api_token_id=job.new_api_token_id,
         employee_no=job.employee_no,
         token_name_snapshot=job.token_name_snapshot,
-        window_start=bucket_start_hour(job.request_started_at),
-        window_end=window_end_from_start(job.request_started_at),
+        window_start=window_start,
+        window_end=window_end,
         observed_value=observed_value,
         threshold_value=threshold_value,
         baseline_value=None,
