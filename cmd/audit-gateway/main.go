@@ -119,7 +119,7 @@ func buildHTTPHandler(cfg config.Config, pool *pgxpool.Pool, redisClient *redis.
 	gatewayHandler := buildHandler(cfg, pool, redisClient, logger)
 	if pool == nil {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasPrefix(r.URL.Path, "/admin/api/") {
+			if isAdminAPIPath(r.URL.Path) {
 				http.Error(w, "admin database unavailable", http.StatusServiceUnavailable)
 				return
 			}
@@ -141,12 +141,16 @@ func buildHTTPHandler(cfg config.Config, pool *pgxpool.Pool, redisClient *redis.
 		EvidenceStore: evidence.NewFilesystemStore(cfg.EvidenceStorageDir),
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/admin/api/") {
+		if isAdminAPIPath(r.URL.Path) {
 			adminHandler.ServeHTTP(w, r)
 			return
 		}
 		gatewayHandler.ServeHTTP(w, r)
 	})
+}
+
+func isAdminAPIPath(path string) bool {
+	return path == "/admin/api" || strings.HasPrefix(path, "/admin/api/")
 }
 
 func auditErrorLogger(logger *log.Logger) func(context.Context, error) {

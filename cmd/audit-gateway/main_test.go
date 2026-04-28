@@ -62,13 +62,17 @@ func TestBuildHTTPHandlerRoutesAdminBeforeProxy(t *testing.T) {
 	}
 
 	handler := buildHTTPHandler(cfg, nil, nil, log.New(ioDiscard{}, "", 0))
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/login", strings.NewReader(`{}`))
-	rec := httptest.NewRecorder()
+	for _, path := range []string{"/admin/api", "/admin/api/login"} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+			rec := httptest.NewRecorder()
 
-	handler.ServeHTTP(rec, req)
+			handler.ServeHTTP(rec, req)
 
-	if rec.Code == http.StatusBadGateway {
-		t.Fatal("admin route fell through to proxy")
+			if rec.Code == http.StatusBadGateway {
+				t.Fatal("admin route fell through to proxy")
+			}
+		})
 	}
 }
 

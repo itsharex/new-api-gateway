@@ -114,7 +114,7 @@ Run the Docker Compose work relevance check:
 
 ## Admin API MVP
 
-Admin API routes live under `/admin/api/*` in the same Go process as the proxy. Required local settings:
+Admin API routes live under `/admin/api/*` in the same Go process as the proxy. The values below are for local smoke testing only; do not deploy these secrets or credentials to any shared environment. Required local settings:
 
 ```bash
 export ADMIN_SESSION_SECRET=admin-session-secret-0123456789abcdef
@@ -122,7 +122,7 @@ export ADMIN_COOKIE_NAME=audit_admin_session
 export ADMIN_COOKIE_SECURE=false
 ```
 
-Create a local admin user for the password `change-me-admin-password`:
+Create a local admin user for the password `change-me-admin-password`. Change or replace this seeded password before using any shared environment:
 
 ```sql
 INSERT INTO audit_users (username, password_hash, display_name, email, role, status)
