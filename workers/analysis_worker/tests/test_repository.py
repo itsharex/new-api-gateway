@@ -51,6 +51,26 @@ def test_repository_inserts_messages_results_aggregates_anomalies_and_coverage()
         severity="",
         result={"total_tokens": 18},
     )
+    work_relevance_result = AnalysisResult(
+        trace_id="trace_1",
+        analyzer_name="work_relevance",
+        analyzer_version="work_relevance_mvp_2026_04_28",
+        policy_version="",
+        category="work_relevance",
+        label="debugging",
+        score=0.9,
+        confidence=0.8,
+        severity="",
+        result={
+            "task_category": "debugging",
+            "work_related_score": 0.9,
+            "personal_use_score": 0.02,
+            "confidence": 0.8,
+            "matched_context": [{"type": "repo", "name": "new-api-gateway", "matched_terms": ["gateway"]}],
+            "evidence": ["Matched catalog context and work category debugging."],
+            "needs_review": False,
+        },
+    )
     aggregate = UsageAggregateDelta(
         bucket_start="2026-04-28T13:00:00+00:00",
         bucket_size="hour",
@@ -112,7 +132,7 @@ def test_repository_inserts_messages_results_aggregates_anomalies_and_coverage()
         affected_employee_count=1,
     )
 
-    repo.save_trace_analysis([message], [result], [aggregate], [anomaly], [coverage])
+    repo.save_trace_analysis([message], [result, work_relevance_result], [aggregate], [anomaly], [coverage])
 
     queries = "\n".join(query for query, _ in conn.cursor_obj.executed)
     assert "INSERT INTO normalized_messages" in queries
@@ -134,3 +154,7 @@ def test_repository_inserts_messages_results_aggregates_anomalies_and_coverage()
         "affected_trace_count = coverage_alerts.affected_trace_count + EXCLUDED.affected_trace_count"
         not in coverage_query
     )
+    analysis_queries = [
+        query for query, _ in conn.cursor_obj.executed if "INSERT INTO analysis_results" in query
+    ]
+    assert len(analysis_queries) == 2

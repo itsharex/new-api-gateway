@@ -55,7 +55,7 @@ The Redis `analysis_jobs` list receives `trace_captured` envelopes only after th
 Apply migrations through your local migration runner before processing analysis jobs. The worker now writes:
 
 - `normalized_messages` for extracted request and response text.
-- `analysis_results` for deterministic usage extraction status.
+- `analysis_results` for deterministic usage extraction status and `work_relevance` classification.
 - `usage_aggregates` for hourly and daily employee/token/model/route totals.
 
 Run the worker against a single stdin job:
@@ -100,4 +100,14 @@ Run the Docker Compose end-to-end worker anomaly/coverage check:
 
 The script recreates a local `audit_gateway_e2e` database, applies all migrations, pushes a synthetic `trace_captured` Redis job, runs the worker in the `analysis-worker` compose service, and verifies that `usage_anomalies` and `coverage_alerts` rows are persisted.
 
-The MVP rules are intentionally explainable and per-trace. Baselines, semantic similarity, work relevance, and cross-trace clustering should be implemented in later plans.
+The MVP rules are intentionally explainable and per-trace. Baselines, semantic similarity, and cross-trace clustering should be implemented in later plans.
+
+## Worker Work Relevance
+
+The worker loads active `context_catalog` rows from PostgreSQL and writes a `work_relevance` row to `analysis_results` for every processed trace. The MVP classifier is deterministic: it matches normalized text against context keywords/aliases and a fixed task-category keyword map. Low-confidence, personal, or entertainment results set `needs_review` in `result_json`.
+
+Run the Docker Compose work relevance check:
+
+```bash
+./scripts/e2e_worker_work_relevance.sh
+```
