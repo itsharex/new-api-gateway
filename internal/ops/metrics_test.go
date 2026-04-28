@@ -45,6 +45,8 @@ func TestRenderMetricsIncludesDependencyAndQueueValues(t *testing.T) {
 		"audit_gateway_up 1",
 		"audit_gateway_uptime_seconds 120",
 		`audit_gateway_dependency_up{dependency="postgres"} 1`,
+		`audit_gateway_dependency_up{dependency="queue_lag"} 1`,
+		`audit_gateway_dependency_up{dependency="worker_heartbeat"} 1`,
 		"audit_gateway_worker_heartbeat_age_seconds 60",
 		"audit_gateway_worker_count 2",
 		`audit_gateway_analysis_queue_depth{queue="analysis_jobs"} 42`,
@@ -80,6 +82,8 @@ func TestRenderMetricsUsesStructuredValuesWhenMessagesAreHumanReadable(t *testin
 	body := RenderMetrics(response, now.Add(-time.Minute), now)
 
 	containsAll(t, body,
+		`audit_gateway_dependency_up{dependency="queue_lag"} 1`,
+		`audit_gateway_dependency_up{dependency="worker_heartbeat"} 1`,
 		"audit_gateway_worker_count 0",
 		`audit_gateway_analysis_queue_depth{queue="analysis_jobs"} 1201`,
 	)

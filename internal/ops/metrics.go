@@ -43,21 +43,19 @@ func gatewayUp(status string) int {
 }
 
 func checkUp(status string) int {
-	if status == statusOK {
-		return 1
+	if status == statusDown {
+		return 0
 	}
-	return 0
+	return 1
 }
 
 func sortedDependencyKeys(checks map[string]CheckStatus) []string {
 	keys := make([]string, 0, len(checks))
 	for key := range checks {
-		switch key {
-		case "process", "worker_heartbeat", "queue_lag":
+		if key == "process" {
 			continue
-		default:
-			keys = append(keys, key)
 		}
+		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	return keys
