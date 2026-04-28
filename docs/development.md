@@ -71,3 +71,19 @@ POSTGRES_DSN=postgres://audit:audit@localhost:5432/audit_gateway?sslmode=disable
 REDIS_URL=redis://localhost:6379/0 \
 uv run python main.py --redis-once
 ```
+
+## Worker Anomalies and Coverage Alerts
+
+After normalization and usage aggregation, the Python worker also writes review-ready outputs:
+
+- `usage_anomalies` for deterministic MVP rules such as unresolved identity on successful upstream responses, invalid employee number snapshots, high single-trace token use, raw-only large responses, and server-error traces that may contribute to retry storms.
+- `coverage_alerts` for worker-side normalization gaps where a route is marked `raw_and_normalized` but no normalized messages are extracted.
+
+Run the worker tests:
+
+```bash
+cd workers/analysis_worker
+uv run pytest -q
+```
+
+The MVP rules are intentionally explainable and per-trace. Baselines, semantic similarity, work relevance, and cross-trace clustering should be implemented in later plans.
