@@ -138,6 +138,19 @@ def worker_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"
 
 
+def record_heartbeat_safely(heartbeat, connection, **kwargs) -> None:
+    rollback = getattr(connection, "rollback", None)
+    if rollback:
+        try:
+            rollback()
+        except Exception:
+            pass
+    try:
+        heartbeat.record(**kwargs)
+    except Exception:
+        pass
+
+
 def process_redis_once(
     redis_url: str,
     list_name: str,
@@ -158,7 +171,7 @@ def process_redis_once(
                 queue_name=list_name,
                 processed_count=0,
                 error_count=0,
-                metadata={"redis_url": redis_url},
+                metadata={"poll_result": "idle"},
             )
             print(json.dumps({"worker_status": "idle", "list": list_name}, sort_keys=True))
             return 0
@@ -171,7 +184,9 @@ def process_redis_once(
                 PostgresContextRepository(connection),
             )
         except Exception as exc:
-            heartbeat.record(
+            record_heartbeat_safely(
+                heartbeat,
+                connection,
                 worker_id=worker_id(),
                 worker_kind="analysis",
                 status="error",

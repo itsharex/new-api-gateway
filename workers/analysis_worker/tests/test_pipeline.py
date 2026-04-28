@@ -296,7 +296,7 @@ def test_process_redis_once_records_idle_heartbeat(monkeypatch):
     class FakeRedisModule:
         @staticmethod
         def from_url(url, decode_responses):
-            assert url == "redis://localhost:6379/0"
+            assert url == "redis://user:secret@localhost:6379/0"
             assert decode_responses is True
             return FakeRedisClient()
 
@@ -321,7 +321,7 @@ def test_process_redis_once_records_idle_heartbeat(monkeypatch):
     monkeypatch.setenv("ANALYSIS_WORKER_ID", "worker-test")
 
     exit_code = process_redis_once(
-        "redis://localhost:6379/0",
+        "redis://user:secret@localhost:6379/0",
         "analysis_jobs",
         "/tmp/evidence-unused",
         "postgres://unused",
@@ -333,6 +333,7 @@ def test_process_redis_once_records_idle_heartbeat(monkeypatch):
     assert FakeHeartbeatRepository.calls[0]["worker_id"] == "worker-test"
     assert FakeHeartbeatRepository.calls[0]["status"] == "idle"
     assert FakeHeartbeatRepository.calls[0]["queue_name"] == "analysis_jobs"
+    assert FakeHeartbeatRepository.calls[0]["metadata"] == {"poll_result": "idle"}
 
 
 def test_process_redis_once_records_error_heartbeat_without_exception_message(monkeypatch):
@@ -389,3 +390,65 @@ def test_process_redis_once_records_error_heartbeat_without_exception_message(mo
     assert FakeHeartbeatRepository.calls[0]["status"] == "error"
     assert FakeHeartbeatRepository.calls[0]["error_count"] == 1
     assert FakeHeartbeatRepository.calls[0]["metadata"] == {"error_type": "RuntimeError"}
+
+
+def test_process_redis_once_preserves_job_error_when_error_heartbeat_fails(monkeypatch):
+    from main import process_redis_once
+
+    class FakeRedisClient:
+        def blpop(self, list_name, timeout):
+            return (list_name, "{\"trace_id\":\"trace-secret\"}")
+
+    class FakeRedisModule:
+        @staticmethod
+        def from_url(url, decode_responses):
+            return FakeRedisClient()
+
+    class FakeHeartbeatRepository:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def record(self, **kwargs):
+            self.connection.events.append("record")
+            raise RuntimeError("heartbeat failure")
+
+    class FakeConnection:
+        def __init__(self):
+            self.events = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def rollback(self):
+            self.events.append("rollback")
+
+    connection = FakeConnection()
+
+    def fail_process_job_line(*args, **kwargs):
+        raise ValueError("original failure")
+
+    monkeypatch.setattr("main.redis.Redis", FakeRedisModule)
+    monkeypatch.setattr("main.HeartbeatRepository", FakeHeartbeatRepository)
+    monkeypatch.setattr("main.process_job_line", fail_process_job_line)
+    monkeypatch.setenv("ANALYSIS_WORKER_ID", "worker-test")
+
+    try:
+        process_redis_once(
+            "redis://localhost:6379/0",
+            "analysis_jobs",
+            "/tmp/evidence-unused",
+            "postgres://unused",
+            1,
+            connection_factory=lambda dsn: connection,
+        )
+    except ValueError as exc:
+        assert str(exc) == "original failure"
+    except RuntimeError as exc:
+        raise AssertionError(f"heartbeat exception masked original: {exc}") from exc
+    else:
+        raise AssertionError("expected ValueError")
+
+    assert connection.events == ["rollback", "record"]
