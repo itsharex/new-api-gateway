@@ -19,6 +19,16 @@ type TraceCapturedJob struct {
 	ProtocolFamily        string `json:"protocol_family"`
 	CaptureMode           string `json:"capture_mode"`
 	EmployeeNo            string `json:"employee_no"`
+	TokenFingerprint      string `json:"token_fingerprint"`
+	FingerprintDisplay    string `json:"fingerprint_display"`
+	NewAPITokenID         int    `json:"new_api_token_id"`
+	TokenNameSnapshot     string `json:"token_name_snapshot"`
+	StatusCode            int    `json:"status_code"`
+	UpstreamStatusCode    int    `json:"upstream_status_code"`
+	Stream                bool   `json:"stream"`
+	RequestStartedAt      string `json:"request_started_at"`
+	RequestBodySize       int64  `json:"request_body_size"`
+	ResponseBodySize      int64  `json:"response_body_size"`
 	RequestRawRef         string `json:"request_raw_ref"`
 	RequestHeadersRef     string `json:"request_headers_ref"`
 	ResponseRawRef        string `json:"response_raw_ref"`
@@ -43,6 +53,16 @@ type TraceCapturedInput struct {
 	ProtocolFamily        string
 	CaptureMode           string
 	EmployeeNo            string
+	TokenFingerprint      string
+	FingerprintDisplay    string
+	NewAPITokenID         int
+	TokenNameSnapshot     string
+	StatusCode            int
+	UpstreamStatusCode    int
+	Stream                bool
+	RequestStartedAt      string
+	RequestBodySize       int64
+	ResponseBodySize      int64
 	RequestRawRef         string
 	RequestHeadersRef     string
 	ResponseRawRef        string
@@ -65,6 +85,16 @@ func NewTraceCaptured(input TraceCapturedInput) TraceCapturedJob {
 		ProtocolFamily:        input.ProtocolFamily,
 		CaptureMode:           input.CaptureMode,
 		EmployeeNo:            input.EmployeeNo,
+		TokenFingerprint:      input.TokenFingerprint,
+		FingerprintDisplay:    input.FingerprintDisplay,
+		NewAPITokenID:         input.NewAPITokenID,
+		TokenNameSnapshot:     input.TokenNameSnapshot,
+		StatusCode:            input.StatusCode,
+		UpstreamStatusCode:    input.UpstreamStatusCode,
+		Stream:                input.Stream,
+		RequestStartedAt:      input.RequestStartedAt,
+		RequestBodySize:       input.RequestBodySize,
+		ResponseBodySize:      input.ResponseBodySize,
 		RequestRawRef:         input.RequestRawRef,
 		RequestHeadersRef:     input.RequestHeadersRef,
 		ResponseRawRef:        input.ResponseRawRef,

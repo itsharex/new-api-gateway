@@ -30,6 +30,16 @@ func TestRedisListPublisherPushesTraceCapturedEnvelope(t *testing.T) {
 		ProtocolFamily:      "openai_chat",
 		CaptureMode:         "raw_and_normalized",
 		EmployeeNo:          "E12345",
+		TokenFingerprint:    "tkfp_raw_value",
+		FingerprintDisplay:  "tkfp_display",
+		NewAPITokenID:       42,
+		TokenNameSnapshot:   "E12345",
+		StatusCode:          200,
+		UpstreamStatusCode:  200,
+		Stream:              false,
+		RequestStartedAt:    "2026-04-28T13:45:22Z",
+		RequestBodySize:     128,
+		ResponseBodySize:    256,
 		RequestRawRef:       "raw/trace_1/request_body.bin",
 		RequestHeadersRef:   "raw/trace_1/request_headers.bin",
 		ResponseRawRef:      "raw/trace_1/response_body.bin",
@@ -55,6 +65,21 @@ func TestRedisListPublisherPushesTraceCapturedEnvelope(t *testing.T) {
 	}
 	if decoded.Type != "trace_captured" || decoded.TraceID != "trace_1" || decoded.EmployeeNo != "E12345" {
 		t.Fatalf("job = %+v", decoded)
+	}
+	if decoded.TokenFingerprint != "tkfp_raw_value" || decoded.FingerprintDisplay != "tkfp_display" {
+		t.Fatalf("fingerprint fields = %+v", decoded)
+	}
+	if decoded.NewAPITokenID != 42 || decoded.TokenNameSnapshot != "E12345" {
+		t.Fatalf("token snapshot fields = %+v", decoded)
+	}
+	if decoded.StatusCode != 200 || decoded.UpstreamStatusCode != 200 || decoded.Stream {
+		t.Fatalf("status fields = %+v", decoded)
+	}
+	if decoded.RequestStartedAt != "2026-04-28T13:45:22Z" {
+		t.Fatalf("RequestStartedAt = %q", decoded.RequestStartedAt)
+	}
+	if decoded.RequestBodySize != 128 || decoded.ResponseBodySize != 256 {
+		t.Fatalf("body sizes = %+v", decoded)
 	}
 	if decoded.ResponseRawRef != "raw/trace_1/response_body.bin" {
 		t.Fatalf("ResponseRawRef = %q", decoded.ResponseRawRef)

@@ -267,6 +267,18 @@ func TestProxyRecordsHeaderEvidenceAndMinimalMetadata(t *testing.T) {
 	if job.ModelRequested != "gpt-test" || job.UsageTotalTokens != 18 {
 		t.Fatalf("job metadata = %+v", job)
 	}
+	if job.TokenFingerprint == "" || job.FingerprintDisplay == "" {
+		t.Fatalf("job fingerprint fields missing: %+v", job)
+	}
+	if job.NewAPITokenID != 7 || job.TokenNameSnapshot != "E12345" {
+		t.Fatalf("job token snapshot fields = %+v", job)
+	}
+	if job.StatusCode != http.StatusOK || job.UpstreamStatusCode != http.StatusOK {
+		t.Fatalf("job status fields = %+v", job)
+	}
+	if job.RequestStartedAt == "" || job.RequestBodySize == 0 || job.ResponseBodySize == 0 {
+		t.Fatalf("job timing/body metadata missing: %+v", job)
+	}
 }
 
 func TestProxyDoesNotPublishTraceCapturedJobWhenRawEvidencePersistenceFails(t *testing.T) {
