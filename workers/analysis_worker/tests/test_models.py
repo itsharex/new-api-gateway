@@ -1,7 +1,16 @@
 import json
 from datetime import datetime, timedelta, timezone
 
-from models import TraceCapturedJob, anomaly_id, bucket_start_hour, coverage_alert_id, parse_job, window_end_from_start
+from models import (
+    ContextCatalogEntry,
+    TraceCapturedJob,
+    WorkRelevanceAssessment,
+    anomaly_id,
+    bucket_start_hour,
+    coverage_alert_id,
+    parse_job,
+    window_end_from_start,
+)
 
 
 def test_parse_job_keeps_gateway_contract_fields():
@@ -90,3 +99,43 @@ def test_window_end_from_start_empty_value_honors_offset():
     after = datetime.now(timezone.utc) + timedelta(seconds=60)
 
     assert before <= parsed <= after
+
+
+def test_context_catalog_entry_normalizes_keyword_lists():
+    entry = ContextCatalogEntry(
+        id=1,
+        context_type="repo",
+        name="new-api-gateway",
+        description="Audit gateway for new-api",
+        keywords=["Gateway", " new-api ", ""],
+        aliases=["audit gateway", "Gateway"],
+        owner="platform",
+        expected_task_categories=["coding", "debugging"],
+        expected_models=["gpt-4.1"],
+        expected_usage_level="normal",
+        active=True,
+    )
+
+    assert entry.search_terms() == ["gateway", "new-api", "audit gateway", "new-api-gateway"]
+
+
+def test_work_relevance_assessment_converts_to_analysis_result():
+    assessment = WorkRelevanceAssessment(
+        trace_id="trace_1",
+        task_category="coding",
+        work_related_score=0.82,
+        personal_use_score=0.05,
+        confidence=0.74,
+        matched_context=[{"type": "repo", "name": "new-api-gateway", "matched_terms": ["gateway"]}],
+        evidence=["Request matched repo context."],
+        needs_review=False,
+        analyzer_version="work_relevance_mvp_2026_04_28",
+    )
+
+    result = assessment.to_analysis_result()
+
+    assert result.category == "work_relevance"
+    assert result.label == "coding"
+    assert result.score == 0.82
+    assert result.confidence == 0.74
+    assert result.result["matched_context"][0]["name"] == "new-api-gateway"

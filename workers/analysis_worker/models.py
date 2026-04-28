@@ -134,6 +134,66 @@ class CoverageAlert:
     affected_employee_count: int = 0
 
 
+@dataclass(frozen=True)
+class ContextCatalogEntry:
+    id: int
+    context_type: str
+    name: str
+    description: str
+    keywords: list[str]
+    aliases: list[str]
+    owner: str
+    expected_task_categories: list[str]
+    expected_models: list[str]
+    expected_usage_level: str
+    active: bool
+
+    def search_terms(self) -> list[str]:
+        seen: set[str] = set()
+        terms: list[str] = []
+        for value in [*self.keywords, *self.aliases, self.name]:
+            normalized = value.strip().lower()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                terms.append(normalized)
+        return terms
+
+
+@dataclass(frozen=True)
+class WorkRelevanceAssessment:
+    trace_id: str
+    task_category: str
+    work_related_score: float
+    personal_use_score: float
+    confidence: float
+    matched_context: list[dict[str, Any]]
+    evidence: list[str]
+    needs_review: bool
+    analyzer_version: str
+
+    def to_analysis_result(self) -> AnalysisResult:
+        return AnalysisResult(
+            trace_id=self.trace_id,
+            analyzer_name="work_relevance",
+            analyzer_version=self.analyzer_version,
+            policy_version="",
+            category="work_relevance",
+            label=self.task_category,
+            score=self.work_related_score,
+            confidence=self.confidence,
+            severity="review" if self.needs_review else "",
+            result={
+                "task_category": self.task_category,
+                "work_related_score": self.work_related_score,
+                "personal_use_score": self.personal_use_score,
+                "confidence": self.confidence,
+                "matched_context": self.matched_context,
+                "evidence": self.evidence,
+                "needs_review": self.needs_review,
+            },
+        )
+
+
 def stable_suffix(*parts: str) -> str:
     joined = "\x00".join(parts)
     return sha256(joined.encode("utf-8")).hexdigest()[:16]
