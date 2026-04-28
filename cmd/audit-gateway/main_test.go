@@ -77,6 +77,36 @@ func TestBuildHTTPHandlerRoutesAdminBeforeProxy(t *testing.T) {
 	}
 }
 
+func TestBuildHTTPHandlerServesOperationalRoutesBeforeAdminAndProxy(t *testing.T) {
+	cfg := config.Config{
+		NewAPIBaseURL:            "https://new-api.example.test/base",
+		AuditHMACSecret:          "0123456789abcdef0123456789abcdef",
+		EvidenceStorageDir:       t.TempDir(),
+		EmployeeNoPattern:        regexp.MustCompile(`^E[0-9]+$`),
+		OpsCheckTimeout:          50 * time.Millisecond,
+		OpsWorkerHeartbeatMaxAge: 5 * time.Minute,
+		OpsQueueLagWarnThreshold: 1000,
+		OpsMetricsEnabled:        true,
+	}
+	handler := buildHTTPHandler(cfg, nil, nil, log.New(io.Discard, "", 0))
+
+	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code == http.StatusBadGateway {
+				t.Fatalf("%s fell through to proxy", path)
+			}
+			if rec.Code == http.StatusNotFound {
+				t.Fatalf("%s was not mounted", path)
+			}
+		})
+	}
+}
+
 func TestBuildHTTPHandlerServesAdminUIWithoutInterceptingAPIOrProxy(t *testing.T) {
 	handler := buildHTTPHandler(config.Config{}, nil, nil, log.New(io.Discard, "", 0))
 

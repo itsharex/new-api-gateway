@@ -22,6 +22,7 @@ import (
 	"github.com/your-company/new-api-gateway/internal/gateway"
 	"github.com/your-company/new-api-gateway/internal/identity"
 	"github.com/your-company/new-api-gateway/internal/jobs"
+	"github.com/your-company/new-api-gateway/internal/ops"
 	"github.com/your-company/new-api-gateway/internal/routes"
 	"github.com/your-company/new-api-gateway/internal/traces"
 )
@@ -119,8 +120,13 @@ func buildHandler(cfg config.Config, pool *pgxpool.Pool, redisClient *redis.Clie
 func buildHTTPHandler(cfg config.Config, pool *pgxpool.Pool, redisClient *redis.Client, logger *log.Logger) http.Handler {
 	gatewayHandler := buildHandler(cfg, pool, redisClient, logger)
 	uiHandler := adminui.Handler()
+	opsHandler := buildOpsHandler(cfg, pool, redisClient)
 	if pool == nil {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if isOpsPath(r.URL.Path) {
+				opsHandler.ServeHTTP(w, r)
+				return
+			}
 			if isAdminAPIPath(r.URL.Path) {
 				http.Error(w, "admin database unavailable", http.StatusServiceUnavailable)
 				return
@@ -147,6 +153,10 @@ func buildHTTPHandler(cfg config.Config, pool *pgxpool.Pool, redisClient *redis.
 		EvidenceStore: evidence.NewFilesystemStore(cfg.EvidenceStorageDir),
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isOpsPath(r.URL.Path) {
+			opsHandler.ServeHTTP(w, r)
+			return
+		}
 		if isAdminAPIPath(r.URL.Path) {
 			adminHandler.ServeHTTP(w, r)
 			return
@@ -157,6 +167,78 @@ func buildHTTPHandler(cfg config.Config, pool *pgxpool.Pool, redisClient *redis.
 		}
 		gatewayHandler.ServeHTTP(w, r)
 	})
+}
+
+func buildOpsHandler(cfg config.Config, pool *pgxpool.Pool, redisClient *redis.Client) http.Handler {
+	service := ops.Service{
+		StartedAt: time.Now().UTC(),
+		Now:       time.Now,
+		PostgresCheck: func(ctx context.Context) error {
+			if pool == nil {
+				return errors.New("postgres pool is nil")
+			}
+			ctx, cancel := context.WithTimeout(ctx, cfg.OpsCheckTimeout)
+			defer cancel()
+			return pool.Ping(ctx)
+		},
+		RedisCheck: func(ctx context.Context) error {
+			if redisClient == nil {
+				return errors.New("redis client is nil")
+			}
+			ctx, cancel := context.WithTimeout(ctx, cfg.OpsCheckTimeout)
+			defer cancel()
+			return redisClient.Ping(ctx).Err()
+		},
+		EvidenceCheck: func(ctx context.Context) error {
+			store := evidence.NewFilesystemStore(cfg.EvidenceStorageDir)
+			ctx, cancel := context.WithTimeout(ctx, cfg.OpsCheckTimeout)
+			defer cancel()
+			object, err := store.Put(ctx, evidence.PutRequest{
+				TraceID:     "ops_healthcheck",
+				ObjectType:  "readiness",
+				ContentType: "text/plain",
+				Reader:      strings.NewReader("ok"),
+			})
+			if err != nil {
+				return err
+			}
+			reader, err := store.Get(ctx, object.ObjectRef)
+			if err != nil {
+				return err
+			}
+			return reader.Close()
+		},
+		WorkerHeartbeatCheck: func(ctx context.Context) (ops.WorkerHeartbeatStatus, error) {
+			if pool == nil {
+				return ops.WorkerHeartbeatStatus{}, errors.New("postgres pool is nil")
+			}
+			ctx, cancel := context.WithTimeout(ctx, cfg.OpsCheckTimeout)
+			defer cancel()
+			var status ops.WorkerHeartbeatStatus
+			status.MaxAge = cfg.OpsWorkerHeartbeatMaxAge
+			err := pool.QueryRow(ctx, `
+SELECT COALESCE(MAX(last_seen_at), to_timestamp(0)), COUNT(*)
+FROM worker_heartbeats
+WHERE worker_kind = 'analysis'`).Scan(&status.LastSeenAt, &status.WorkerCount)
+			return status, err
+		},
+		QueueLagCheck: func(ctx context.Context) (ops.QueueLagStatus, error) {
+			status := ops.QueueLagStatus{QueueName: jobs.DefaultRedisListName, WarnThreshold: cfg.OpsQueueLagWarnThreshold}
+			if redisClient == nil {
+				return status, errors.New("redis client is nil")
+			}
+			ctx, cancel := context.WithTimeout(ctx, cfg.OpsCheckTimeout)
+			defer cancel()
+			depth, err := redisClient.LLen(ctx, jobs.DefaultRedisListName).Result()
+			status.Depth = depth
+			return status, err
+		},
+	}
+	return ops.Handler(service, cfg.OpsMetricsEnabled)
+}
+
+func isOpsPath(path string) bool {
+	return path == "/healthz" || path == "/readyz" || path == "/metrics"
 }
 
 func isAdminAPIPath(path string) bool {
