@@ -198,6 +198,12 @@ func TestRepositoryOverviewSummaryUsesBoundedWindows(t *testing.T) {
 	if !strings.Contains(db.querySQL, "created_at >= $1") {
 		t.Fatalf("overview query missing bounded window: %s", db.querySQL)
 	}
+	if !strings.Contains(db.querySQL, "capture_mode = 'raw_only'") {
+		t.Fatalf("overview query missing raw-only capture mode filter: %s", db.querySQL)
+	}
+	if strings.Contains(db.querySQL, "route_support_level") {
+		t.Fatalf("overview query used non-schema route_support_level column: %s", db.querySQL)
+	}
 }
 
 func TestRepositoryListUsageAggregatesCapsLimitAndBindsFilters(t *testing.T) {

@@ -305,7 +305,7 @@ SELECT
   coalesce(sum(usage_total_tokens) FILTER (WHERE created_at >= $1), 0),
   (SELECT count(*) FROM usage_anomalies WHERE status = 'open'),
   (SELECT count(*) FROM coverage_alerts WHERE status = 'open'),
-  count(*) FILTER (WHERE created_at >= $1 AND route_support_level IN ('raw_only','unknown_route','unsupported'))
+  count(*) FILTER (WHERE created_at >= $1 AND capture_mode = 'raw_only')
 FROM traces`, since).Scan(
 		&summary.RequestCount24h,
 		&summary.SuccessCount24h,
