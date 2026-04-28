@@ -142,3 +142,99 @@ type EvidenceObjectSummary struct {
 	SizeBytes   int64
 	SHA256      string
 }
+
+type OverviewSummary struct {
+	RequestCount24h      int64 `json:"request_count_24h"`
+	SuccessCount24h      int64 `json:"success_count_24h"`
+	ErrorCount24h        int64 `json:"error_count_24h"`
+	TotalTokens24h       int64 `json:"total_tokens_24h"`
+	OpenAnomalies        int64 `json:"open_anomalies"`
+	OpenCoverageAlerts   int64 `json:"open_coverage_alerts"`
+	RawOnlyTraceCount24h int64 `json:"raw_only_trace_count_24h"`
+}
+
+type UsageFilter struct {
+	EmployeeNo       string
+	TokenFingerprint string
+	Model            string
+	RoutePattern     string
+	BucketSize       string
+	Limit            int
+}
+
+type UsageBucket struct {
+	BucketStart        string `json:"bucket_start"`
+	BucketSize         string `json:"bucket_size"`
+	EmployeeNo         string `json:"employee_no"`
+	FingerprintDisplay string `json:"fingerprint_display"`
+	Model              string `json:"model"`
+	RoutePattern       string `json:"route_pattern"`
+	RequestCount       int64  `json:"request_count"`
+	SuccessCount       int64  `json:"success_count"`
+	ErrorCount         int64  `json:"error_count"`
+	TotalTokens        int64  `json:"total_tokens"`
+	EstimatedCost      string `json:"estimated_cost"`
+}
+
+type TraceDetail struct {
+	TraceSummary
+	RequestRawRef            string                     `json:"request_raw_ref"`
+	ResponseRawRef           string                     `json:"response_raw_ref"`
+	RequestHeadersRef        string                     `json:"request_headers_ref"`
+	ResponseHeadersRef       string                     `json:"response_headers_ref"`
+	IdentityResolutionStatus string                     `json:"identity_resolution_status"`
+	AnalysisStatus           string                     `json:"analysis_status"`
+	NormalizedMessages       []NormalizedMessageSummary `json:"normalized_messages"`
+	AnalysisResults          []AnalysisResultSummary    `json:"analysis_results"`
+}
+
+type NormalizedMessageSummary struct {
+	Direction          string `json:"direction"`
+	SequenceIndex      int    `json:"sequence_index"`
+	Role               string `json:"role"`
+	Modality           string `json:"modality"`
+	ContentText        string `json:"content_text"`
+	MediaURL           string `json:"media_url"`
+	ProtocolItemType   string `json:"protocol_item_type"`
+	TokenCountEstimate int    `json:"token_count_estimate"`
+}
+
+type AnalysisResultSummary struct {
+	AnalyzerName string `json:"analyzer_name"`
+	Category     string `json:"category"`
+	Label        string `json:"label"`
+	Score        string `json:"score"`
+	Confidence   string `json:"confidence"`
+	Severity     string `json:"severity"`
+	ResultJSON   string `json:"result_json"`
+	CreatedAt    string `json:"created_at"`
+}
+
+type ContextCatalogEntry struct {
+	ID                     int64    `json:"id"`
+	ContextType            string   `json:"context_type"`
+	Name                   string   `json:"name"`
+	Description            string   `json:"description"`
+	Keywords               []string `json:"keywords"`
+	Aliases                []string `json:"aliases"`
+	Owner                  string   `json:"owner"`
+	ExpectedTaskCategories []string `json:"expected_task_categories"`
+	ExpectedModels         []string `json:"expected_models"`
+	ExpectedUsageLevel     string   `json:"expected_usage_level"`
+	Active                 bool     `json:"active"`
+	CreatedBy              string   `json:"created_by"`
+	UpdatedBy              string   `json:"updated_by"`
+	CreatedAt              string   `json:"created_at"`
+	UpdatedAt              string   `json:"updated_at"`
+}
+
+type AuditActionLogSummary struct {
+	ActorUsername      string `json:"actor_username"`
+	Action             string `json:"action"`
+	TargetType         string `json:"target_type"`
+	TargetID           string `json:"target_id"`
+	FingerprintDisplay string `json:"fingerprint_display"`
+	TraceID            string `json:"trace_id"`
+	MetadataJSON       string `json:"metadata_json"`
+	CreatedAt          string `json:"created_at"`
+}

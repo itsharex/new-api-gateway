@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 var ErrAdminDBRequired = errors.New("admin repository database is nil")
@@ -288,4 +289,330 @@ LIMIT 1`, traceID, objectType).Scan(
 		&object.ContentType, &object.SizeBytes, &object.SHA256,
 	)
 	return object, err
+}
+
+func (r Repository) OverviewSummary(ctx context.Context, now time.Time) (OverviewSummary, error) {
+	if r.db == nil {
+		return OverviewSummary{}, ErrAdminDBRequired
+	}
+	since := now.Add(-24 * time.Hour)
+	var summary OverviewSummary
+	err := r.db.QueryRow(ctx, `
+SELECT
+  count(*) FILTER (WHERE created_at >= $1),
+  count(*) FILTER (WHERE created_at >= $1 AND status_code >= 200 AND status_code < 400),
+  count(*) FILTER (WHERE created_at >= $1 AND status_code >= 400),
+  coalesce(sum(usage_total_tokens) FILTER (WHERE created_at >= $1), 0),
+  (SELECT count(*) FROM usage_anomalies WHERE status = 'open'),
+  (SELECT count(*) FROM coverage_alerts WHERE status = 'open'),
+  count(*) FILTER (WHERE created_at >= $1 AND route_support_level IN ('raw_only','unknown_route','unsupported'))
+FROM traces`, since).Scan(
+		&summary.RequestCount24h,
+		&summary.SuccessCount24h,
+		&summary.ErrorCount24h,
+		&summary.TotalTokens24h,
+		&summary.OpenAnomalies,
+		&summary.OpenCoverageAlerts,
+		&summary.RawOnlyTraceCount24h,
+	)
+	return summary, err
+}
+
+func (r Repository) ListUsageAggregates(ctx context.Context, filter UsageFilter) ([]UsageBucket, error) {
+	if r.db == nil {
+		return nil, ErrAdminDBRequired
+	}
+	limit := filter.Limit
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	where := []string{"1=1"}
+	args := []any{}
+	add := func(clause string, value any) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(clause, len(args)))
+	}
+	if filter.EmployeeNo != "" {
+		add("employee_no = $%d", filter.EmployeeNo)
+	}
+	if filter.TokenFingerprint != "" {
+		add("token_fingerprint = $%d", filter.TokenFingerprint)
+	}
+	if filter.Model != "" {
+		add("model = $%d", filter.Model)
+	}
+	if filter.RoutePattern != "" {
+		add("route_pattern = $%d", filter.RoutePattern)
+	}
+	if filter.BucketSize != "" {
+		add("bucket_size = $%d", filter.BucketSize)
+	}
+	args = append(args, limit)
+	query := fmt.Sprintf(`
+SELECT bucket_start::text, bucket_size, employee_no, token_name_snapshot, model, route_pattern,
+       request_count, success_count, error_count, total_tokens, estimated_cost
+FROM usage_aggregates
+WHERE %s
+ORDER BY bucket_start DESC
+LIMIT $%d`, strings.Join(where, " AND "), len(args))
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []UsageBucket{}
+	for rows.Next() {
+		var item UsageBucket
+		if err := rows.Scan(
+			&item.BucketStart,
+			&item.BucketSize,
+			&item.EmployeeNo,
+			&item.FingerprintDisplay,
+			&item.Model,
+			&item.RoutePattern,
+			&item.RequestCount,
+			&item.SuccessCount,
+			&item.ErrorCount,
+			&item.TotalTokens,
+			&item.EstimatedCost,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r Repository) InsertContextCatalogEntry(ctx context.Context, entry ContextCatalogEntry) error {
+	if r.db == nil {
+		return ErrAdminDBRequired
+	}
+	_, err := r.db.Exec(ctx, `
+INSERT INTO context_catalog (
+  context_type, name, description, keywords, aliases, owner,
+  expected_task_categories, expected_models, expected_usage_level, active,
+  created_by, updated_by
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+ON CONFLICT (context_type, name) DO UPDATE SET
+  description = EXCLUDED.description,
+  keywords = EXCLUDED.keywords,
+  aliases = EXCLUDED.aliases,
+  owner = EXCLUDED.owner,
+  expected_task_categories = EXCLUDED.expected_task_categories,
+  expected_models = EXCLUDED.expected_models,
+  expected_usage_level = EXCLUDED.expected_usage_level,
+  active = EXCLUDED.active,
+  updated_by = EXCLUDED.updated_by,
+  updated_at = now()`,
+		entry.ContextType,
+		entry.Name,
+		entry.Description,
+		entry.Keywords,
+		entry.Aliases,
+		entry.Owner,
+		entry.ExpectedTaskCategories,
+		entry.ExpectedModels,
+		entry.ExpectedUsageLevel,
+		entry.Active,
+		entry.CreatedBy,
+		entry.UpdatedBy,
+	)
+	return err
+}
+
+func (r Repository) GetTraceDetail(ctx context.Context, traceID string) (TraceDetail, error) {
+	if r.db == nil {
+		return TraceDetail{}, ErrAdminDBRequired
+	}
+	var detail TraceDetail
+	err := r.db.QueryRow(ctx, `
+SELECT trace_id, method, path, route_pattern, protocol_family, status_code,
+       employee_no_snapshot, fingerprint_display, model_requested, usage_total_tokens,
+       created_at::text, request_raw_ref, response_raw_ref, request_headers_ref,
+       response_headers_ref, identity_resolution_status, analysis_status
+FROM traces
+WHERE trace_id = $1
+LIMIT 1`, traceID).Scan(
+		&detail.TraceID,
+		&detail.Method,
+		&detail.Path,
+		&detail.RoutePattern,
+		&detail.ProtocolFamily,
+		&detail.StatusCode,
+		&detail.EmployeeNo,
+		&detail.FingerprintDisplay,
+		&detail.ModelRequested,
+		&detail.UsageTotalTokens,
+		&detail.CreatedAt,
+		&detail.RequestRawRef,
+		&detail.ResponseRawRef,
+		&detail.RequestHeadersRef,
+		&detail.ResponseHeadersRef,
+		&detail.IdentityResolutionStatus,
+		&detail.AnalysisStatus,
+	)
+	if err != nil {
+		return TraceDetail{}, err
+	}
+	messages, err := r.listNormalizedMessages(ctx, traceID)
+	if err != nil {
+		return TraceDetail{}, err
+	}
+	results, err := r.listAnalysisResults(ctx, traceID)
+	if err != nil {
+		return TraceDetail{}, err
+	}
+	detail.NormalizedMessages = messages
+	detail.AnalysisResults = results
+	return detail, nil
+}
+
+func (r Repository) listNormalizedMessages(ctx context.Context, traceID string) ([]NormalizedMessageSummary, error) {
+	rows, err := r.db.Query(ctx, `
+SELECT direction, sequence_index, role, modality, content_text, media_url,
+       protocol_item_type, token_count_estimate
+FROM normalized_messages
+WHERE trace_id = $1
+ORDER BY sequence_index ASC`, traceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []NormalizedMessageSummary{}
+	for rows.Next() {
+		var item NormalizedMessageSummary
+		if err := rows.Scan(
+			&item.Direction,
+			&item.SequenceIndex,
+			&item.Role,
+			&item.Modality,
+			&item.ContentText,
+			&item.MediaURL,
+			&item.ProtocolItemType,
+			&item.TokenCountEstimate,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r Repository) listAnalysisResults(ctx context.Context, traceID string) ([]AnalysisResultSummary, error) {
+	rows, err := r.db.Query(ctx, `
+SELECT analyzer_name, category, label, score::text, confidence::text,
+       severity, result_json::text, created_at::text
+FROM analysis_results
+WHERE trace_id = $1
+ORDER BY created_at ASC`, traceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AnalysisResultSummary{}
+	for rows.Next() {
+		var item AnalysisResultSummary
+		if err := rows.Scan(
+			&item.AnalyzerName,
+			&item.Category,
+			&item.Label,
+			&item.Score,
+			&item.Confidence,
+			&item.Severity,
+			&item.ResultJSON,
+			&item.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r Repository) ListContextCatalog(ctx context.Context, activeOnly bool, limit int) ([]ContextCatalogEntry, error) {
+	if r.db == nil {
+		return nil, ErrAdminDBRequired
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	where := "1=1"
+	args := []any{limit}
+	if activeOnly {
+		where = "active = true"
+	}
+	rows, err := r.db.Query(ctx, fmt.Sprintf(`
+SELECT id, context_type, name, description, keywords, aliases, owner,
+       expected_task_categories, expected_models, expected_usage_level, active,
+       created_by, updated_by, created_at::text, updated_at::text
+FROM context_catalog
+WHERE %s
+ORDER BY context_type, name
+LIMIT $1`, where), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ContextCatalogEntry{}
+	for rows.Next() {
+		var item ContextCatalogEntry
+		if err := rows.Scan(
+			&item.ID,
+			&item.ContextType,
+			&item.Name,
+			&item.Description,
+			(*pgtype.FlatArray[string])(&item.Keywords),
+			(*pgtype.FlatArray[string])(&item.Aliases),
+			&item.Owner,
+			(*pgtype.FlatArray[string])(&item.ExpectedTaskCategories),
+			(*pgtype.FlatArray[string])(&item.ExpectedModels),
+			&item.ExpectedUsageLevel,
+			&item.Active,
+			&item.CreatedBy,
+			&item.UpdatedBy,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r Repository) ListAuditActionLogs(ctx context.Context, limit int) ([]AuditActionLogSummary, error) {
+	if r.db == nil {
+		return nil, ErrAdminDBRequired
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	rows, err := r.db.Query(ctx, `
+SELECT actor_username, action, target_type, target_id, fingerprint_display,
+       trace_id, metadata_json::text, created_at::text
+FROM audit_action_logs
+ORDER BY created_at DESC
+LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AuditActionLogSummary{}
+	for rows.Next() {
+		var item AuditActionLogSummary
+		if err := rows.Scan(
+			&item.ActorUsername,
+			&item.Action,
+			&item.TargetType,
+			&item.TargetID,
+			&item.FingerprintDisplay,
+			&item.TraceID,
+			&item.MetadataJSON,
+			&item.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }

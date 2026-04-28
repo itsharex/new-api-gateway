@@ -170,6 +170,91 @@ func TestRepositoryLookupTokenSummaryToleratesMissingIdentityCacheRow(t *testing
 	}
 }
 
+func TestRepositoryOverviewSummaryUsesBoundedWindows(t *testing.T) {
+	db := &recordingAdminDB{
+		rowQueue: []pgx.Row{
+			scanFuncRow{scan: func(dest ...any) error {
+				*(dest[0].(*int64)) = 12
+				*(dest[1].(*int64)) = 10
+				*(dest[2].(*int64)) = 2
+				*(dest[3].(*int64)) = 3400
+				*(dest[4].(*int64)) = 3
+				*(dest[5].(*int64)) = 4
+				*(dest[6].(*int64)) = 1
+				return nil
+			}},
+		},
+	}
+	repo := NewRepository(db)
+
+	summary, err := repo.OverviewSummary(context.Background(), time.Unix(1000, 0).UTC())
+
+	if err != nil {
+		t.Fatalf("OverviewSummary error: %v", err)
+	}
+	if summary.RequestCount24h != 12 || summary.TotalTokens24h != 3400 || summary.OpenCoverageAlerts != 4 {
+		t.Fatalf("summary = %#v", summary)
+	}
+	if !strings.Contains(db.querySQL, "created_at >= $1") {
+		t.Fatalf("overview query missing bounded window: %s", db.querySQL)
+	}
+}
+
+func TestRepositoryListUsageAggregatesCapsLimitAndBindsFilters(t *testing.T) {
+	db := &recordingAdminDB{}
+	repo := NewRepository(db)
+
+	_, err := repo.ListUsageAggregates(context.Background(), UsageFilter{
+		EmployeeNo:       "E10001",
+		TokenFingerprint: "fingerprint-value",
+		BucketSize:       "hour",
+		Limit:            500,
+	})
+
+	if err != nil {
+		t.Fatalf("ListUsageAggregates error: %v", err)
+	}
+	if !strings.Contains(db.querySQL, "FROM usage_aggregates") {
+		t.Fatalf("query = %s", db.querySQL)
+	}
+	if strings.Contains(db.querySQL, "500") {
+		t.Fatalf("query interpolated limit instead of binding/capping: %s", db.querySQL)
+	}
+	if got := db.queryArgs[len(db.queryArgs)-1]; got != 100 {
+		t.Fatalf("limit arg = %#v, want capped 100", got)
+	}
+}
+
+func TestRepositoryInsertContextCatalogEntryWritesAuditorIdentity(t *testing.T) {
+	db := &recordingAdminDB{}
+	repo := NewRepository(db)
+
+	err := repo.InsertContextCatalogEntry(context.Background(), ContextCatalogEntry{
+		ContextType:            "repo",
+		Name:                   "new-api-gateway",
+		Description:            "Audit gateway repository",
+		Keywords:               []string{"gateway", "new-api"},
+		Aliases:                []string{"audit gateway"},
+		Owner:                  "platform",
+		ExpectedTaskCategories: []string{"coding", "debugging"},
+		ExpectedModels:         []string{"gpt-5.2"},
+		ExpectedUsageLevel:     "medium",
+		Active:                 true,
+		CreatedBy:              "alice",
+		UpdatedBy:              "alice",
+	})
+
+	if err != nil {
+		t.Fatalf("InsertContextCatalogEntry error: %v", err)
+	}
+	if !strings.Contains(db.sql, "INSERT INTO context_catalog") {
+		t.Fatalf("sql = %s", db.sql)
+	}
+	if !strings.Contains(db.sql, "ON CONFLICT (context_type, name) DO UPDATE") {
+		t.Fatalf("missing upsert clause: %s", db.sql)
+	}
+}
+
 type recordingAdminDB struct {
 	sql       string
 	args      []any
