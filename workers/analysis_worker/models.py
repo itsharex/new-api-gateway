@@ -29,6 +29,7 @@ class TraceCapturedJob:
     fingerprint_display: str = ""
     new_api_token_id: int = 0
     token_name_snapshot: str = ""
+    identity_resolution_status: str = ""
     status_code: int = 0
     upstream_status_code: int = 0
     stream: bool = False

@@ -164,6 +164,9 @@ func TestProxyPublishesTraceCapturedJobAfterTracePersistence(t *testing.T) {
 	if job.EmployeeNo != "E12345" {
 		t.Fatalf("job EmployeeNo = %q", job.EmployeeNo)
 	}
+	if job.IdentityResolutionStatus != "resolved" {
+		t.Fatalf("job IdentityResolutionStatus = %q", job.IdentityResolutionStatus)
+	}
 }
 
 func TestProxyPublishesTraceCapturedJobAfterRawEvidencePersistence(t *testing.T) {

@@ -31,14 +31,14 @@ def detect_anomalies(job: TraceCapturedJob) -> list[AnomalyAlert]:
             threshold_value=0,
             reason="identity was unresolved while upstream returned a successful response",
         ))
-    if job.employee_no and job.token_name_snapshot and job.employee_no != job.token_name_snapshot:
+    if job.identity_resolution_status == "invalid_employee_no":
         alerts.append(_anomaly(
             job,
             "invalid_employee_no",
             "high",
             observed_value=1,
             threshold_value=0,
-            reason="resolved employee number does not match the new-api token name snapshot",
+            reason="identity resolver marked the token name snapshot as an invalid employee number",
         ))
     if job.usage_total_tokens > HIGH_TRACE_TOKEN_THRESHOLD:
         alerts.append(_anomaly(
@@ -49,7 +49,7 @@ def detect_anomalies(job: TraceCapturedJob) -> list[AnomalyAlert]:
             threshold_value=HIGH_TRACE_TOKEN_THRESHOLD,
             reason=f"single trace used {job.usage_total_tokens} tokens, exceeding {HIGH_TRACE_TOKEN_THRESHOLD}",
         ))
-    if job.capture_mode == "raw_only" and job.response_body_size > RAW_ONLY_RESPONSE_BYTES_THRESHOLD:
+    if job.capture_mode in {"raw_only", "raw_and_minimal"} and job.response_body_size > RAW_ONLY_RESPONSE_BYTES_THRESHOLD:
         alerts.append(_anomaly(
             job,
             "raw_only_large_response",

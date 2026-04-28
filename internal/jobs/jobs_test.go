@@ -25,29 +25,30 @@ func TestRedisListPublisherPushesTraceCapturedEnvelope(t *testing.T) {
 	publisher := NewRedisListPublisher(client, "analysis_jobs")
 
 	job := NewTraceCaptured(TraceCapturedInput{
-		TraceID:             "trace_1",
-		RoutePattern:        "/v1/chat/completions",
-		ProtocolFamily:      "openai_chat",
-		CaptureMode:         "raw_and_normalized",
-		EmployeeNo:          "E12345",
-		TokenFingerprint:    "tkfp_raw_value",
-		FingerprintDisplay:  "tkfp_display",
-		NewAPITokenID:       42,
-		TokenNameSnapshot:   "E12345",
-		StatusCode:          200,
-		UpstreamStatusCode:  200,
-		Stream:              false,
-		RequestStartedAt:    "2026-04-28T13:45:22Z",
-		RequestBodySize:     128,
-		ResponseBodySize:    256,
-		RequestRawRef:       "raw/trace_1/request_body.bin",
-		RequestHeadersRef:   "raw/trace_1/request_headers.bin",
-		ResponseRawRef:      "raw/trace_1/response_body.bin",
-		ResponseHeadersRef:  "raw/trace_1/response_headers.bin",
-		RequestContentType:  "application/json",
-		ResponseContentType: "application/json",
-		ModelRequested:      "gpt-test",
-		UsageTotalTokens:    18,
+		TraceID:                  "trace_1",
+		RoutePattern:             "/v1/chat/completions",
+		ProtocolFamily:           "openai_chat",
+		CaptureMode:              "raw_and_normalized",
+		EmployeeNo:               "E12345",
+		TokenFingerprint:         "tkfp_raw_value",
+		FingerprintDisplay:       "tkfp_display",
+		NewAPITokenID:            42,
+		TokenNameSnapshot:        "E12345",
+		IdentityResolutionStatus: "invalid_employee_no",
+		StatusCode:               200,
+		UpstreamStatusCode:       200,
+		Stream:                   false,
+		RequestStartedAt:         "2026-04-28T13:45:22Z",
+		RequestBodySize:          128,
+		ResponseBodySize:         256,
+		RequestRawRef:            "raw/trace_1/request_body.bin",
+		RequestHeadersRef:        "raw/trace_1/request_headers.bin",
+		ResponseRawRef:           "raw/trace_1/response_body.bin",
+		ResponseHeadersRef:       "raw/trace_1/response_headers.bin",
+		RequestContentType:       "application/json",
+		ResponseContentType:      "application/json",
+		ModelRequested:           "gpt-test",
+		UsageTotalTokens:         18,
 	})
 	err := publisher.PublishTraceCaptured(context.Background(), job)
 	if err != nil {
@@ -69,7 +70,7 @@ func TestRedisListPublisherPushesTraceCapturedEnvelope(t *testing.T) {
 	if decoded.TokenFingerprint != "tkfp_raw_value" || decoded.FingerprintDisplay != "tkfp_display" {
 		t.Fatalf("fingerprint fields = %+v", decoded)
 	}
-	if decoded.NewAPITokenID != 42 || decoded.TokenNameSnapshot != "E12345" {
+	if decoded.NewAPITokenID != 42 || decoded.TokenNameSnapshot != "E12345" || decoded.IdentityResolutionStatus != "invalid_employee_no" {
 		t.Fatalf("token snapshot fields = %+v", decoded)
 	}
 	if decoded.StatusCode != 200 || decoded.UpstreamStatusCode != 200 || decoded.Stream {

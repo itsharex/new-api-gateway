@@ -24,6 +24,7 @@ def test_parse_job_keeps_gateway_contract_fields():
         "fingerprint_display": "tkfp_display",
         "new_api_token_id": 42,
         "token_name_snapshot": "E10001",
+        "identity_resolution_status": "resolved",
         "request_body_size": 128,
         "response_body_size": 256
     }))
@@ -51,6 +52,7 @@ def test_parse_job_keeps_gateway_contract_fields():
         fingerprint_display="tkfp_display",
         new_api_token_id=42,
         token_name_snapshot="E10001",
+        identity_resolution_status="resolved",
         status_code=0,
         upstream_status_code=0,
         stream=False,

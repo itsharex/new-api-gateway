@@ -91,6 +91,16 @@ def process_contract_stdin() -> int:
     payload = sys.stdin.read().strip()
     if not payload:
         return 0
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise SystemExit("service config required for stdin jobs outside contract validation") from exc
+    if not (
+        isinstance(data, dict)
+        and data.get("type") == "trace_captured"
+        and data.get("trace_id") == "trace_example"
+    ):
+        raise SystemExit("service config required for stdin jobs outside contract validation")
     result = process_contract_validation_line(payload)
     print(json.dumps(result, sort_keys=True))
     return 0

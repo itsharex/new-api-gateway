@@ -137,3 +137,28 @@ def test_contract_example_processes_from_stdin_without_services(monkeypatch):
     assert response["worker_status"] == "processed"
     assert response["anomaly_count"] == 0
     assert response["coverage_alert_count"] == 0
+
+
+def test_arbitrary_stdin_without_services_requires_config(monkeypatch):
+    worker_dir = Path(__file__).parents[1]
+    monkeypatch.delenv("EVIDENCE_STORAGE_DIR", raising=False)
+    monkeypatch.delenv("POSTGRES_DSN", raising=False)
+
+    completed = subprocess.run(
+        [sys.executable, "main.py"],
+        cwd=worker_dir,
+        input=json.dumps({
+            "type": "trace_captured",
+            "trace_id": "trace_prod",
+            "route_pattern": "/v1/chat/completions",
+            "protocol_family": "openai_chat",
+            "capture_mode": "raw_only",
+            "employee_no": "E10001",
+        }),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "config" in completed.stderr.lower()

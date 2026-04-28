@@ -9,6 +9,7 @@
   "fingerprint_display": "tkfp_display",
   "new_api_token_id": 42,
   "token_name_snapshot": "E12345",
+  "identity_resolution_status": "resolved",
   "status_code": 200,
   "upstream_status_code": 200,
   "stream": false,

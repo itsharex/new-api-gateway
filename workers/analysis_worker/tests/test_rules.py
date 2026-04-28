@@ -58,6 +58,27 @@ def test_detects_high_trace_tokens():
     assert alerts[0].sample_trace_ids == ["trace_1"]
 
 
+def test_token_name_snapshot_difference_does_not_imply_invalid_employee_number():
+    alerts = detect_anomalies(job(
+        employee_no="E10001",
+        token_name_snapshot="Alice API Token",
+        identity_resolution_status="resolved",
+    ))
+
+    assert [alert.anomaly_type for alert in alerts] == []
+
+
+def test_detects_invalid_employee_number_from_identity_resolution_status():
+    alerts = detect_anomalies(job(
+        employee_no="E10001",
+        token_name_snapshot="Alice API Token",
+        identity_resolution_status="invalid_employee_no",
+    ))
+
+    assert [alert.anomaly_type for alert in alerts] == ["invalid_employee_no"]
+    assert alerts[0].severity == "high"
+
+
 def test_detects_raw_only_large_response():
     alerts = detect_anomalies(job(
         capture_mode="raw_only",
@@ -69,6 +90,18 @@ def test_detects_raw_only_large_response():
 
     assert [alert.anomaly_type for alert in alerts] == ["raw_only_large_response"]
     assert "raw-only" in alerts[0].reason
+
+
+def test_detects_raw_and_minimal_large_response():
+    alerts = detect_anomalies(job(
+        capture_mode="raw_and_minimal",
+        usage_total_tokens=0,
+        response_body_size=2 * 1024 * 1024,
+        route_pattern="/mj/*",
+        protocol_family="midjourney",
+    ))
+
+    assert [alert.anomaly_type for alert in alerts] == ["raw_only_large_response"]
 
 
 def test_detects_normalization_gap_when_no_messages_for_normalized_route():
