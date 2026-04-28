@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func TestRepositoryCreateSessionStoresOnlySessionID(t *testing.T) {
@@ -261,12 +262,183 @@ func TestRepositoryInsertContextCatalogEntryWritesAuditorIdentity(t *testing.T) 
 	}
 }
 
+func TestRepositoryGetTraceDetailScansMessagesAndAnalysisResults(t *testing.T) {
+	db := &recordingAdminDB{
+		rowQueue: []pgx.Row{
+			scanFuncRow{scan: func(dest ...any) error {
+				*(dest[0].(*string)) = "trace-123"
+				*(dest[1].(*string)) = "POST"
+				*(dest[2].(*string)) = "/v1/chat/completions"
+				*(dest[3].(*string)) = "/v1/chat/completions"
+				*(dest[4].(*string)) = "openai"
+				*(dest[5].(*int)) = 200
+				*(dest[6].(*string)) = "E10001"
+				*(dest[7].(*string)) = "prod key"
+				*(dest[8].(*string)) = "gpt-5.2"
+				*(dest[9].(*int)) = 321
+				*(dest[10].(*string)) = "2026-04-28 10:00:00+00"
+				*(dest[11].(*string)) = "raw/request.json"
+				*(dest[12].(*string)) = "raw/response.json"
+				*(dest[13].(*string)) = "raw/request-headers.json"
+				*(dest[14].(*string)) = "raw/response-headers.json"
+				*(dest[15].(*string)) = "resolved"
+				*(dest[16].(*string)) = "complete"
+				return nil
+			}},
+		},
+		rowsQueue: []pgx.Rows{
+			&scanRows{scans: []func(dest ...any) error{
+				func(dest ...any) error {
+					*(dest[0].(*string)) = "request"
+					*(dest[1].(*int)) = 0
+					*(dest[2].(*string)) = "user"
+					*(dest[3].(*string)) = "text"
+					*(dest[4].(*string)) = "hello"
+					*(dest[5].(*string)) = ""
+					*(dest[6].(*string)) = "message"
+					*(dest[7].(*int)) = 8
+					return nil
+				},
+			}},
+			&scanRows{scans: []func(dest ...any) error{
+				func(dest ...any) error {
+					*(dest[0].(*string)) = "work_relevance"
+					*(dest[1].(*string)) = "work_relevance"
+					*(dest[2].(*string)) = "work"
+					*(dest[3].(*string)) = "0.92"
+					*(dest[4].(*string)) = "0.88"
+					*(dest[5].(*string)) = "low"
+					*(dest[6].(*string)) = `{"matched":"gateway"}`
+					*(dest[7].(*string)) = "2026-04-28 10:01:00+00"
+					return nil
+				},
+			}},
+		},
+	}
+	repo := NewRepository(db)
+
+	detail, err := repo.GetTraceDetail(context.Background(), "trace-123")
+
+	if err != nil {
+		t.Fatalf("GetTraceDetail error: %v", err)
+	}
+	if detail.TraceID != "trace-123" || detail.EmployeeNo != "E10001" || detail.RequestRawRef != "raw/request.json" {
+		t.Fatalf("detail representative fields = %#v", detail)
+	}
+	if len(detail.NormalizedMessages) != 1 || detail.NormalizedMessages[0].ContentText != "hello" || detail.NormalizedMessages[0].TokenCountEstimate != 8 {
+		t.Fatalf("normalized messages = %#v", detail.NormalizedMessages)
+	}
+	if len(detail.AnalysisResults) != 1 || detail.AnalysisResults[0].Label != "work" || detail.AnalysisResults[0].ResultJSON != `{"matched":"gateway"}` {
+		t.Fatalf("analysis results = %#v", detail.AnalysisResults)
+	}
+	if !db.queried("FROM normalized_messages") || !db.queried("FROM analysis_results") {
+		t.Fatalf("expected detail helper queries, got %#v", db.querySQLs)
+	}
+}
+
+func TestRepositoryListContextCatalogScansArraysAndCapsLimit(t *testing.T) {
+	db := &recordingAdminDB{
+		rowsQueue: []pgx.Rows{
+			&scanRows{scans: []func(dest ...any) error{
+				func(dest ...any) error {
+					*(dest[0].(*int64)) = 7
+					*(dest[1].(*string)) = "repo"
+					*(dest[2].(*string)) = "new-api-gateway"
+					*(dest[3].(*string)) = "Audit gateway repository"
+					*(dest[4].(*pgtype.FlatArray[string])) = pgtype.FlatArray[string]{"gateway", "new-api"}
+					*(dest[5].(*pgtype.FlatArray[string])) = pgtype.FlatArray[string]{"audit gateway"}
+					*(dest[6].(*string)) = "platform"
+					*(dest[7].(*pgtype.FlatArray[string])) = pgtype.FlatArray[string]{"coding", "debugging"}
+					*(dest[8].(*pgtype.FlatArray[string])) = pgtype.FlatArray[string]{"gpt-5.2"}
+					*(dest[9].(*string)) = "medium"
+					*(dest[10].(*bool)) = true
+					*(dest[11].(*string)) = "alice"
+					*(dest[12].(*string)) = "bob"
+					*(dest[13].(*string)) = "2026-04-28 09:00:00+00"
+					*(dest[14].(*string)) = "2026-04-28 10:00:00+00"
+					return nil
+				},
+			}},
+		},
+	}
+	repo := NewRepository(db)
+
+	items, err := repo.ListContextCatalog(context.Background(), true, 500)
+
+	if err != nil {
+		t.Fatalf("ListContextCatalog error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %#v", items)
+	}
+	item := items[0]
+	if item.ID != 7 || item.Name != "new-api-gateway" || item.Owner != "platform" || !item.Active {
+		t.Fatalf("context catalog representative fields = %#v", item)
+	}
+	if strings.Join(item.Keywords, ",") != "gateway,new-api" || strings.Join(item.ExpectedModels, ",") != "gpt-5.2" {
+		t.Fatalf("array fields = %#v", item)
+	}
+	if got := db.queryArgs[len(db.queryArgs)-1]; got != 100 {
+		t.Fatalf("limit arg = %#v, want capped 100", got)
+	}
+}
+
+func TestRepositoryListAuditActionLogsScansRowsAndCapsLimit(t *testing.T) {
+	db := &recordingAdminDB{
+		rowsQueue: []pgx.Rows{
+			&scanRows{scans: []func(dest ...any) error{
+				func(dest ...any) error {
+					*(dest[0].(*string)) = "alice"
+					*(dest[1].(*string)) = "api_key_lookup"
+					*(dest[2].(*string)) = "token"
+					*(dest[3].(*string)) = "tkfp_example"
+					*(dest[4].(*string)) = "prod key"
+					*(dest[5].(*string)) = "trace-123"
+					*(dest[6].(*string)) = `{"result":"hit"}`
+					*(dest[7].(*string)) = "2026-04-28 10:00:00+00"
+					return nil
+				},
+			}},
+		},
+	}
+	repo := NewRepository(db)
+
+	items, err := repo.ListAuditActionLogs(context.Background(), 500)
+
+	if err != nil {
+		t.Fatalf("ListAuditActionLogs error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %#v", items)
+	}
+	item := items[0]
+	if item.ActorUsername != "alice" || item.Action != "api_key_lookup" || item.MetadataJSON != `{"result":"hit"}` {
+		t.Fatalf("audit log representative fields = %#v", item)
+	}
+	if got := db.queryArgs[len(db.queryArgs)-1]; got != 100 {
+		t.Fatalf("limit arg = %#v, want capped 100", got)
+	}
+}
+
+func TestRepositoryDetailHelpersRequireDB(t *testing.T) {
+	repo := NewRepository(nil)
+
+	if _, err := repo.listNormalizedMessages(context.Background(), "trace-123"); !errors.Is(err, ErrAdminDBRequired) {
+		t.Fatalf("listNormalizedMessages error = %v, want ErrAdminDBRequired", err)
+	}
+	if _, err := repo.listAnalysisResults(context.Background(), "trace-123"); !errors.Is(err, ErrAdminDBRequired) {
+		t.Fatalf("listAnalysisResults error = %v, want ErrAdminDBRequired", err)
+	}
+}
+
 type recordingAdminDB struct {
 	sql       string
 	args      []any
 	querySQL  string
+	querySQLs []string
 	queryArgs []any
 	rows      pgx.Rows
+	rowsQueue []pgx.Rows
 	row       pgx.Row
 	rowQueue  []pgx.Row
 }
@@ -279,7 +451,13 @@ func (db *recordingAdminDB) Exec(ctx context.Context, sql string, args ...any) (
 
 func (db *recordingAdminDB) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
 	db.querySQL = sql
+	db.querySQLs = append(db.querySQLs, sql)
 	db.queryArgs = append([]any(nil), args...)
+	if len(db.rowsQueue) > 0 {
+		rows := db.rowsQueue[0]
+		db.rowsQueue = db.rowsQueue[1:]
+		return rows, nil
+	}
 	if db.rows != nil {
 		return db.rows, nil
 	}
@@ -300,6 +478,15 @@ func (db *recordingAdminDB) QueryRow(ctx context.Context, sql string, args ...an
 	return fakeRow{}
 }
 
+func (db *recordingAdminDB) queried(fragment string) bool {
+	for _, sql := range db.querySQLs {
+		if strings.Contains(sql, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
 type fakeRows struct{}
 
 func (r *fakeRows) Close()                                       {}
@@ -315,6 +502,34 @@ func (r *fakeRows) Conn() *pgx.Conn                              { return nil }
 type fakeRow struct{}
 
 func (fakeRow) Scan(dest ...any) error { return pgx.ErrNoRows }
+
+type scanRows struct {
+	scans   []func(dest ...any) error
+	current int
+}
+
+func (r *scanRows) Close()                                       {}
+func (r *scanRows) Err() error                                   { return nil }
+func (r *scanRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (r *scanRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (r *scanRows) Values() ([]any, error)                       { return nil, nil }
+func (r *scanRows) RawValues() [][]byte                          { return nil }
+func (r *scanRows) Conn() *pgx.Conn                              { return nil }
+
+func (r *scanRows) Next() bool {
+	if r.current >= len(r.scans) {
+		return false
+	}
+	r.current++
+	return true
+}
+
+func (r *scanRows) Scan(dest ...any) error {
+	if r.current == 0 || r.current > len(r.scans) {
+		return pgx.ErrNoRows
+	}
+	return r.scans[r.current-1](dest...)
+}
 
 type scanErrorRow struct {
 	err error

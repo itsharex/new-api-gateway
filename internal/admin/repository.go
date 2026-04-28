@@ -468,6 +468,9 @@ LIMIT 1`, traceID).Scan(
 }
 
 func (r Repository) listNormalizedMessages(ctx context.Context, traceID string) ([]NormalizedMessageSummary, error) {
+	if r.db == nil {
+		return nil, ErrAdminDBRequired
+	}
 	rows, err := r.db.Query(ctx, `
 SELECT direction, sequence_index, role, modality, content_text, media_url,
        protocol_item_type, token_count_estimate
@@ -499,6 +502,9 @@ ORDER BY sequence_index ASC`, traceID)
 }
 
 func (r Repository) listAnalysisResults(ctx context.Context, traceID string) ([]AnalysisResultSummary, error) {
+	if r.db == nil {
+		return nil, ErrAdminDBRequired
+	}
 	rows, err := r.db.Query(ctx, `
 SELECT analyzer_name, category, label, score::text, confidence::text,
        severity, result_json::text, created_at::text
