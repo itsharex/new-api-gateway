@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadFromEnvRequiresCoreValues(t *testing.T) {
@@ -200,6 +201,73 @@ func TestLoadFromEnvRejectsMalformedRedisAddr(t *testing.T) {
 
 			_, err := LoadFromEnv()
 			assertErrorContains(t, err, "REDIS_ADDR")
+		})
+	}
+}
+
+func TestLoadFromEnvLoadsOperationalDefaults(t *testing.T) {
+	setValidEnv(t)
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv returned error: %v", err)
+	}
+	if cfg.OpsCheckTimeout != 2*time.Second {
+		t.Fatalf("OpsCheckTimeout = %v, want 2s", cfg.OpsCheckTimeout)
+	}
+	if cfg.OpsWorkerHeartbeatMaxAge != 5*time.Minute {
+		t.Fatalf("OpsWorkerHeartbeatMaxAge = %v, want 5m", cfg.OpsWorkerHeartbeatMaxAge)
+	}
+	if cfg.OpsQueueLagWarnThreshold != 1000 {
+		t.Fatalf("OpsQueueLagWarnThreshold = %d, want 1000", cfg.OpsQueueLagWarnThreshold)
+	}
+	if !cfg.OpsMetricsEnabled {
+		t.Fatal("OpsMetricsEnabled = false, want true")
+	}
+}
+
+func TestLoadFromEnvLoadsOperationalOverrides(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("OPS_CHECK_TIMEOUT", "750ms")
+	t.Setenv("OPS_WORKER_HEARTBEAT_MAX_AGE", "90s")
+	t.Setenv("OPS_QUEUE_LAG_WARN_THRESHOLD", "25")
+	t.Setenv("OPS_METRICS_ENABLED", "false")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv returned error: %v", err)
+	}
+	if cfg.OpsCheckTimeout != 750*time.Millisecond {
+		t.Fatalf("OpsCheckTimeout = %v", cfg.OpsCheckTimeout)
+	}
+	if cfg.OpsWorkerHeartbeatMaxAge != 90*time.Second {
+		t.Fatalf("OpsWorkerHeartbeatMaxAge = %v", cfg.OpsWorkerHeartbeatMaxAge)
+	}
+	if cfg.OpsQueueLagWarnThreshold != 25 {
+		t.Fatalf("OpsQueueLagWarnThreshold = %d", cfg.OpsQueueLagWarnThreshold)
+	}
+	if cfg.OpsMetricsEnabled {
+		t.Fatal("OpsMetricsEnabled = true, want false")
+	}
+}
+
+func TestLoadFromEnvRejectsInvalidOperationalSettings(t *testing.T) {
+	for _, tc := range []struct {
+		key   string
+		value string
+		want  string
+	}{
+		{key: "OPS_CHECK_TIMEOUT", value: "0s", want: "OPS_CHECK_TIMEOUT"},
+		{key: "OPS_WORKER_HEARTBEAT_MAX_AGE", value: "-1s", want: "OPS_WORKER_HEARTBEAT_MAX_AGE"},
+		{key: "OPS_QUEUE_LAG_WARN_THRESHOLD", value: "-1", want: "OPS_QUEUE_LAG_WARN_THRESHOLD"},
+		{key: "OPS_METRICS_ENABLED", value: "sometimes", want: "OPS_METRICS_ENABLED"},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			setValidEnv(t)
+			t.Setenv(tc.key, tc.value)
+
+			_, err := LoadFromEnv()
+			assertErrorContains(t, err, tc.want)
 		})
 	}
 }

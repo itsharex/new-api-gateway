@@ -10,21 +10,26 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Config struct {
-	ListenAddr         string
-	NewAPIBaseURL      string
-	AuditHMACSecret    string
-	EvidenceStorageDir string
-	PostgresDSN        string
-	RedisAddr          string
-	EmployeeNoPattern  *regexp.Regexp
-	AdminSessionSecret string
-	AdminCookieName    string
-	AdminCookieSecure  bool
+	ListenAddr               string
+	NewAPIBaseURL            string
+	AuditHMACSecret          string
+	EvidenceStorageDir       string
+	PostgresDSN              string
+	RedisAddr                string
+	EmployeeNoPattern        *regexp.Regexp
+	AdminSessionSecret       string
+	AdminCookieName          string
+	AdminCookieSecure        bool
+	OpsCheckTimeout          time.Duration
+	OpsWorkerHeartbeatMaxAge time.Duration
+	OpsQueueLagWarnThreshold int64
+	OpsMetricsEnabled        bool
 }
 
 func LoadFromEnv() (Config, error) {
@@ -86,6 +91,27 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, fmt.Errorf("invalid ADMIN_COOKIE_SECURE: must be true or false")
 	}
 
+	opsCheckTimeout, err := getenvDurationDefault("OPS_CHECK_TIMEOUT", 2*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	opsWorkerHeartbeatMaxAge, err := getenvDurationDefault("OPS_WORKER_HEARTBEAT_MAX_AGE", 5*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	opsQueueLagWarnThreshold, err := getenvInt64Default("OPS_QUEUE_LAG_WARN_THRESHOLD", 1000)
+	if err != nil {
+		return Config{}, err
+	}
+	opsMetricsEnabledRaw, err := getenvDefault("OPS_METRICS_ENABLED", "true")
+	if err != nil {
+		return Config{}, err
+	}
+	opsMetricsEnabled, err := strconv.ParseBool(opsMetricsEnabledRaw)
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid OPS_METRICS_ENABLED: must be true or false")
+	}
+
 	evidenceStorageDir, err := requiredEnv("EVIDENCE_STORAGE_DIR")
 	if err != nil {
 		return Config{}, err
@@ -108,16 +134,20 @@ func LoadFromEnv() (Config, error) {
 	}
 
 	cfg := Config{
-		ListenAddr:         listenAddr,
-		NewAPIBaseURL:      newAPIBaseURL,
-		AuditHMACSecret:    auditHMACSecret,
-		EvidenceStorageDir: evidenceStorageDir,
-		PostgresDSN:        postgresDSN,
-		RedisAddr:          redisAddr,
-		EmployeeNoPattern:  compiled,
-		AdminSessionSecret: adminSessionSecret,
-		AdminCookieName:    adminCookieName,
-		AdminCookieSecure:  adminCookieSecure,
+		ListenAddr:               listenAddr,
+		NewAPIBaseURL:            newAPIBaseURL,
+		AuditHMACSecret:          auditHMACSecret,
+		EvidenceStorageDir:       evidenceStorageDir,
+		PostgresDSN:              postgresDSN,
+		RedisAddr:                redisAddr,
+		EmployeeNoPattern:        compiled,
+		AdminSessionSecret:       adminSessionSecret,
+		AdminCookieName:          adminCookieName,
+		AdminCookieSecure:        adminCookieSecure,
+		OpsCheckTimeout:          opsCheckTimeout,
+		OpsWorkerHeartbeatMaxAge: opsWorkerHeartbeatMaxAge,
+		OpsQueueLagWarnThreshold: opsQueueLagWarnThreshold,
+		OpsMetricsEnabled:        opsMetricsEnabled,
 	}
 	return cfg, nil
 }
@@ -130,6 +160,30 @@ func getenvDefault(key, fallback string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return "", fmt.Errorf("%s cannot be blank", key)
+	}
+	return value, nil
+}
+
+func getenvDurationDefault(key string, fallback time.Duration) (time.Duration, error) {
+	raw, err := getenvDefault(key, fallback.String())
+	if err != nil {
+		return 0, err
+	}
+	value, err := time.ParseDuration(raw)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("%s must be a positive duration", key)
+	}
+	return value, nil
+}
+
+func getenvInt64Default(key string, fallback int64) (int64, error) {
+	raw, err := getenvDefault(key, strconv.FormatInt(fallback, 10))
+	if err != nil {
+		return 0, err
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value < 0 {
+		return 0, fmt.Errorf("%s must be a non-negative integer", key)
 	}
 	return value, nil
 }
