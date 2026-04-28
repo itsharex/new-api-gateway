@@ -89,7 +89,7 @@ worker_output="$(
 )"
 echo "$worker_output"
 
-python - "$worker_output" <<'PY'
+uv run --project "$REPO_ROOT/workers/analysis_worker" python - "$worker_output" <<'PY'
 import json
 import sys
 
