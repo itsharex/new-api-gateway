@@ -5,6 +5,7 @@ from pathlib import Path
 
 from evidence import FileEvidenceStore
 from main import process_job_line
+from models import ContextCatalogEntry
 
 
 class RecordingRepository:
@@ -21,6 +22,14 @@ class RecordingRepository:
         self.aggregates.extend(aggregates)
         self.anomalies.extend(anomalies)
         self.coverage_alerts.extend(coverage_alerts)
+
+
+class RecordingContextRepository:
+    def __init__(self, contexts=None):
+        self.contexts = list(contexts or [])
+
+    def list_active_contexts(self):
+        return self.contexts
 
 
 def test_process_job_line_reads_evidence_normalizes_and_persists(tmp_path: Path):
@@ -66,13 +75,64 @@ def test_process_job_line_reads_evidence_normalizes_and_persists(tmp_path: Path)
 
     assert response["accepted_trace_id"] == "trace_1"
     assert response["normalized_message_count"] == 2
-    assert response["analysis_result_count"] == 1
+    assert response["analysis_result_count"] == 2
     assert len(repo.messages) == 2
-    assert len(repo.results) == 1
+    assert len(repo.results) == 2
+    assert [result.category for result in repo.results] == ["usage_extraction", "work_relevance"]
     assert [aggregate.bucket_size for aggregate in repo.aggregates] == ["hour", "day"]
     assert repo.aggregates[0].total_tokens == 18
     assert repo.aggregates[0].request_body_bytes == 128
     assert repo.aggregates[0].response_body_bytes == 256
+
+
+def test_process_job_line_persists_work_relevance_result(tmp_path: Path):
+    evidence_dir = tmp_path / "raw" / "2026" / "04" / "28" / "trace_work"
+    evidence_dir.mkdir(parents=True)
+    (evidence_dir / "request_body.bin").write_text(json.dumps({
+        "model": "gpt-4.1",
+        "messages": [{"role": "user", "content": "Debug the new-api gateway route tests"}]
+    }), encoding="utf-8")
+    (evidence_dir / "response_body.bin").write_text(json.dumps({
+        "choices": [{"message": {"role": "assistant", "content": "Check the route registry test."}}],
+        "usage": {"total_tokens": 100}
+    }), encoding="utf-8")
+    repo = RecordingRepository()
+    contexts = RecordingContextRepository([ContextCatalogEntry(
+        id=1,
+        context_type="repo",
+        name="new-api-gateway",
+        description="Audit gateway",
+        keywords=["new-api", "gateway"],
+        aliases=[],
+        owner="platform",
+        expected_task_categories=["coding", "debugging"],
+        expected_models=["gpt-4.1"],
+        expected_usage_level="normal",
+        active=True,
+    )])
+    line = json.dumps({
+        "type": "trace_captured",
+        "trace_id": "trace_work",
+        "route_pattern": "/v1/chat/completions",
+        "protocol_family": "openai_chat",
+        "capture_mode": "raw_and_normalized",
+        "employee_no": "E10001",
+        "request_raw_ref": "raw/2026/04/28/trace_work/request_body.bin",
+        "response_raw_ref": "raw/2026/04/28/trace_work/response_body.bin",
+        "model_requested": "gpt-4.1",
+        "usage_total_tokens": 100,
+        "status_code": 200,
+        "upstream_status_code": 200,
+        "request_started_at": "2026-04-28T13:45:22Z",
+    })
+
+    response = process_job_line(line, FileEvidenceStore(tmp_path), repo, contexts)
+
+    assert response["work_relevance_count"] == 1
+    work_results = [result for result in repo.results if result.category == "work_relevance"]
+    assert len(work_results) == 1
+    assert work_results[0].label == "debugging"
+    assert work_results[0].result["work_related_score"] == 0.9
 
 
 def test_process_job_line_persists_anomaly_and_coverage_alert(tmp_path: Path):
@@ -109,6 +169,7 @@ def test_process_job_line_persists_anomaly_and_coverage_alert(tmp_path: Path):
     response = process_job_line(line, FileEvidenceStore(tmp_path), repo)
 
     assert response["worker_status"] == "processed"
+    assert response["work_relevance_count"] == 1
     assert response["anomaly_count"] == 2
     assert response["coverage_alert_count"] == 1
     assert [alert.anomaly_type for alert in repo.anomalies] == [
@@ -135,6 +196,8 @@ def test_contract_example_processes_from_stdin_without_services(monkeypatch):
     assert completed.returncode == 0, completed.stderr
     response = json.loads(completed.stdout)
     assert response["worker_status"] == "processed"
+    assert response["work_relevance_count"] == 1
+    assert response["analysis_result_count"] == 2
     assert response["anomaly_count"] == 0
     assert response["coverage_alert_count"] == 0
 

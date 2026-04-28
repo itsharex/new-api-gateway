@@ -7,16 +7,23 @@ from pathlib import Path
 import psycopg
 import redis
 
+from context_repository import PostgresContextRepository
 from evidence import FileEvidenceStore
-from models import TraceCapturedJob, UsageAggregateDelta, bucket_start_day, bucket_start_hour, parse_job
+from models import ContextCatalogEntry, TraceCapturedJob, UsageAggregateDelta, bucket_start_day, bucket_start_hour, parse_job
 from normalizers import normalize_json_trace
 from repository import PostgresAnalysisRepository
 from rules import detect_anomalies, detect_coverage_alerts
+from work_relevance import classify_work_relevance
 
 
 class NoopAnalysisRepository:
     def save_trace_analysis(self, messages, results, aggregates, anomalies=(), coverage_alerts=()):
         pass
+
+
+class NoopContextRepository:
+    def list_active_contexts(self) -> list[ContextCatalogEntry]:
+        return []
 
 
 def aggregate_deltas(job: TraceCapturedJob) -> list[UsageAggregateDelta]:
@@ -48,20 +55,29 @@ def aggregate_deltas(job: TraceCapturedJob) -> list[UsageAggregateDelta]:
     ]
 
 
-def process_job_line(line: str, evidence_store: FileEvidenceStore, repository) -> dict:
+def process_job_line(line: str, evidence_store: FileEvidenceStore, repository, context_repository=None) -> dict:
     job = parse_job(line)
     request_body = evidence_store.read_text(job.request_raw_ref) if job.request_raw_ref else ""
     response_body = evidence_store.read_text(job.response_raw_ref) if job.response_raw_ref else ""
-    return process_trace(job, request_body, response_body, repository)
+    contexts = context_repository.list_active_contexts() if context_repository else []
+    return process_trace(job, request_body, response_body, repository, contexts)
 
 
 def process_contract_validation_line(line: str) -> dict:
     job = parse_job(line)
-    return process_trace(job, "", "", NoopAnalysisRepository())
+    return process_trace(job, "", "", NoopAnalysisRepository(), [])
 
 
-def process_trace(job: TraceCapturedJob, request_body: str, response_body: str, repository) -> dict:
+def process_trace(
+    job: TraceCapturedJob,
+    request_body: str,
+    response_body: str,
+    repository,
+    contexts: list[ContextCatalogEntry] | None = None,
+) -> dict:
     messages, results = normalize_json_trace(job, request_body, response_body)
+    work_relevance = classify_work_relevance(job, messages, list(contexts or []))
+    results.append(work_relevance.to_analysis_result())
     aggregates = aggregate_deltas(job)
     anomalies = detect_anomalies(job)
     coverage_alerts = detect_coverage_alerts(job, messages)
@@ -71,6 +87,7 @@ def process_trace(job: TraceCapturedJob, request_body: str, response_body: str, 
         "worker_status": "processed",
         "normalized_message_count": len(messages),
         "analysis_result_count": len(results),
+        "work_relevance_count": 1,
         "aggregate_count": len(aggregates),
         "anomaly_count": len(anomalies),
         "coverage_alert_count": len(coverage_alerts),
@@ -83,7 +100,12 @@ def process_stdin(evidence_root: str, postgres_dsn: str) -> int:
     if not payload:
         return 0
     with psycopg.connect(postgres_dsn) as connection:
-        result = process_job_line(payload, FileEvidenceStore(evidence_root), PostgresAnalysisRepository(connection))
+        result = process_job_line(
+            payload,
+            FileEvidenceStore(evidence_root),
+            PostgresAnalysisRepository(connection),
+            PostgresContextRepository(connection),
+        )
     print(json.dumps(result, sort_keys=True))
     return 0
 
@@ -112,7 +134,12 @@ def process_redis_once(redis_url: str, list_name: str, evidence_root: str, postg
         return 0
     _, payload = item
     with psycopg.connect(postgres_dsn) as connection:
-        result = process_job_line(payload, FileEvidenceStore(evidence_root), PostgresAnalysisRepository(connection))
+        result = process_job_line(
+            payload,
+            FileEvidenceStore(evidence_root),
+            PostgresAnalysisRepository(connection),
+            PostgresContextRepository(connection),
+        )
     print(json.dumps(result, sort_keys=True))
     return 0
 
