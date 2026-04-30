@@ -476,9 +476,9 @@ def test_repository_skips_obvious_non_http_media_urls():
     assert media_queries == []
 
 
-def test_media_snapshot_migration_defines_idempotent_job_key():
-    migration = (
-        Path(__file__).parents[3] / "migrations" / "0011_media_snapshot_jobs.sql"
-    ).read_text(encoding="utf-8")
+def test_media_snapshot_upgrade_migration_defines_idempotent_job_key():
+    migration_path = Path(__file__).parents[3] / "migrations" / "0012_media_snapshot_job_uniqueness.sql"
+    migration = migration_path.read_text(encoding="utf-8")
 
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS idx_media_snapshot_jobs_unique_source" in migration
     assert "trace_id, source_url, source_context, policy_reason" in migration

@@ -21,6 +21,19 @@ class MediaSnapshotPolicy:
     )
 
 
+@dataclass(frozen=True)
+class ValidatedSnapshotURL:
+    parsed: ParseResult
+    canonical_hostname: str
+    resolved_addresses: tuple[IPv4Address | IPv6Address, ...]
+    # Redirect targets must be passed back through validate_snapshot_url before download.
+    redirect_revalidation_required: bool = True
+
+    @property
+    def hostname(self) -> str:
+        return self.canonical_hostname
+
+
 def _default_resolver(hostname: str) -> list[str]:
     try:
         infos = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
@@ -60,7 +73,7 @@ def _canonical_parse_result(parsed: ParseResult, hostname: str) -> ParseResult:
     return parsed._replace(netloc=host)
 
 
-def validate_snapshot_url(raw_url: str, policy: MediaSnapshotPolicy) -> ParseResult:
+def validate_snapshot_url(raw_url: str, policy: MediaSnapshotPolicy) -> ValidatedSnapshotURL:
     parsed = urlparse(raw_url)
     if parsed.scheme not in {"http", "https"}:
         raise ValueError("media snapshot url must use http/https")
@@ -87,4 +100,8 @@ def validate_snapshot_url(raw_url: str, policy: MediaSnapshotPolicy) -> ParseRes
         raise ValueError("media snapshot url host could not be resolved")
     if any(_address_is_blocked(resolved) for resolved in addresses):
         raise ValueError("media snapshot url resolves to private or metadata address")
-    return _canonical_parse_result(parsed, hostname)
+    return ValidatedSnapshotURL(
+        parsed=_canonical_parse_result(parsed, hostname),
+        canonical_hostname=hostname,
+        resolved_addresses=tuple(addresses),
+    )

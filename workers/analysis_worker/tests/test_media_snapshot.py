@@ -75,6 +75,18 @@ def test_allows_public_hostname_when_no_allowlist_is_configured():
     assert result.hostname == "public.example.test"
 
 
+def test_validated_url_carries_resolved_public_addresses_for_downloader_binding():
+    policy = MediaSnapshotPolicy(resolver=fake_resolver("93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"))
+    result = validate_snapshot_url("https://public.example.test/a.png", policy)
+
+    assert result.canonical_hostname == "public.example.test"
+    assert [str(address) for address in result.resolved_addresses] == [
+        "93.184.216.34",
+        "2606:2800:220:1:248:1893:25c8:1946",
+    ]
+    assert result.parsed.hostname == "public.example.test"
+
+
 def test_allowlisted_domain_still_rejects_private_resolved_ip():
     policy = MediaSnapshotPolicy(
         allowed_domains={"assets.company.test"},
