@@ -687,14 +687,14 @@ func (h Handler) insertEvidenceObject(ctx context.Context, traceID, objectType s
 
 func (h Handler) resolveIdentity(ctx context.Context, result authkeys.Result, hasAuth bool) identity.Snapshot {
 	if !hasAuth {
-		return identity.Snapshot{ResolutionStatus: "extract_failed"}
+		return identity.Snapshot{ResolutionStatus: identity.ResolutionStatusExtractFailed}
 	}
 	fp := fingerprint.Compute(result.CanonicalKey, h.AuditSecret)
 	if h.IdentityResolver == nil {
 		return identity.Snapshot{
 			TokenFingerprint:   fp.Value,
 			FingerprintDisplay: fp.Display,
-			ResolutionStatus:   "resolve_failed",
+			ResolutionStatus:   identity.ResolutionStatusResolveFailed,
 		}
 	}
 	snapshot, err := h.IdentityResolver.Resolve(ctx, result.CanonicalKey, fp.Value, fp.Display)
@@ -702,7 +702,7 @@ func (h Handler) resolveIdentity(ctx context.Context, result authkeys.Result, ha
 		return identity.Snapshot{
 			TokenFingerprint:   fp.Value,
 			FingerprintDisplay: fp.Display,
-			ResolutionStatus:   "resolve_failed",
+			ResolutionStatus:   identity.ResolutionStatusResolveFailed,
 		}
 	}
 	return snapshot

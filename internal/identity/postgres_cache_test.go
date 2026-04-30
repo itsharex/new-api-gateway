@@ -18,6 +18,8 @@ type fakePostgresCacheDB struct {
 	queryArgs []any
 	execSQL   string
 	execArgs  []any
+	execSQLs  []string
+	execArgss [][]any
 	execErr   error
 }
 
@@ -30,6 +32,8 @@ func (f *fakePostgresCacheDB) QueryRow(ctx context.Context, sql string, args ...
 func (f *fakePostgresCacheDB) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	f.execSQL = sql
 	f.execArgs = append([]any(nil), args...)
+	f.execSQLs = append(f.execSQLs, sql)
+	f.execArgss = append(f.execArgss, append([]any(nil), args...))
 	return pgconn.NewCommandTag("UPDATE 1"), f.execErr
 }
 
@@ -72,6 +76,7 @@ func TestPostgresCacheGetReadsFreshSnapshot(t *testing.T) {
 			true,
 			true,
 			`{"gpt-4":10}`,
+			false,
 		}},
 	}
 	cache := PostgresCache{DB: db, Now: func() time.Time { return now }}
@@ -91,6 +96,96 @@ func TestPostgresCacheGetReadsFreshSnapshot(t *testing.T) {
 	}
 	if !strings.Contains(db.querySQL, "FROM token_identity_cache") {
 		t.Fatalf("query SQL = %q, want token_identity_cache read", db.querySQL)
+	}
+}
+
+func TestPostgresCacheGetReturnsMissForNoRows(t *testing.T) {
+	db := &fakePostgresCacheDB{row: fakePostgresRow{err: pgx.ErrNoRows}}
+	cache := PostgresCache{DB: db}
+
+	got, ok, err := cache.Get(context.Background(), "fp-missing")
+	if err != nil {
+		t.Fatalf("Get error: %v", err)
+	}
+	if ok {
+		t.Fatalf("ok = true, want false with snapshot %#v", got)
+	}
+	if len(db.execSQLs) != 0 {
+		t.Fatalf("exec calls = %#v, want none for miss", db.execSQLs)
+	}
+}
+
+func TestPostgresCacheGetReturnsMissForExpiredRow(t *testing.T) {
+	db := &fakePostgresCacheDB{
+		row: fakePostgresRow{values: []any{
+			"tkfp_expired",
+			42,
+			"E10001 token",
+			"E10001",
+			1,
+			"staff",
+			int64(1711111111),
+			int64(1712222222),
+			300,
+			25,
+			true,
+			true,
+			`{"gpt-4":10}`,
+			true,
+		}},
+	}
+	cache := PostgresCache{DB: db}
+
+	got, ok, err := cache.Get(context.Background(), "fp-expired")
+	if err != nil {
+		t.Fatalf("Get error: %v", err)
+	}
+	if ok {
+		t.Fatalf("ok = true, want false with snapshot %#v", got)
+	}
+	if len(db.execSQLs) != 0 {
+		t.Fatalf("exec calls = %#v, want no last_seen_at update for expired row", db.execSQLs)
+	}
+}
+
+func TestPostgresCacheGetUpdatesLastSeenAtBestEffortOnHit(t *testing.T) {
+	now := time.Date(2026, 4, 30, 10, 0, 0, 0, time.UTC)
+	db := &fakePostgresCacheDB{
+		row: fakePostgresRow{values: []any{
+			"tkfp_hit",
+			42,
+			"E10001 token",
+			"E10001",
+			1,
+			"staff",
+			int64(1711111111),
+			int64(1712222222),
+			300,
+			25,
+			true,
+			true,
+			`{"gpt-4":10}`,
+			false,
+		}},
+		execErr: errors.New("last_seen update unavailable"),
+	}
+	cache := PostgresCache{DB: db, Now: func() time.Time { return now }}
+
+	_, ok, err := cache.Get(context.Background(), "fp-hit")
+	if err != nil {
+		t.Fatalf("Get error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected hit")
+	}
+	if len(db.execSQLs) != 1 {
+		t.Fatalf("exec calls = %#v, want one best-effort update", db.execSQLs)
+	}
+	if !strings.Contains(db.execSQLs[0], "UPDATE token_identity_cache SET last_seen_at") {
+		t.Fatalf("exec SQL = %q, want last_seen_at update", db.execSQLs[0])
+	}
+	if len(db.execArgss[0]) != 2 || db.execArgss[0][0] != "fp-hit" || db.execArgss[0][1] != now {
+		t.Fatalf("exec args = %#v, want fingerprint and now", db.execArgss[0])
 	}
 }
 
@@ -117,6 +212,38 @@ func TestPostgresCacheSetUpsertsSnapshot(t *testing.T) {
 	}
 	if len(db.execArgs) == 0 || db.execArgs[0] != "fp-set" {
 		t.Fatalf("first exec arg = %#v, want fingerprint", db.execArgs)
+	}
+}
+
+func TestPostgresCacheSetUsesDefaultTTL(t *testing.T) {
+	now := time.Date(2026, 4, 30, 10, 0, 0, 0, time.UTC)
+	db := &fakePostgresCacheDB{}
+	cache := PostgresCache{DB: db, Now: func() time.Time { return now }}
+
+	if err := cache.Set(context.Background(), Snapshot{TokenFingerprint: "fp-default"}); err != nil {
+		t.Fatalf("Set error: %v", err)
+	}
+	if len(db.execArgs) < 16 {
+		t.Fatalf("exec args = %#v, want expires_at arg", db.execArgs)
+	}
+	if got, want := db.execArgs[15], now.Add(15*time.Minute); got != want {
+		t.Fatalf("expires_at = %#v, want %#v", got, want)
+	}
+}
+
+func TestPostgresCacheSetUsesCustomTTL(t *testing.T) {
+	now := time.Date(2026, 4, 30, 10, 0, 0, 0, time.UTC)
+	db := &fakePostgresCacheDB{}
+	cache := PostgresCache{DB: db, TTL: 45 * time.Minute, Now: func() time.Time { return now }}
+
+	if err := cache.Set(context.Background(), Snapshot{TokenFingerprint: "fp-custom"}); err != nil {
+		t.Fatalf("Set error: %v", err)
+	}
+	if len(db.execArgs) < 16 {
+		t.Fatalf("exec args = %#v, want expires_at arg", db.execArgs)
+	}
+	if got, want := db.execArgs[15], now.Add(45*time.Minute); got != want {
+		t.Fatalf("expires_at = %#v, want %#v", got, want)
 	}
 }
 
@@ -157,5 +284,68 @@ func TestChainCacheReadsSecondCacheAndBackfillsFirst(t *testing.T) {
 	}
 	if first.setCalls != 1 {
 		t.Fatalf("first cache Set called %d times", first.setCalls)
+	}
+}
+
+func TestChainCacheContinuesAfterFirstCacheErrorAndBackfills(t *testing.T) {
+	first := &fakeCache{getErr: errors.New("redis unavailable")}
+	second := &fakeCache{
+		ok: true,
+		value: Snapshot{
+			TokenFingerprint: "fp-chain",
+			EmployeeNo:       "E10001",
+		},
+	}
+	cache := ChainCache{Caches: []Cache{first, second}}
+
+	got, ok, err := cache.Get(context.Background(), "fp-chain")
+	if err != nil {
+		t.Fatalf("Get error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected hit from second cache")
+	}
+	if got.EmployeeNo != "E10001" {
+		t.Fatalf("EmployeeNo = %q", got.EmployeeNo)
+	}
+	if first.setCalls != 1 {
+		t.Fatalf("first cache Set called %d times", first.setCalls)
+	}
+}
+
+func TestChainCacheSkipsTypedNilCaches(t *testing.T) {
+	var first *fakeCache
+	second := &fakeCache{
+		ok: true,
+		value: Snapshot{
+			TokenFingerprint: "fp-chain",
+			EmployeeNo:       "E10001",
+		},
+	}
+	cache := ChainCache{Caches: []Cache{first, second}}
+
+	got, ok, err := cache.Get(context.Background(), "fp-chain")
+	if err != nil {
+		t.Fatalf("Get error: %v", err)
+	}
+	if !ok || got.EmployeeNo != "E10001" {
+		t.Fatalf("unexpected result ok=%v snapshot=%#v", ok, got)
+	}
+}
+
+func TestChainCacheSetFansOutAndReturnsFirstError(t *testing.T) {
+	firstErr := errors.New("redis unavailable")
+	secondErr := errors.New("postgres unavailable")
+	first := &fakeCache{setErr: firstErr}
+	second := &fakeCache{}
+	third := &fakeCache{setErr: secondErr}
+	cache := ChainCache{Caches: []Cache{first, second, third}}
+
+	err := cache.Set(context.Background(), Snapshot{TokenFingerprint: "fp-chain"})
+	if !errors.Is(err, firstErr) {
+		t.Fatalf("Set error = %v, want %v", err, firstErr)
+	}
+	if first.setCalls != 1 || second.setCalls != 1 || third.setCalls != 1 {
+		t.Fatalf("set calls first=%d second=%d third=%d, want fan-out", first.setCalls, second.setCalls, third.setCalls)
 	}
 }

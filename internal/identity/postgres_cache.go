@@ -28,6 +28,7 @@ func (c PostgresCache) Get(ctx context.Context, fingerprint string) (Snapshot, b
 	}
 	now := c.now()
 	var snapshot Snapshot
+	var expired bool
 	err := c.DB.QueryRow(ctx, postgresCacheGetSQL(), fingerprint, now).Scan(
 		&snapshot.FingerprintDisplay,
 		&snapshot.NewAPITokenID,
@@ -42,12 +43,16 @@ func (c PostgresCache) Get(ctx context.Context, fingerprint string) (Snapshot, b
 		&snapshot.UnlimitedQuota,
 		&snapshot.ModelLimitsEnabled,
 		&snapshot.ModelLimits,
+		&expired,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Snapshot{}, false, nil
 	}
 	if err != nil {
 		return Snapshot{}, false, err
+	}
+	if expired {
+		return Snapshot{}, false, nil
 	}
 
 	snapshot.TokenFingerprint = fingerprint
@@ -109,10 +114,10 @@ SELECT
   used_quota,
   unlimited_quota,
   model_limits_enabled,
-  model_limits
+  model_limits,
+  expires_at IS NOT NULL AND expires_at <= $2 AS expired
 FROM token_identity_cache
 WHERE token_fingerprint = $1
-  AND (expires_at IS NULL OR expires_at > $2)
 LIMIT 1`
 }
 
