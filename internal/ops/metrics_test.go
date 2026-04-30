@@ -84,6 +84,21 @@ func TestRenderMetricsIncludesAuditGatewayCounters(t *testing.T) {
 	}
 }
 
+func TestRenderMetricsIncludesUnknownIdentityStatusWhenNoStatusesLoaded(t *testing.T) {
+	response := HealthResponse{
+		Status:    statusOK,
+		CheckedAt: time.Date(2026, 4, 30, 8, 0, 0, 0, time.UTC),
+		Checks:    map[string]CheckStatus{},
+		Metrics: RuntimeMetrics{
+			IdentityStatuses: map[string]int64{},
+		},
+	}
+
+	text := RenderMetrics(response, time.Date(2026, 4, 30, 7, 0, 0, 0, time.UTC), response.CheckedAt)
+
+	containsAll(t, text, `audit_gateway_identity_status_total{status="unknown"} 0`)
+}
+
 func TestRenderMetricsUsesStructuredValuesWhenMessagesAreHumanReadable(t *testing.T) {
 	now := time.Date(2026, 4, 28, 12, 2, 0, 0, time.UTC)
 	response := HealthResponse{

@@ -32,6 +32,9 @@ func TestServiceReadinessReportsHealthyDependencies(t *testing.T) {
 				WarnThreshold: 1000,
 			}, nil
 		},
+		RuntimeMetricsCheck: func(context.Context) (RuntimeMetrics, error) {
+			return RuntimeMetrics{IdentityStatuses: map[string]int64{}}, nil
+		},
 	}
 
 	response := service.Readiness(context.Background())
@@ -84,11 +87,32 @@ func TestServiceReadinessIncludesRuntimeMetrics(t *testing.T) {
 
 	response := service.Readiness(context.Background())
 
+	if response.Checks["runtime_metrics"].Status != "ok" {
+		t.Fatalf("runtime_metrics status = %q, want ok", response.Checks["runtime_metrics"].Status)
+	}
 	if response.Metrics.RequestCount != 10 {
 		t.Fatalf("RequestCount = %d, want 10", response.Metrics.RequestCount)
 	}
 	if response.Metrics.IdentityStatuses["resolved"] != 8 {
 		t.Fatalf("resolved identity status count = %d, want 8", response.Metrics.IdentityStatuses["resolved"])
+	}
+}
+
+func TestServiceReadinessReportsRuntimeMetricsFailure(t *testing.T) {
+	now := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
+	service := healthyService(now)
+	service.RuntimeMetricsCheck = func(context.Context) (RuntimeMetrics, error) {
+		return RuntimeMetrics{}, errors.New("missing relation usage_anomalies")
+	}
+
+	response := service.Readiness(context.Background())
+
+	if response.Status != "down" {
+		t.Fatalf("response.Status = %q, want down", response.Status)
+	}
+	assertDownCheck(t, response, "runtime_metrics", "runtime metrics check failed")
+	if response.Metrics.IdentityStatuses == nil {
+		t.Fatal("IdentityStatuses is nil, want empty map")
 	}
 }
 
@@ -195,6 +219,9 @@ func healthyService(now time.Time) Service {
 				Depth:         42,
 				WarnThreshold: 1000,
 			}, nil
+		},
+		RuntimeMetricsCheck: func(context.Context) (RuntimeMetrics, error) {
+			return RuntimeMetrics{IdentityStatuses: map[string]int64{}}, nil
 		},
 	}
 }

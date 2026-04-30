@@ -37,8 +37,12 @@ func RenderMetrics(response HealthResponse, startedAt time.Time, now time.Time) 
 	fmt.Fprintf(&builder, "audit_gateway_raw_only_routes_total %d\n", response.Metrics.RawOnlyRouteCount)
 	fmt.Fprintf(&builder, "audit_gateway_coverage_open %d\n", response.Metrics.CoverageOpenCount)
 	fmt.Fprintf(&builder, "audit_gateway_anomaly_open %d\n", response.Metrics.AnomalyOpenCount)
-	for _, status := range sortedMetricKeys(response.Metrics.IdentityStatuses) {
-		fmt.Fprintf(&builder, "audit_gateway_identity_status_total{status=%q} %d\n", status, response.Metrics.IdentityStatuses[status])
+	identityStatuses := response.Metrics.IdentityStatuses
+	if len(identityStatuses) == 0 {
+		identityStatuses = map[string]int64{"unknown": 0}
+	}
+	for _, status := range sortedMetricKeys(identityStatuses) {
+		fmt.Fprintf(&builder, "audit_gateway_identity_status_total{status=%q} %d\n", status, identityStatuses[status])
 	}
 
 	return builder.String()

@@ -89,15 +89,8 @@ func (s Service) Readiness(ctx context.Context) HealthResponse {
 		"worker_heartbeat": s.workerHeartbeatCheck(ctx),
 		"queue_lag":        s.queueLagCheck(ctx),
 	}
-	metrics := RuntimeMetrics{IdentityStatuses: map[string]int64{}}
-	if s.RuntimeMetricsCheck != nil {
-		if loaded, err := s.RuntimeMetricsCheck(ctx); err == nil {
-			metrics = loaded
-			if metrics.IdentityStatuses == nil {
-				metrics.IdentityStatuses = map[string]int64{}
-			}
-		}
-	}
+	metrics, metricsCheck := s.runtimeMetricsCheck(ctx)
+	checks["runtime_metrics"] = metricsCheck
 
 	return HealthResponse{
 		Status:    overallStatus(checks),
@@ -105,6 +98,21 @@ func (s Service) Readiness(ctx context.Context) HealthResponse {
 		Checks:    checks,
 		Metrics:   metrics,
 	}
+}
+
+func (s Service) runtimeMetricsCheck(ctx context.Context) (RuntimeMetrics, CheckStatus) {
+	metrics := RuntimeMetrics{IdentityStatuses: map[string]int64{}}
+	if s.RuntimeMetricsCheck == nil {
+		return metrics, CheckStatus{Status: statusDegraded, Message: "check is not configured"}
+	}
+	loaded, err := s.RuntimeMetricsCheck(ctx)
+	if err != nil {
+		return metrics, CheckStatus{Status: statusDown, Message: "runtime metrics check failed"}
+	}
+	if loaded.IdentityStatuses == nil {
+		loaded.IdentityStatuses = map[string]int64{}
+	}
+	return loaded, CheckStatus{Status: statusOK}
 }
 
 func Handler(service Service, metricsEnabled bool) http.Handler {
