@@ -115,7 +115,7 @@ SELECT
   unlimited_quota,
   model_limits_enabled,
   model_limits,
-  expires_at IS NOT NULL AND expires_at <= $2 AS expired
+  COALESCE(expires_at <= $2, true) AS expired
 FROM token_identity_cache
 WHERE token_fingerprint = $1
 LIMIT 1`

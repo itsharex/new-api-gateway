@@ -148,6 +148,13 @@ func TestPostgresCacheGetReturnsMissForExpiredRow(t *testing.T) {
 	}
 }
 
+func TestPostgresCacheGetSQLTreatsNullExpiresAtAsExpired(t *testing.T) {
+	sql := postgresCacheGetSQL()
+	if !strings.Contains(sql, "COALESCE(expires_at <= $2, true) AS expired") {
+		t.Fatalf("postgresCacheGetSQL() = %q, want NULL expires_at treated as expired", sql)
+	}
+}
+
 func TestPostgresCacheGetUpdatesLastSeenAtBestEffortOnHit(t *testing.T) {
 	now := time.Date(2026, 4, 30, 10, 0, 0, 0, time.UTC)
 	db := &fakePostgresCacheDB{
