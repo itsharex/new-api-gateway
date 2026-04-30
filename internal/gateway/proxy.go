@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -418,8 +419,9 @@ func (h Handler) insertTrace(ctx context.Context, record traceRecord) error {
 			errs = append(errs, err)
 		}
 	}
-	for _, part := range record.multipartParts {
-		object, err := h.putEvidence(ctx, record.traceID, "multipart_part", part.ContentType, part.Data)
+	for index, part := range record.multipartParts {
+		storageObjectType := fmt.Sprintf("multipart_part_%06d", index+1)
+		object, err := h.putEvidence(ctx, record.traceID, storageObjectType, part.ContentType, part.Data)
 		if err != nil {
 			h.reportAuditError(ctx, err)
 			errs = append(errs, err)
@@ -435,7 +437,7 @@ func (h Handler) insertTrace(ctx context.Context, record traceRecord) error {
 			SizeBytes:        object.SizeBytes,
 			SHA256:           object.SHA256,
 			RedactionStatus:  "not_redacted",
-			EncryptionStatus: object.StorageBackend,
+			EncryptionStatus: "filesystem_permissions",
 			CreatedAt:        object.CreatedAt,
 		})
 		if err != nil {

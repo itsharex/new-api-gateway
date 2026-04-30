@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -107,7 +108,7 @@ func walkMedia(value any, path string, refs *[]MediaReference) {
 					*refs = append(*refs, MediaReference{URL: url, SourcePath: childPath})
 				}
 			}
-			if member.key == "data" || member.key == "image" || member.key == "b64_json" {
+			if isBase64MediaField(member.key, childPath, member.value) {
 				if encoded, mediaType := parseBase64Media(member.value); encoded != "" {
 					*refs = append(*refs, MediaReference{Base64Data: encoded, MediaType: mediaType, SourcePath: childPath})
 				}
@@ -122,7 +123,7 @@ func walkMedia(value any, path string, refs *[]MediaReference) {
 					*refs = append(*refs, MediaReference{URL: url, SourcePath: childPath})
 				}
 			}
-			if key == "data" || key == "image" || key == "b64_json" {
+			if isBase64MediaField(key, childPath, child) {
 				if encoded, mediaType := parseBase64Media(child); encoded != "" {
 					*refs = append(*refs, MediaReference{Base64Data: encoded, MediaType: mediaType, SourcePath: childPath})
 				}
@@ -136,6 +137,25 @@ func walkMedia(value any, path string, refs *[]MediaReference) {
 	}
 }
 
+func isBase64MediaField(key, path string, value any) bool {
+	if text, ok := value.(string); ok && strings.HasPrefix(text, "data:") {
+		return true
+	}
+	if key == "b64_json" {
+		return true
+	}
+	if key == "data" {
+		return strings.Contains(path, ".input_audio.") ||
+			strings.Contains(path, ".audio.") ||
+			strings.Contains(path, ".input_image.") ||
+			strings.Contains(path, ".image.")
+	}
+	if key == "image" {
+		return true
+	}
+	return false
+}
+
 func parseBase64Media(value any) (string, string) {
 	text, ok := value.(string)
 	if !ok || text == "" {
@@ -146,11 +166,28 @@ func parseBase64Media(value any) (string, string) {
 		if !ok || !strings.Contains(header, ";base64") {
 			return "", ""
 		}
+		if !isValidBase64(data) {
+			return "", ""
+		}
 		mediaType := strings.TrimPrefix(strings.TrimSuffix(header, ";base64"), "data:")
 		return data, mediaType
 	}
-	if len(text) >= 8 && !strings.ContainsAny(text, " \n\r\t{}[]") {
+	if isValidBase64(text) {
 		return text, ""
 	}
 	return "", ""
+}
+
+func isValidBase64(text string) bool {
+	if len(text) < 8 || strings.ContainsAny(text, " \n\r\t{}[]") {
+		return false
+	}
+	if _, err := base64.StdEncoding.Strict().DecodeString(text); err == nil {
+		return true
+	}
+	if strings.Contains(text, "=") {
+		return false
+	}
+	_, err := base64.RawStdEncoding.Strict().DecodeString(text)
+	return err == nil
 }

@@ -620,7 +620,8 @@ func TestProxyPersistsMultipartPartEvidence(t *testing.T) {
 	}
 
 	repo := &memoryTraceRepo{}
-	handler := testHandler(upstream.URL, repo, evidence.NewFilesystemStore(t.TempDir()))
+	store := evidence.NewFilesystemStore(t.TempDir())
+	handler := testHandler(upstream.URL, repo, store)
 	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewReader(body.Bytes()))
 	req.Header.Set("Authorization", "Bearer sk-abc123")
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -639,6 +640,33 @@ func TestProxyPersistsMultipartPartEvidence(t *testing.T) {
 	}
 	if len(multipartObjects) != 2 {
 		t.Fatalf("multipart objects = %#v", multipartObjects)
+	}
+	if multipartObjects[0].ObjectRef == multipartObjects[1].ObjectRef {
+		t.Fatalf("multipart object refs should be unique: %#v", multipartObjects)
+	}
+	if multipartObjects[0].EncryptionStatus != "filesystem_permissions" || multipartObjects[1].EncryptionStatus != "filesystem_permissions" {
+		t.Fatalf("multipart encryption statuses = %#v", multipartObjects)
+	}
+	fieldBody, err := store.Get(context.Background(), multipartObjects[0].ObjectRef)
+	if err != nil {
+		t.Fatalf("Get field object error = %v", err)
+	}
+	fieldBytes, err := io.ReadAll(fieldBody)
+	_ = fieldBody.Close()
+	if err != nil {
+		t.Fatalf("Read field object error = %v", err)
+	}
+	fileBody, err := store.Get(context.Background(), multipartObjects[1].ObjectRef)
+	if err != nil {
+		t.Fatalf("Get file object error = %v", err)
+	}
+	fileBytes, err := io.ReadAll(fileBody)
+	_ = fileBody.Close()
+	if err != nil {
+		t.Fatalf("Read file object error = %v", err)
+	}
+	if string(fieldBytes) != "make a diagram" || string(fileBytes) != "png-bytes" {
+		t.Fatalf("multipart object bodies = %q, %q", fieldBytes, fileBytes)
 	}
 	if multipartObjects[1].OriginalFilename != "input.png" || multipartObjects[1].ContentType != "application/octet-stream" {
 		t.Fatalf("file multipart object = %#v", multipartObjects[1])
