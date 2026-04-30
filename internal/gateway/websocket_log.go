@@ -7,9 +7,10 @@ import (
 )
 
 var (
-	realtimeKeyPattern            = regexp.MustCompile(`(?i)(openai-insecure-api-key\.)(?:(?:\r?\n)?(?:client|upstream)\s+)?[A-Za-z0-9._~+/=-]+`)
-	webSocketAuthorizationPattern = regexp.MustCompile(`(?i)(authorization:\s*bearer\s+)(?:(?:\r?\n)?(?:client|upstream)\s+)?[A-Za-z0-9._~+/=-]+`)
-	bareAPIKeyPattern             = regexp.MustCompile(`(?i)\bsk-[A-Za-z0-9._~+/=-]+`)
+	webSocketTokenFragment        = `(?:[A-Za-z0-9._~+/=-]+|\r?\n(?:client|upstream)\s+)+`
+	realtimeKeyPattern            = regexp.MustCompile(`(?i)(openai-insecure-api-key\.)` + webSocketTokenFragment)
+	webSocketAuthorizationPattern = regexp.MustCompile(`(?i)(authorization:\s*bearer\s+)` + webSocketTokenFragment)
+	bareAPIKeyPattern             = regexp.MustCompile(`(?i)\bsk-` + webSocketTokenFragment)
 )
 
 type boundedWebSocketLog struct {
