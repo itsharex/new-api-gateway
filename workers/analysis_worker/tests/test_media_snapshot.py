@@ -59,6 +59,13 @@ def test_rejects_hostnames_that_resolve_to_private_or_loopback_ips(resolved_ip):
         validate_snapshot_url("https://assets.example.test/image.png", policy)
 
 
+@pytest.mark.parametrize("resolved_ip", ["100.64.0.1", "100.127.255.254"])
+def test_rejects_hostnames_that_resolve_to_shared_address_space(resolved_ip):
+    policy = MediaSnapshotPolicy(resolver=fake_resolver(resolved_ip))
+    with pytest.raises(ValueError, match="private or metadata"):
+        validate_snapshot_url("https://assets.example.test/image.png", policy)
+
+
 def test_rejects_non_allowlisted_domain_when_allowlist_is_configured():
     policy = MediaSnapshotPolicy(
         allowed_domains={"assets.company.test"},

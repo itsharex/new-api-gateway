@@ -55,15 +55,7 @@ def _canonical_allowed_domains(domains: set[str]) -> set[str]:
 
 
 def _address_is_blocked(address: IPv4Address | IPv6Address) -> bool:
-    return (
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_reserved
-        or address.is_multicast
-        or address.is_unspecified
-        or str(address) == "169.254.169.254"
-    )
+    return address.is_multicast or not address.is_global or str(address) == "169.254.169.254"
 
 
 def _canonical_parse_result(parsed: ParseResult, hostname: str) -> ParseResult:

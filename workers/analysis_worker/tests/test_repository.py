@@ -480,5 +480,8 @@ def test_media_snapshot_upgrade_migration_defines_idempotent_job_key():
     migration_path = Path(__file__).parents[3] / "migrations" / "0012_media_snapshot_job_uniqueness.sql"
     migration = migration_path.read_text(encoding="utf-8")
 
+    assert "WITH ranked_duplicates AS" in migration
+    assert "DELETE FROM media_snapshot_jobs" in migration
+    assert "ROW_NUMBER() OVER" in migration
     assert "CREATE UNIQUE INDEX IF NOT EXISTS idx_media_snapshot_jobs_unique_source" in migration
     assert "trace_id, source_url, source_context, policy_reason" in migration
