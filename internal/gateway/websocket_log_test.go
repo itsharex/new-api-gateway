@@ -32,6 +32,49 @@ func TestBoundedWebSocketLogRedactsAuthorizationBearer(t *testing.T) {
 	}
 }
 
+func TestBoundedWebSocketLogRedactsAuthorizationBearerAcrossChunks(t *testing.T) {
+	log := newBoundedWebSocketLog(1024)
+	_, _ = log.WriteClient([]byte("Authorization: Bearer "))
+	_, _ = log.WriteClient([]byte("sk-secret-extra\r\n{\"ok\":true}"))
+
+	body := log.Bytes()
+	text := string(body)
+	if strings.Contains(text, "sk-secret-extra") {
+		t.Fatalf("websocket log bytes leaked split bearer token: %s", text)
+	}
+	if strings.Contains(log.String(), "sk-secret-extra") {
+		t.Fatalf("websocket log string leaked split bearer token: %s", log.String())
+	}
+}
+
+func TestBoundedWebSocketLogRedactsRealtimeAPIKeyAcrossChunks(t *testing.T) {
+	log := newBoundedWebSocketLog(1024)
+	_, _ = log.WriteClient([]byte("Sec-WebSocket-Protocol: openai-insecure-api-key."))
+	_, _ = log.WriteClient([]byte("sk-secret-extra\r\n"))
+
+	text := string(log.Bytes())
+	if strings.Contains(text, "sk-secret-extra") {
+		t.Fatalf("websocket log bytes leaked split realtime key: %s", text)
+	}
+	if strings.Contains(log.String(), "sk-secret-extra") {
+		t.Fatalf("websocket log string leaked split realtime key: %s", log.String())
+	}
+}
+
+func TestBoundedWebSocketLogRedactsBareAPIKeyPayload(t *testing.T) {
+	log := newBoundedWebSocketLog(1024)
+	_, _ = log.WriteClient([]byte(`{"token":"sk-secret-extra"}`))
+
+	body := log.Bytes()
+	text := string(body)
+	if strings.Contains(text, "sk-secret-extra") {
+		t.Fatalf("websocket log bytes leaked bare key: %s", text)
+	}
+	if !strings.Contains(text, "[REDACTED]") {
+		t.Fatalf("websocket log missing fallback redaction: %s", text)
+	}
+}
+
 func TestBoundedWebSocketLogCapsBytes(t *testing.T) {
 	log := newBoundedWebSocketLog(12)
 	_, _ = log.WriteClient([]byte("abcdefghijklmnopqrstuvwxyz"))

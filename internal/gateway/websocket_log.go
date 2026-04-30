@@ -7,8 +7,9 @@ import (
 )
 
 var (
-	realtimeKeyPattern            = regexp.MustCompile(`openai-insecure-api-key\.[A-Za-z0-9._~+/=-]+`)
-	webSocketAuthorizationPattern = regexp.MustCompile(`(?i)(authorization:\s*bearer\s+)[A-Za-z0-9._~+/=-]+`)
+	realtimeKeyPattern            = regexp.MustCompile(`(?i)(openai-insecure-api-key\.)(?:(?:\r?\n)?(?:client|upstream)\s+)?[A-Za-z0-9._~+/=-]+`)
+	webSocketAuthorizationPattern = regexp.MustCompile(`(?i)(authorization:\s*bearer\s+)(?:(?:\r?\n)?(?:client|upstream)\s+)?[A-Za-z0-9._~+/=-]+`)
+	bareAPIKeyPattern             = regexp.MustCompile(`(?i)\bsk-[A-Za-z0-9._~+/=-]+`)
 )
 
 type boundedWebSocketLog struct {
@@ -40,7 +41,7 @@ func (l *boundedWebSocketLog) write(direction string, data []byte) {
 	if l.buf.Len() >= l.limit {
 		return
 	}
-	line := direction + " " + redactWebSocketLog(string(data)) + "\n"
+	line := direction + " " + string(data) + "\n"
 	remaining := l.limit - l.buf.Len()
 	if len(line) > remaining {
 		line = line[:remaining]
@@ -51,7 +52,11 @@ func (l *boundedWebSocketLog) write(direction string, data []byte) {
 func (l *boundedWebSocketLog) Bytes() []byte {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return append([]byte(nil), l.buf.Bytes()...)
+	text := redactWebSocketLog(l.buf.String())
+	if len(text) > l.limit {
+		text = text[:l.limit]
+	}
+	return []byte(text)
 }
 
 func (l *boundedWebSocketLog) String() string {
@@ -59,6 +64,7 @@ func (l *boundedWebSocketLog) String() string {
 }
 
 func redactWebSocketLog(value string) string {
-	value = realtimeKeyPattern.ReplaceAllString(value, "openai-insecure-api-key.[REDACTED]")
-	return webSocketAuthorizationPattern.ReplaceAllString(value, "${1}[REDACTED]")
+	value = realtimeKeyPattern.ReplaceAllString(value, "${1}[REDACTED]")
+	value = webSocketAuthorizationPattern.ReplaceAllString(value, "${1}[REDACTED]")
+	return bareAPIKeyPattern.ReplaceAllString(value, "[REDACTED]")
 }
