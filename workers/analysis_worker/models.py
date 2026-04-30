@@ -249,7 +249,10 @@ def text_hash(value: str) -> str:
 def bucket_start_hour(value: str) -> str:
     if not value:
         return datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0).isoformat()
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return datetime(1970, 1, 1, tzinfo=timezone.utc).isoformat()
     return parsed.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0).isoformat()
 
 
@@ -257,5 +260,8 @@ def bucket_start_day(value: str) -> str:
     if not value:
         now = datetime.now(timezone.utc)
         return now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return datetime(1970, 1, 1, tzinfo=timezone.utc).isoformat()
     return parsed.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()

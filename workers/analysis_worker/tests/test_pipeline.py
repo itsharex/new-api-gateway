@@ -265,6 +265,45 @@ def test_process_job_line_uses_repository_analysis_context(tmp_path: Path):
     assert repo.anomalies[0].observed_value == 101000
 
 
+def test_process_job_line_handles_malformed_timestamp_with_fallback_anomaly_window(tmp_path: Path):
+    evidence_dir = tmp_path / "raw" / "2026" / "04" / "28" / "trace_bad_time"
+    evidence_dir.mkdir(parents=True)
+    (evidence_dir / "request_body.bin").write_text("{}", encoding="utf-8")
+    (evidence_dir / "response_body.bin").write_text("{}", encoding="utf-8")
+    repo = RecordingRepository()
+    repo.analysis_context = AnalysisContext(daily_tokens_before=100000)
+    line = json.dumps({
+        "type": "trace_captured",
+        "trace_id": "trace_bad_time",
+        "route_pattern": "/v1/chat/completions",
+        "protocol_family": "openai_chat",
+        "capture_mode": "raw_and_normalized",
+        "employee_no": "E10001",
+        "request_raw_ref": "raw/2026/04/28/trace_bad_time/request_body.bin",
+        "response_raw_ref": "raw/2026/04/28/trace_bad_time/response_body.bin",
+        "model_requested": "gpt-4.1",
+        "usage_total_tokens": 1,
+        "token_fingerprint": "tkfp_raw",
+        "status_code": 200,
+        "upstream_status_code": 200,
+        "request_started_at": "not-a-timestamp",
+    })
+
+    response = process_job_line(line, FileEvidenceStore(tmp_path), repo)
+
+    assert response["worker_status"] == "processed"
+    assert [aggregate.bucket_start for aggregate in repo.aggregates] == [
+        "1970-01-01T00:00:00+00:00",
+        "1970-01-01T00:00:00+00:00",
+    ]
+    daily_alerts = [
+        alert for alert in repo.anomalies if alert.anomaly_type == "daily_token_limit_exceeded"
+    ]
+    assert len(daily_alerts) == 1
+    assert daily_alerts[0].window_start == "1970-01-01T00:00:00+00:00"
+    assert daily_alerts[0].window_end == "1970-01-01T00:01:00+00:00"
+
+
 def test_process_job_line_detects_low_work_relevance_high_cost(tmp_path: Path):
     evidence_dir = tmp_path / "raw" / "2026" / "04" / "28" / "trace_personal"
     evidence_dir.mkdir(parents=True)
