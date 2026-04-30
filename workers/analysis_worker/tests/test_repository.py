@@ -390,3 +390,25 @@ def test_repository_returns_default_context_without_querying_for_empty_token_fin
     assert context.short_window_tokens_before == 0
     assert context.distinct_client_hashes_1h == 0
     assert conn.cursor_obj.executed == []
+
+
+def test_repository_returns_default_context_without_querying_for_malformed_timestamp():
+    conn = FakeConnection()
+    repo = PostgresAnalysisRepository(conn)
+    job = TraceCapturedJob(
+        type="trace_captured",
+        trace_id="trace_bad_timestamp",
+        route_pattern="/v1/chat/completions",
+        protocol_family="openai_chat",
+        capture_mode="raw_and_normalized",
+        employee_no="E10001",
+        token_fingerprint="tkfp_raw",
+        request_started_at="not-a-timestamp",
+    )
+
+    context = repo.analysis_context_for(job)
+
+    assert context.daily_tokens_before == 0
+    assert context.short_window_tokens_before == 0
+    assert context.distinct_client_hashes_1h == 0
+    assert conn.cursor_obj.executed == []

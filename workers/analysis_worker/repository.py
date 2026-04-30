@@ -14,12 +14,24 @@ from models import (
 )
 
 
+def _has_valid_timestamp(value: str) -> bool:
+    if not value:
+        return True
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
+
+
 class PostgresAnalysisRepository:
     def __init__(self, connection):
         self.connection = connection
 
     def analysis_context_for(self, job: TraceCapturedJob) -> AnalysisContext:
         if not job.token_fingerprint:
+            return AnalysisContext()
+        if not _has_valid_timestamp(job.request_started_at):
             return AnalysisContext()
         cursor = self.connection.cursor()
         daily_bucket = bucket_start_day(job.request_started_at)
