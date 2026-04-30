@@ -61,9 +61,9 @@ class PostgresAnalysisRepository:
         )
         client_hash_row = cursor.fetchone()
         return AnalysisContext(
-            daily_total_tokens=int(daily_row[0] if daily_row else 0),
-            short_window_total_tokens=int(short_window_row[0] if short_window_row else 0),
-            distinct_client_hashes_last_hour=int(client_hash_row[0] if client_hash_row else 0),
+            daily_tokens_before=int(daily_row[0] if daily_row else 0),
+            short_window_tokens_before=int(short_window_row[0] if short_window_row else 0),
+            distinct_client_hashes_1h=int(client_hash_row[0] if client_hash_row else 0),
             local_timezone_offset_hours=8,
         )
 

@@ -189,9 +189,9 @@ def test_repository_loads_analysis_context_from_aggregates_and_recent_trace_hash
 
     context = repo.analysis_context_for(job)
 
-    assert context.daily_total_tokens == 90000
-    assert context.short_window_total_tokens == 7000
-    assert context.distinct_client_hashes_last_hour == 3
+    assert context.daily_tokens_before == 90000
+    assert context.short_window_tokens_before == 7000
+    assert context.distinct_client_hashes_1h == 3
     queries = "\n".join(query for query, _ in conn.cursor_obj.executed)
     assert "bucket_size = 'day'" in queries
     assert "bucket_size = 'hour'" in queries

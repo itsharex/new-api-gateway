@@ -213,11 +213,13 @@ def test_process_job_line_persists_anomaly_and_coverage_alert(tmp_path: Path):
 
     assert response["worker_status"] == "processed"
     assert response["work_relevance_count"] == 1
-    assert response["anomaly_count"] == 2
+    assert response["anomaly_count"] == 4
     assert response["coverage_alert_count"] == 1
     assert [alert.anomaly_type for alert in repo.anomalies] == [
         "identity_unresolved_success",
         "high_trace_tokens",
+        "short_window_token_spike",
+        "off_hours_high_usage",
     ]
     assert [alert.alert_code for alert in repo.coverage_alerts] == ["normalization_gap"]
 
@@ -234,7 +236,7 @@ def test_process_job_line_uses_repository_analysis_context(tmp_path: Path):
         "usage": {"total_tokens": 18}
     }), encoding="utf-8")
     repo = RecordingRepository()
-    repo.analysis_context = AnalysisContext(daily_total_tokens=100001)
+    repo.analysis_context = AnalysisContext(daily_tokens_before=99000, daily_token_limit=100000)
     line = json.dumps({
         "type": "trace_captured",
         "trace_id": "trace_context",
@@ -245,7 +247,7 @@ def test_process_job_line_uses_repository_analysis_context(tmp_path: Path):
         "request_raw_ref": "raw/2026/04/28/trace_context/request_body.bin",
         "response_raw_ref": "raw/2026/04/28/trace_context/response_body.bin",
         "model_requested": "gpt-4.1",
-        "usage_total_tokens": 18,
+        "usage_total_tokens": 2000,
         "status_code": 200,
         "upstream_status_code": 200,
         "request_started_at": "2026-04-28T13:45:22Z",
@@ -254,8 +256,12 @@ def test_process_job_line_uses_repository_analysis_context(tmp_path: Path):
     response = process_job_line(line, FileEvidenceStore(tmp_path), repo)
 
     assert repo.context_requests == ["trace_context"]
-    assert response["anomaly_count"] == 1
-    assert [alert.anomaly_type for alert in repo.anomalies] == ["daily_token_limit_exceeded"]
+    assert response["anomaly_count"] == 2
+    assert [alert.anomaly_type for alert in repo.anomalies] == [
+        "daily_token_limit_exceeded",
+        "off_hours_high_usage",
+    ]
+    assert repo.anomalies[0].observed_value == 101000
 
 
 def test_process_job_line_detects_low_work_relevance_high_cost(tmp_path: Path):
@@ -288,9 +294,11 @@ def test_process_job_line_detects_low_work_relevance_high_cost(tmp_path: Path):
 
     response = process_job_line(line, FileEvidenceStore(tmp_path), repo, RecordingContextRepository())
 
-    assert response["anomaly_count"] == 2
+    assert response["anomaly_count"] == 4
     assert [alert.anomaly_type for alert in repo.anomalies] == [
         "high_trace_tokens",
+        "short_window_token_spike",
+        "off_hours_high_usage",
         "low_work_relevance_high_cost",
     ]
 

@@ -40,21 +40,22 @@ class TraceCapturedJob:
 
 @dataclass(frozen=True)
 class AnalysisContext:
-    daily_total_tokens: int = 0
-    short_window_total_tokens: int = 0
-    distinct_client_hashes_last_hour: int = 0
-    local_timezone_offset_hours: int | None = None
-    expensive_models: tuple[str, ...] = ("gpt-4.5-preview", "o1-pro")
-    daily_token_threshold: int = 100_000
+    daily_tokens_before: int = 0
+    daily_token_limit: int = 100_000
+    short_window_tokens_before: int = 0
     short_window_token_threshold: int = 10_000
+    expensive_models: set[str] | None = None
     expensive_model_token_threshold: int = 500
-    long_output_completion_token_threshold: int = 8_000
+    long_output_token_threshold: int = 8_000
     repeated_prompt_threshold: int = 3
-    off_hours_total_token_threshold: int = 2_000
-    distinct_client_hashes_threshold: int = 3
+    local_timezone_offset_hours: int = 8
+    off_hours_token_threshold: int = 2_000
+    distinct_client_hashes_1h: int = 0
+    token_leak_distinct_client_threshold: int = 3
 
     def expensive_model_set(self) -> set[str]:
-        return {model.strip().lower() for model in self.expensive_models if model.strip()}
+        models = self.expensive_models or {"gpt-4.5-preview", "o1-pro"}
+        return {model.strip().lower() for model in models if model.strip()}
 
 
 @dataclass(frozen=True)
