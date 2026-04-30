@@ -113,13 +113,15 @@ def test_openai_responses_content_blocks_are_normalized():
 
     messages, _ = normalize_json_trace(job("openai_responses", "/v1/responses"), request_body, response_body)
 
-    assert len(messages) == 2
-    assert messages[0].direction == "request"
-    assert messages[0].role == "user"
-    assert messages[0].content_text == "Summarize the incident.\nInclude action items."
-    assert messages[1].direction == "response"
-    assert messages[1].role == "assistant"
-    assert messages[1].content_text == "The incident was resolved.\nAction items were assigned."
+    assert len(messages) == 4
+    assert [message.direction for message in messages] == ["request", "request", "response", "response"]
+    assert [message.role for message in messages] == ["user", "user", "assistant", "assistant"]
+    assert [message.content_text for message in messages] == [
+        "Summarize the incident.",
+        "Include action items.",
+        "The incident was resolved.",
+        "Action items were assigned.",
+    ]
 
 
 def test_openai_responses_input_message_items_preserve_boundaries_and_roles():
@@ -164,7 +166,10 @@ def test_openai_responses_input_message_items_preserve_boundaries_and_roles():
         "Summarize the incident.",
         "The incident was resolved.",
     ]
-    assert [message.source_path for message in messages[:2]] == ["request.input[0]", "request.input[1]"]
+    assert [message.source_path for message in messages[:2]] == [
+        "request.input[0].content[0]",
+        "request.input[1].content[0]",
+    ]
 
 
 def test_openai_responses_response_media_blocks_are_normalized():
@@ -245,6 +250,34 @@ def test_normalizes_image_url_and_base64_media():
     assert any(message.modality == "audio" and message.protocol_item_type == "base64_media" for message in messages)
 
 
+def test_preserves_multimodal_content_part_order():
+    trace_job = job(protocol_family="openai_chat", route_pattern="/v1/chat/completions")
+    request = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "https://example.test/first.png"}},
+                    {"type": "text", "text": "first text"},
+                    {"type": "input_audio", "input_audio": {"data": "aGVsbG8=", "format": "wav"}},
+                    {"type": "text", "text": "second text"},
+                ],
+            }
+        ]
+    }
+
+    messages, _ = normalize_json_trace(trace_job, json.dumps(request), "{}")
+
+    assert [(message.sequence_index, message.modality, message.content_text) for message in messages] == [
+        (0, "image", ""),
+        (1, "text", "first text"),
+        (2, "audio", ""),
+        (3, "text", "second text"),
+    ]
+    assert messages[0].media_url == "https://example.test/first.png"
+    assert messages[2].protocol_item_type == "base64_media"
+
+
 def test_does_not_persist_base64_data_url_media_payloads():
     trace_job = job(protocol_family="openai_chat", route_pattern="/v1/chat/completions")
     data_url = "data:image/png;base64,aGVsbG8="
@@ -313,6 +346,22 @@ def test_normalizes_sse_event_stream_response():
     response = "\n".join([
         'data: {"choices":[{"delta":{"role":"assistant","content":"hello"}}]}',
         'data: {"choices":[{"delta":{"content":" world"}}]}',
+        "data: [DONE]",
+        "",
+    ])
+
+    messages, _ = normalize_json_trace(trace_job, json.dumps(request), response)
+
+    assert any(message.direction == "response" and message.content_text == "hello world" for message in messages)
+
+
+def test_normalizes_blank_line_separated_multiline_sse_event():
+    trace_job = job(protocol_family="openai_chat", route_pattern="/v1/chat/completions")
+    request = {"messages": [{"role": "user", "content": "stream please"}]}
+    response = "\n".join([
+        'data: {"choices":[{"delta":',
+        'data: {"content":"hello world"}}]}',
+        "",
         "data: [DONE]",
         "",
     ])

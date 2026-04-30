@@ -192,19 +192,34 @@ def _part_messages(
     protocol_item_type: str,
 ) -> list[NormalizedMessage]:
     messages: list[NormalizedMessage] = []
-    text = _content_to_text(content)
-    if text:
-        messages.append(_message(job, direction, 0, role, text, source_path, protocol_item_type))
     if isinstance(content, list):
         for index, item in enumerate(content):
-            media = _media_message(job, direction, role, item, f"{source_path}.content[{index}]")
+            item_path = _part_source_path(source_path, protocol_item_type, index)
+            media = _media_message(job, direction, role, item, item_path)
             if media:
                 messages.append(media)
+                continue
+            text = _content_to_text(item)
+            if text:
+                messages.append(_message(job, direction, 0, role, text, item_path, protocol_item_type))
     elif isinstance(content, dict):
         media = _media_message(job, direction, role, content, source_path)
         if media:
             messages.append(media)
+        else:
+            text = _content_to_text(content)
+            if text:
+                messages.append(_message(job, direction, 0, role, text, source_path, protocol_item_type))
+    else:
+        text = _content_to_text(content)
+        if text:
+            messages.append(_message(job, direction, 0, role, text, source_path, protocol_item_type))
     return messages
+
+
+def _part_source_path(source_path: str, protocol_item_type: str, index: int) -> str:
+    child_name = "parts" if protocol_item_type == "gemini_content_part" else "content"
+    return f"{source_path}.{child_name}[{index}]"
 
 
 def _media_message(
@@ -278,9 +293,6 @@ def _load_sse_json_events(body: str) -> list[dict[str, Any]]:
             continue
         if not line.startswith("data:"):
             continue
-        if data_lines:
-            _append_sse_event(events, data_lines)
-            data_lines = []
         data_lines.append(line.removeprefix("data:").strip())
     _append_sse_event(events, data_lines)
     return events
@@ -289,15 +301,35 @@ def _load_sse_json_events(body: str) -> list[dict[str, Any]]:
 def _append_sse_event(events: list[dict[str, Any]], data_lines: list[str]) -> None:
     if not data_lines:
         return
-    data = "\n".join(data_lines)
-    if data == "[DONE]":
+    if len(data_lines) == 1 and data_lines[0] == "[DONE]":
         return
-    try:
-        loaded = json.loads(data)
-    except json.JSONDecodeError:
-        return
-    if isinstance(loaded, dict):
+    loaded = _load_sse_event_data(data_lines)
+    if loaded:
+        events.extend(loaded)
+
+
+def _load_sse_event_data(data_lines: list[str]) -> list[dict[str, Any]]:
+    joined = "\n".join(data_lines)
+    loaded = _load_json_dict(joined)
+    if loaded:
+        return [loaded]
+    events: list[dict[str, Any]] = []
+    for line in data_lines:
+        if line == "[DONE]":
+            continue
+        loaded = _load_json_dict(line)
+        if not loaded:
+            return []
         events.append(loaded)
+    return events
+
+
+def _load_json_dict(value: str) -> dict[str, Any]:
+    try:
+        loaded = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
 
 
 def _response_json_from_sse_events(events: list[dict[str, Any]]) -> dict[str, Any]:
