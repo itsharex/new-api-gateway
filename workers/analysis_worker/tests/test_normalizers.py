@@ -216,6 +216,38 @@ def test_normalizes_image_url_and_base64_media():
     assert any(message.modality == "audio" and message.protocol_item_type == "base64_media" for message in messages)
 
 
+def test_does_not_persist_base64_data_url_media_payloads():
+    trace_job = job(protocol_family="openai_chat", route_pattern="/v1/chat/completions")
+    data_url = "data:image/png;base64,aGVsbG8="
+    request = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                    {"type": "input_image", "image_url": data_url},
+                    {"type": "image", "url": data_url},
+                ],
+            }
+        ]
+    }
+
+    messages, _ = normalize_json_trace(trace_job, json.dumps(request), "{}")
+
+    image_messages = [message for message in messages if message.modality == "image"]
+    assert len(image_messages) == 3
+    assert all(message.protocol_item_type == "base64_media" for message in image_messages)
+    assert all(message.media_url == "" for message in image_messages)
+    for message in messages:
+        serialized_metadata = json.dumps(message.metadata)
+        assert "aGVsbG8=" not in message.content_text
+        assert "aGVsbG8=" not in message.media_url
+        assert "aGVsbG8=" not in serialized_metadata
+        assert data_url not in message.content_text
+        assert data_url not in message.media_url
+        assert data_url not in serialized_metadata
+
+
 def test_normalizes_sse_event_stream_response():
     trace_job = job(protocol_family="openai_chat", route_pattern="/v1/chat/completions")
     request = {"messages": [{"role": "user", "content": "stream please"}]}

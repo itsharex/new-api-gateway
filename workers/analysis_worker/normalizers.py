@@ -213,12 +213,10 @@ def _media_message(
     item_type = value.get("type")
     if item_type == "image_url" and isinstance(value.get("image_url"), dict):
         media_url = value["image_url"].get("url")
-        if isinstance(media_url, str) and media_url:
-            return _message(job, direction, 0, role, "", source_path, "image_url", modality="image", media_url=media_url)
+        return _url_media_message(job, direction, role, media_url, source_path, "image")
     if item_type in {"input_image", "image"}:
         media_url = value.get("image_url") or value.get("url")
-        if isinstance(media_url, str) and media_url:
-            return _message(job, direction, 0, role, "", source_path, "image_url", modality="image", media_url=media_url)
+        return _url_media_message(job, direction, role, media_url, source_path, "image")
     if item_type == "input_audio" and isinstance(value.get("input_audio"), dict):
         audio = value["input_audio"]
         if isinstance(audio.get("data"), str) or isinstance(audio.get("url"), str):
@@ -239,6 +237,28 @@ def _media_message(
         modality = "image" if isinstance(mime_type, str) and mime_type.startswith("image/") else "media"
         return _message(job, direction, 0, role, "", source_path, "base64_media", modality=modality)
     return None
+
+
+def _url_media_message(
+    job: TraceCapturedJob,
+    direction: str,
+    role: str,
+    media_url: Any,
+    source_path: str,
+    modality: str,
+) -> NormalizedMessage | None:
+    if not isinstance(media_url, str) or not media_url:
+        return None
+    if _is_base64_data_url(media_url):
+        return _message(job, direction, 0, role, "", source_path, "base64_media", modality=modality)
+    if media_url.startswith(("http://", "https://")):
+        return _message(job, direction, 0, role, "", source_path, "image_url", modality=modality, media_url=media_url)
+    return _message(job, direction, 0, role, "", source_path, "media_url", modality=modality)
+
+
+def _is_base64_data_url(value: str) -> bool:
+    header, separator, _ = value.partition(",")
+    return bool(separator) and header.lower().startswith("data:") and ";base64" in header.lower()
 
 
 def _load_sse_json_events(body: str) -> list[dict[str, Any]]:
