@@ -98,7 +98,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			Method:      req.Method,
 			Path:        req.URL.Path,
 			Reason:      "request_body_evidence_failed",
-			ErrorType:   requestCaptureErr.Error(),
+			ErrorType:   "request_body_evidence_failed",
 			RequestSize: capturedReq.SizeBytes,
 		})
 	}
@@ -113,7 +113,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			Method:      req.Method,
 			Path:        req.URL.Path,
 			Reason:      "request_header_evidence_failed",
-			ErrorType:   requestHeaderCaptureErr.Error(),
+			ErrorType:   "request_header_evidence_failed",
 			RequestSize: capturedReq.SizeBytes,
 		})
 	}
@@ -175,8 +175,8 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			requestSize:          capturedReq.SizeBytes,
 			snapshot:             snapshot,
 			unknownRoute:         unknownRoute,
-			errorType:            "upstream_request_error",
-			errorMessage:         err.Error(),
+			errorType:            mergeTraceErrorType(errorType, "upstream_request_error"),
+			errorMessage:         mergeTraceErrorMessage(errorMessage, err.Error()),
 		})
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
 		return
@@ -239,8 +239,8 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			skipPostPersistence:   true,
 			responseStartedAt:     responseStartedAt,
 			responseHeaders:       responseHeaders,
-			errorType:             "upstream_response_read_error",
-			errorMessage:          err.Error(),
+			errorType:             mergeTraceErrorType(errorType, "upstream_response_read_error"),
+			errorMessage:          mergeTraceErrorMessage(errorMessage, err.Error()),
 		})
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
 		return
@@ -820,6 +820,23 @@ func firstNonNil(errs ...error) error {
 		}
 	}
 	return nil
+}
+
+func mergeTraceErrorType(primary, secondary string) string {
+	if primary != "" {
+		return primary
+	}
+	return secondary
+}
+
+func mergeTraceErrorMessage(primary, secondary string) string {
+	if primary == "" {
+		return secondary
+	}
+	if secondary == "" {
+		return primary
+	}
+	return primary + "; " + secondary
 }
 
 func clientIP(req *http.Request) string {

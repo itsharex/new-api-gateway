@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -194,6 +196,129 @@ func TestProxyForwardsWhenRequestEvidenceStoreFails(t *testing.T) {
 	}
 	if len(files) != 1 {
 		t.Fatalf("spool files = %v", files)
+	}
+}
+
+func TestProxySpoolErrorTypeDoesNotPersistPlaintextSecrets(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	spoolDir := t.TempDir()
+	handler := Handler{
+		UpstreamBaseURL: upstream.URL,
+		Registry:        routes.DefaultRegistry(),
+		EvidenceStore: &selectiveEvidenceStore{
+			errs: map[string]error{"request_body": errors.New("object store down for Bearer sk-spool-secret?key=AIzaSpoolSecret")},
+		},
+		TraceRepo:   &memoryTraceRepo{},
+		AuditSecret: strings.Repeat("s", 32),
+		Spool:       NewFilesystemSpool(spoolDir),
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?key=AIzaRequestSecret", strings.NewReader(`{"model":"gpt-4o","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer sk-request-secret")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	files, err := filepath.Glob(filepath.Join(spoolDir, "*.json"))
+	if err != nil {
+		t.Fatalf("glob error = %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("spool files = %v", files)
+	}
+	data, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatalf("read spool: %v", err)
+	}
+	for _, secret := range []string{"sk-spool-secret", "AIzaSpoolSecret", "sk-request-secret", "AIzaRequestSecret"} {
+		if strings.Contains(string(data), secret) {
+			t.Fatalf("spool leaked secret %q in %s", secret, string(data))
+		}
+	}
+	var envelope SpoolEnvelope
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		t.Fatalf("unmarshal spool: %v", err)
+	}
+	if envelope.ErrorType != "request_body_evidence_failed" {
+		t.Fatalf("ErrorType = %q", envelope.ErrorType)
+	}
+}
+
+func TestProxyKeepsCaptureDegradedWhenUpstreamRequestFails(t *testing.T) {
+	repo := &memoryTraceRepo{}
+	handler := testHandler("https://upstream.test", repo, &selectiveEvidenceStore{
+		errs: map[string]error{"request_body": errors.New("capture failed for Bearer sk-capture-secret")},
+	})
+	handler.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return nil, errors.New("upstream failed for Bearer sk-upstream-secret")
+	})}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer sk-request-secret")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(repo.traces) != 1 {
+		t.Fatalf("expected 1 trace, got %d", len(repo.traces))
+	}
+	trace := repo.traces[0]
+	if trace.ErrorType != "capture_degraded" {
+		t.Fatalf("ErrorType = %q", trace.ErrorType)
+	}
+	for _, secret := range []string{"sk-capture-secret", "sk-upstream-secret", "sk-request-secret"} {
+		if strings.Contains(trace.ErrorMessageRedacted, secret) {
+			t.Fatalf("ErrorMessageRedacted leaked secret %q: %q", secret, trace.ErrorMessageRedacted)
+		}
+	}
+}
+
+func TestProxyKeepsCaptureDegradedWhenUpstreamResponseReadFails(t *testing.T) {
+	readErr := errors.New("upstream read failed for Bearer sk-upstream-secret")
+	repo := &memoryTraceRepo{}
+	handler := testHandler("https://upstream.test", repo, &selectiveEvidenceStore{
+		errs: map[string]error{"request_body": errors.New("capture failed for Bearer sk-capture-secret")},
+	})
+	handler.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       errReadCloser{err: readErr},
+			Request:    req,
+		}, nil
+	})}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer sk-request-secret")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(repo.traces) != 1 {
+		t.Fatalf("expected 1 trace, got %d", len(repo.traces))
+	}
+	trace := repo.traces[0]
+	if trace.ErrorType != "capture_degraded" {
+		t.Fatalf("ErrorType = %q", trace.ErrorType)
+	}
+	for _, secret := range []string{"sk-capture-secret", "sk-upstream-secret", "sk-request-secret"} {
+		if strings.Contains(trace.ErrorMessageRedacted, secret) {
+			t.Fatalf("ErrorMessageRedacted leaked secret %q: %q", secret, trace.ErrorMessageRedacted)
+		}
 	}
 }
 
