@@ -4,13 +4,17 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -152,11 +156,15 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			requestSize:          capturedReq.SizeBytes,
 			snapshot:             snapshot,
 			unknownRoute:         unknownRoute,
+			errorType:            "upstream_request_error",
+			errorMessage:         err.Error(),
 		})
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
 		return
 	}
 	defer upstreamResp.Body.Close()
+	responseStartedAt := h.now()
+	responseHeaders := upstreamResp.Header.Clone()
 
 	if isStreamingResponse(upstreamResp) {
 		h.serveStreamingResponse(w, req, upstreamResp, traceRecord{
@@ -174,6 +182,8 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			snapshot:             snapshot,
 			stream:               true,
 			unknownRoute:         unknownRoute,
+			responseStartedAt:    responseStartedAt,
+			responseHeaders:      responseHeaders,
 		})
 		return
 	}
@@ -206,6 +216,10 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			snapshot:              snapshot,
 			unknownRoute:          unknownRoute,
 			skipPostPersistence:   true,
+			responseStartedAt:     responseStartedAt,
+			responseHeaders:       responseHeaders,
+			errorType:             "upstream_response_read_error",
+			errorMessage:          err.Error(),
 		})
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
 		return
@@ -248,6 +262,8 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		snapshot:              snapshot,
 		unknownRoute:          unknownRoute,
 		skipPostPersistence:   skipPostPersistence,
+		responseStartedAt:     responseStartedAt,
+		responseHeaders:       responseHeaders,
 	})
 
 	copyHeaders(w.Header(), upstreamResp.Header)
@@ -271,6 +287,11 @@ type traceRecord struct {
 	requestContentType    string
 	responseContentType   string
 	modelRequested        string
+	responseStartedAt     time.Time
+	responseHeaders       http.Header
+	modelUpstream         string
+	errorType             string
+	errorMessage          string
 	usage                 minimalUsage
 	requestSize           int64
 	responseSize          int64
@@ -291,12 +312,17 @@ func (h Handler) insertTrace(ctx context.Context, record traceRecord) error {
 		RoutePattern:             record.entry.PathPattern,
 		ProtocolFamily:           record.entry.ProtocolFamily,
 		CaptureMode:              string(record.entry.CaptureMode),
+		RouteSupportLevel:        routeSupportLevel(record),
+		BodyKind:                 record.entry.BodyKind,
 		StatusCode:               record.statusCode,
 		UpstreamStatusCode:       record.upstreamCode,
 		Stream:                   record.stream,
 		RequestStartedAt:         record.startedAt,
+		ResponseStartedAt:        record.responseStartedAt,
 		ResponseFinishedAt:       record.finishedAt,
 		DurationMillis:           record.finishedAt.Sub(record.startedAt).Milliseconds(),
+		ClientIPHash:             h.hashAuditValue(clientIP(record.req)),
+		UserAgentHash:            h.hashAuditValue(record.req.UserAgent()),
 		RequestBodySize:          record.requestSize,
 		ResponseBodySize:         record.responseSize,
 		RequestBodySHA256:        record.requestObject.SHA256,
@@ -312,14 +338,26 @@ func (h Handler) insertTrace(ctx context.Context, record traceRecord) error {
 		EmployeeNoSnapshot:       record.snapshot.EmployeeNo,
 		IdentityResolutionStatus: record.snapshot.ResolutionStatus,
 		IdentityCacheStatus:      record.snapshot.IdentityCacheStatus,
-		ModelRequested:           record.modelRequested,
-		UsagePromptTokens:        record.usage.PromptTokens,
-		UsageCompletionTokens:    record.usage.CompletionTokens,
-		UsageTotalTokens:         record.usage.TotalTokens,
-		UsageReasoningTokens:     record.usage.ReasoningTokens,
-		UsageCachedTokens:        record.usage.CachedTokens,
-		AnalysisStatus:           "pending",
-		CreatedAt:                record.startedAt,
+		RequestIDFromClient: firstNonEmpty(
+			record.req.Header.Get("x-request-id"),
+			record.req.Header.Get("request-id"),
+		),
+		NewAPIRequestID: firstNonEmpty(
+			record.responseHeaders.Get("x-request-id"),
+			record.responseHeaders.Get("openai-request-id"),
+		),
+		ModelRequested:        record.modelRequested,
+		ModelUpstream:         record.modelUpstream,
+		UsagePromptTokens:     record.usage.PromptTokens,
+		UsageCompletionTokens: record.usage.CompletionTokens,
+		UsageTotalTokens:      record.usage.TotalTokens,
+		UsageReasoningTokens:  record.usage.ReasoningTokens,
+		UsageCachedTokens:     record.usage.CachedTokens,
+		ErrorType:             record.errorType,
+		ErrorMessageRedacted:  redactAuditMessage(record.errorMessage),
+		AnalysisStatus:        "pending",
+		CreatedAt:             record.startedAt,
+		UpdatedAt:             record.finishedAt,
 	}
 	var errs []error
 	if err := h.TraceRepo.InsertTrace(ctx, trace); err != nil {
@@ -374,6 +412,8 @@ func (h Handler) insertTrace(ctx context.Context, record traceRecord) error {
 			RequestStartedAt:         record.startedAt.UTC().Format(time.RFC3339),
 			RequestBodySize:          record.requestSize,
 			ResponseBodySize:         record.responseSize,
+			ClientIPHash:             trace.ClientIPHash,
+			UserAgentHash:            trace.UserAgentHash,
 			RequestRawRef:            record.requestObject.ObjectRef,
 			RequestHeadersRef:        record.requestHeadersObject.ObjectRef,
 			ResponseRawRef:           record.responseObject.ObjectRef,
@@ -418,6 +458,8 @@ func (h Handler) serveWebSocketTunnel(w http.ResponseWriter, req *http.Request, 
 	}
 	record.statusCode = upstreamResp.StatusCode
 	record.upstreamCode = upstreamResp.StatusCode
+	record.responseStartedAt = h.now()
+	record.responseHeaders = upstreamResp.Header.Clone()
 	headerCtx, cancelHeaders := h.auditContext(req.Context())
 	responseHeadersObject, headerErr := h.putHeaderEvidence(headerCtx, record.traceID, "response_headers", upstreamResp.Header)
 	cancelHeaders()
@@ -683,6 +725,66 @@ func (h Handler) insertEvidenceObject(ctx context.Context, traceID, objectType s
 		h.reportAuditError(ctx, err)
 	}
 	return err
+}
+
+func (h Handler) hashAuditValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || h.AuditSecret == "" {
+		return ""
+	}
+	mac := hmac.New(sha256.New, []byte(h.AuditSecret))
+	_, _ = mac.Write([]byte(value))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+var bearerTokenPattern = regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+`)
+
+func redactAuditMessage(value string) string {
+	value = bearerTokenPattern.ReplaceAllString(value, `${1}[REDACTED]`)
+	for _, marker := range []string{"sk-", "x-api-key", "x-goog-api-key", "mj-api-secret"} {
+		if strings.Contains(strings.ToLower(value), strings.ToLower(marker)) {
+			return "[REDACTED]"
+		}
+	}
+	return value
+}
+
+func routeSupportLevel(record traceRecord) string {
+	if record.unknownRoute {
+		return "unknown_route"
+	}
+	switch record.entry.CaptureMode {
+	case routes.CaptureRawAndNormalized:
+		return "deep_normalized"
+	case routes.CaptureRawAndMinimal:
+		return "raw_minimal"
+	case routes.CaptureRawOnly:
+		return "raw_only"
+	default:
+		return "unsupported"
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func clientIP(req *http.Request) string {
+	if forwarded := strings.TrimSpace(req.Header.Get("x-forwarded-for")); forwarded != "" {
+		ip, _, _ := strings.Cut(forwarded, ",")
+		return strings.TrimSpace(ip)
+	}
+	host, _, err := net.SplitHostPort(req.RemoteAddr)
+	if err == nil {
+		return host
+	}
+	return req.RemoteAddr
 }
 
 func (h Handler) resolveIdentity(ctx context.Context, result authkeys.Result, hasAuth bool) identity.Snapshot {

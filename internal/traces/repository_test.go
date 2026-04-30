@@ -117,30 +117,58 @@ func TestPostgresRepositoryNormalizesZeroResponseFinishedAtToNull(t *testing.T) 
 		t.Fatalf("query = %q, want traces insert", execer.query)
 	}
 	assertPlaceholderAlignment(t, execer.query, execer.args)
-	if len(execer.args) != 36 {
-		t.Fatalf("arg count = %d, want 36", len(execer.args))
+	if len(execer.args) != 51 {
+		t.Fatalf("arg count = %d, want 51", len(execer.args))
 	}
 	assertArg(t, execer.args, 0, trace.TraceID)
-	assertArg(t, execer.args, 1, trace.Method)
-	assertArg(t, execer.args, 2, trace.Path)
-	assertArg(t, execer.args, 3, trace.RoutePattern)
-	assertArg(t, execer.args, 4, trace.ProtocolFamily)
-	assertArg(t, execer.args, 6, trace.StatusCode)
-	assertArg(t, execer.args, 9, trace.RequestStartedAt)
-	if execer.args[10] != nil {
-		t.Fatalf("response_finished_at arg = %#v, want nil", execer.args[10])
+	assertArg(t, execer.args, 2, trace.RequestIDFromClient)
+	assertArg(t, execer.args, 3, trace.NewAPIRequestID)
+	assertArg(t, execer.args, 4, trace.Method)
+	assertArg(t, execer.args, 5, trace.Path)
+	assertArg(t, execer.args, 6, trace.RoutePattern)
+	assertArg(t, execer.args, 7, trace.ProtocolFamily)
+	assertArg(t, execer.args, 9, trace.RouteSupportLevel)
+	assertArg(t, execer.args, 10, trace.BodyKind)
+	assertArg(t, execer.args, 11, trace.StatusCode)
+	assertArg(t, execer.args, 14, trace.RequestStartedAt)
+	assertArg(t, execer.args, 15, trace.ResponseStartedAt)
+	if execer.args[16] != nil {
+		t.Fatalf("response_finished_at arg = %#v, want nil", execer.args[16])
 	}
-	assertArg(t, execer.args, 17, trace.RequestHeadersRef)
-	assertArg(t, execer.args, 18, trace.ResponseRawRef)
-	assertArg(t, execer.args, 19, trace.ResponseHeadersRef)
-	assertArg(t, execer.args, 20, trace.TokenFingerprint)
-	assertArg(t, execer.args, 22, trace.NewAPITokenIDSnapshot)
-	assertArg(t, execer.args, 24, trace.EmployeeNoSnapshot)
-	assertArg(t, execer.args, 28, trace.UsagePromptTokens)
-	assertArg(t, execer.args, 30, trace.UsageTotalTokens)
-	assertArg(t, execer.args, 33, trace.EstimatedCost)
-	assertArg(t, execer.args, 34, trace.AnalysisStatus)
-	assertArg(t, execer.args, 35, trace.CreatedAt)
+	assertArg(t, execer.args, 18, trace.ClientIPHash)
+	assertArg(t, execer.args, 19, trace.UserAgentHash)
+	assertArg(t, execer.args, 25, trace.RequestHeadersRef)
+	assertArg(t, execer.args, 26, trace.ResponseRawRef)
+	assertArg(t, execer.args, 27, trace.ResponseHeadersRef)
+	assertArg(t, execer.args, 28, trace.TokenFingerprint)
+	assertArg(t, execer.args, 30, trace.NewAPITokenIDSnapshot)
+	assertArg(t, execer.args, 32, trace.EmployeeNoSnapshot)
+	assertArg(t, execer.args, 38, trace.ModelRequested)
+	assertArg(t, execer.args, 39, trace.ModelUpstream)
+	assertArg(t, execer.args, 40, trace.UsagePromptTokens)
+	assertArg(t, execer.args, 42, trace.UsageTotalTokens)
+	assertArg(t, execer.args, 45, trace.EstimatedCost)
+	assertArg(t, execer.args, 46, trace.ErrorType)
+	assertArg(t, execer.args, 47, trace.ErrorMessageRedacted)
+	assertArg(t, execer.args, 48, trace.AnalysisStatus)
+	assertArg(t, execer.args, 49, trace.CreatedAt)
+	assertArg(t, execer.args, 50, trace.CreatedAt)
+	for _, fragment := range []string{
+		"route_support_level",
+		"body_kind",
+		"response_started_at",
+		"client_ip_hash",
+		"user_agent_hash",
+		"request_id_from_client",
+		"new_api_request_id",
+		"model_upstream",
+		"error_type",
+		"error_message_redacted",
+	} {
+		if !strings.Contains(execer.query, fragment) {
+			t.Fatalf("trace insert missing %s: %s", fragment, execer.query)
+		}
+	}
 }
 
 func TestPostgresRepositoryInsertRawEvidenceBuildsExpectedSQLArgs(t *testing.T) {
@@ -156,16 +184,30 @@ func TestPostgresRepositoryInsertRawEvidenceBuildsExpectedSQLArgs(t *testing.T) 
 		t.Fatalf("query = %q, want raw_evidence_objects insert", execer.query)
 	}
 	assertPlaceholderAlignment(t, execer.query, execer.args)
-	if len(execer.args) != 8 {
-		t.Fatalf("arg count = %d, want 8", len(execer.args))
+	if len(execer.args) != 12 {
+		t.Fatalf("arg count = %d, want 12", len(execer.args))
 	}
 	assertArg(t, execer.args, 0, object.TraceID)
 	assertArg(t, execer.args, 1, object.ObjectType)
 	assertArg(t, execer.args, 2, object.ObjectRef)
 	assertArg(t, execer.args, 3, object.StorageBackend)
-	assertArg(t, execer.args, 5, object.SizeBytes)
-	assertArg(t, execer.args, 6, object.SHA256)
-	assertArg(t, execer.args, 7, object.CreatedAt)
+	assertArg(t, execer.args, 5, object.ContentEncoding)
+	assertArg(t, execer.args, 6, object.OriginalFilename)
+	assertArg(t, execer.args, 7, object.SizeBytes)
+	assertArg(t, execer.args, 8, object.SHA256)
+	assertArg(t, execer.args, 9, object.RedactionStatus)
+	assertArg(t, execer.args, 10, object.EncryptionStatus)
+	assertArg(t, execer.args, 11, object.CreatedAt)
+	for _, fragment := range []string{
+		"content_encoding",
+		"original_filename",
+		"redaction_status",
+		"encryption_status",
+	} {
+		if !strings.Contains(execer.query, fragment) {
+			t.Fatalf("raw evidence insert missing %s: %s", fragment, execer.query)
+		}
+	}
 }
 
 func TestPostgresRepositoryValidatesRequiredRawEvidenceTimestamp(t *testing.T) {
@@ -190,12 +232,17 @@ func validTrace() Trace {
 		RoutePattern:             "/v1/chat/completions",
 		ProtocolFamily:           "openai",
 		CaptureMode:              "full",
+		RouteSupportLevel:        "deep_normalized",
+		BodyKind:                 "json",
 		StatusCode:               200,
 		UpstreamStatusCode:       200,
 		Stream:                   true,
 		RequestStartedAt:         startedAt,
+		ResponseStartedAt:        startedAt.Add(10 * time.Millisecond),
 		ResponseFinishedAt:       finishedAt,
 		DurationMillis:           750,
+		ClientIPHash:             "iphash",
+		UserAgentHash:            "uahash",
 		RequestBodySize:          128,
 		ResponseBodySize:         256,
 		RequestBodySHA256:        "request-sha",
@@ -211,13 +258,18 @@ func validTrace() Trace {
 		EmployeeNoSnapshot:       "E123",
 		IdentityResolutionStatus: "resolved",
 		IdentityCacheStatus:      "miss",
+		RequestIDFromClient:      "client-request-id",
+		NewAPIRequestID:          "new-api-request-id",
 		ModelRequested:           "gpt-4.1",
+		ModelUpstream:            "gpt-4o",
 		UsagePromptTokens:        10,
 		UsageCompletionTokens:    20,
 		UsageTotalTokens:         30,
 		UsageReasoningTokens:     4,
 		UsageCachedTokens:        2,
 		EstimatedCost:            "0.0012",
+		ErrorType:                "",
+		ErrorMessageRedacted:     "",
 		AnalysisStatus:           "pending",
 		CreatedAt:                startedAt.Add(time.Second),
 	}
@@ -225,14 +277,18 @@ func validTrace() Trace {
 
 func validRawEvidenceObject() RawEvidenceObject {
 	return RawEvidenceObject{
-		TraceID:        "trace_1",
-		ObjectType:     "request_body",
-		ObjectRef:      "raw/trace_1/request.body",
-		StorageBackend: "filesystem",
-		ContentType:    "application/json",
-		SizeBytes:      128,
-		SHA256:         "request-sha",
-		CreatedAt:      time.Date(2026, 4, 27, 10, 30, 1, 0, time.UTC),
+		TraceID:          "trace_1",
+		ObjectType:       "request_body",
+		ObjectRef:        "raw/trace_1/request.body",
+		StorageBackend:   "filesystem",
+		ContentType:      "application/json",
+		ContentEncoding:  "base64",
+		OriginalFilename: "input.png",
+		SizeBytes:        128,
+		SHA256:           "request-sha",
+		RedactionStatus:  "not_redacted",
+		EncryptionStatus: "filesystem_permissions",
+		CreatedAt:        time.Date(2026, 4, 27, 10, 30, 1, 0, time.UTC),
 	}
 }
 

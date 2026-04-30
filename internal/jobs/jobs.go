@@ -28,6 +28,8 @@ type TraceCapturedJob struct {
 	UpstreamStatusCode       int    `json:"upstream_status_code"`
 	Stream                   bool   `json:"stream"`
 	RequestStartedAt         string `json:"request_started_at"`
+	ClientIPHash             string `json:"client_ip_hash"`
+	UserAgentHash            string `json:"user_agent_hash"`
 	RequestBodySize          int64  `json:"request_body_size"`
 	ResponseBodySize         int64  `json:"response_body_size"`
 	RequestRawRef            string `json:"request_raw_ref"`
@@ -63,6 +65,8 @@ type TraceCapturedInput struct {
 	UpstreamStatusCode       int
 	Stream                   bool
 	RequestStartedAt         string
+	ClientIPHash             string
+	UserAgentHash            string
 	RequestBodySize          int64
 	ResponseBodySize         int64
 	RequestRawRef            string
@@ -96,6 +100,8 @@ func NewTraceCaptured(input TraceCapturedInput) TraceCapturedJob {
 		UpstreamStatusCode:       input.UpstreamStatusCode,
 		Stream:                   input.Stream,
 		RequestStartedAt:         input.RequestStartedAt,
+		ClientIPHash:             input.ClientIPHash,
+		UserAgentHash:            input.UserAgentHash,
 		RequestBodySize:          input.RequestBodySize,
 		ResponseBodySize:         input.ResponseBodySize,
 		RequestRawRef:            input.RequestRawRef,

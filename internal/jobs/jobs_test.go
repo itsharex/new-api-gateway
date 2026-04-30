@@ -39,6 +39,8 @@ func TestRedisListPublisherPushesTraceCapturedEnvelope(t *testing.T) {
 		UpstreamStatusCode:       200,
 		Stream:                   false,
 		RequestStartedAt:         "2026-04-28T13:45:22Z",
+		ClientIPHash:             "iphash",
+		UserAgentHash:            "uahash",
 		RequestBodySize:          128,
 		ResponseBodySize:         256,
 		RequestRawRef:            "raw/trace_1/request_body.bin",
@@ -78,6 +80,9 @@ func TestRedisListPublisherPushesTraceCapturedEnvelope(t *testing.T) {
 	}
 	if decoded.RequestStartedAt != "2026-04-28T13:45:22Z" {
 		t.Fatalf("RequestStartedAt = %q", decoded.RequestStartedAt)
+	}
+	if decoded.ClientIPHash != "iphash" || decoded.UserAgentHash != "uahash" {
+		t.Fatalf("audit hashes = %+v", decoded)
 	}
 	if decoded.RequestBodySize != 128 || decoded.ResponseBodySize != 256 {
 		t.Fatalf("body sizes = %+v", decoded)

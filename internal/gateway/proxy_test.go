@@ -204,6 +204,7 @@ func TestProxyRecordsHeaderEvidenceAndMinimalMetadata(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Upstream-Request", "upstream-1")
+		w.Header().Set("X-Request-Id", "new-api-request-id")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{
 			"id": "chatcmpl_test",
@@ -226,6 +227,9 @@ func TestProxyRecordsHeaderEvidenceAndMinimalMetadata(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-test","messages":[]}`))
 	req.Header.Set("Authorization", "Bearer sk-abc123")
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Request-Id", "client-request-id")
+	req.Header.Set("X-Forwarded-For", "203.0.113.10, 10.0.0.1")
+	req.Header.Set("User-Agent", "audit-test-agent")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -242,6 +246,18 @@ func TestProxyRecordsHeaderEvidenceAndMinimalMetadata(t *testing.T) {
 	}
 	if trace.ModelRequested != "gpt-test" {
 		t.Fatalf("ModelRequested = %q", trace.ModelRequested)
+	}
+	if trace.RouteSupportLevel != "deep_normalized" || trace.BodyKind != "json" {
+		t.Fatalf("route/body metadata = %+v", trace)
+	}
+	if trace.ResponseStartedAt.IsZero() || trace.UpdatedAt.IsZero() {
+		t.Fatalf("response/update timestamps missing: %+v", trace)
+	}
+	if trace.RequestIDFromClient != "client-request-id" || trace.NewAPIRequestID != "new-api-request-id" {
+		t.Fatalf("request ids = %+v", trace)
+	}
+	if trace.ClientIPHash != handler.hashAuditValue("203.0.113.10") || trace.UserAgentHash != handler.hashAuditValue("audit-test-agent") {
+		t.Fatalf("audit hashes = %+v", trace)
 	}
 	if trace.UsagePromptTokens != 11 || trace.UsageCompletionTokens != 7 || trace.UsageTotalTokens != 18 {
 		t.Fatalf("usage = %+v", trace)
@@ -281,6 +297,9 @@ func TestProxyRecordsHeaderEvidenceAndMinimalMetadata(t *testing.T) {
 	}
 	if job.RequestStartedAt == "" || job.RequestBodySize == 0 || job.ResponseBodySize == 0 {
 		t.Fatalf("job timing/body metadata missing: %+v", job)
+	}
+	if job.ClientIPHash != trace.ClientIPHash || job.UserAgentHash != trace.UserAgentHash {
+		t.Fatalf("job audit hashes = %+v", job)
 	}
 }
 
