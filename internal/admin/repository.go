@@ -274,11 +274,23 @@ WHERE token_fingerprint = $1 AND status = 'open'`, tokenFingerprint).Scan(&summa
 	return summary, nil
 }
 
-func (r Repository) FindRawEvidenceObject(ctx context.Context, traceID, objectType string) (EvidenceObjectSummary, error) {
+func (r Repository) FindRawEvidenceObject(ctx context.Context, traceID, objectType, objectRef string) (EvidenceObjectSummary, error) {
 	if r.db == nil {
 		return EvidenceObjectSummary{}, ErrAdminDBRequired
 	}
 	var object EvidenceObjectSummary
+	if strings.TrimSpace(objectRef) != "" {
+		err := r.db.QueryRow(ctx, `
+SELECT trace_id, object_type, object_ref, content_type, size_bytes, sha256
+FROM raw_evidence_objects
+WHERE trace_id = $1 AND object_type = $2 AND object_ref = $3
+ORDER BY created_at DESC
+LIMIT 1`, traceID, objectType, objectRef).Scan(
+			&object.TraceID, &object.ObjectType, &object.ObjectRef,
+			&object.ContentType, &object.SizeBytes, &object.SHA256,
+		)
+		return object, err
+	}
 	err := r.db.QueryRow(ctx, `
 SELECT trace_id, object_type, object_ref, content_type, size_bytes, sha256
 FROM raw_evidence_objects

@@ -406,6 +406,54 @@ func TestRawEvidenceAccessStreamsObjectAndWritesAuditLog(t *testing.T) {
 	}
 }
 
+func TestRawEvidenceAccessSelectsObjectRefAndAuditsMetadata(t *testing.T) {
+	store := &recordingEvidenceStore{
+		bodies: map[string]string{
+			"raw/2026/04/30/trace_123/multipart_part_000001.bin": "first part",
+		},
+	}
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleRawAccess, "audit-secret-0123456789abcdef", store)
+	db.rawEvidenceObject = EvidenceObjectSummary{
+		TraceID:     "trace_123",
+		ObjectType:  "multipart_part",
+		ObjectRef:   "raw/2026/04/30/trace_123/multipart_part_000001.bin",
+		ContentType: "application/octet-stream",
+		SizeBytes:   10,
+		SHA256:      "part-sha",
+	}
+	db.auditLogs = nil
+	db.auditActions = nil
+	db.auditMetadata = nil
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/raw-evidence/trace_123/multipart_part?object_ref=raw/2026/04/30/trace_123/multipart_part_000001.bin", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	if rec.Body.String() != "first part" {
+		t.Fatalf("body = %q", rec.Body.String())
+	}
+	if store.requestedRef != "raw/2026/04/30/trace_123/multipart_part_000001.bin" {
+		t.Fatalf("requested evidence ref = %q", store.requestedRef)
+	}
+	if !strings.Contains(db.rawEvidenceSQL, "object_ref = $3") {
+		t.Fatalf("raw evidence sql = %q, want object_ref filter", db.rawEvidenceSQL)
+	}
+	if len(db.rawEvidenceArgs) != 3 || db.rawEvidenceArgs[2] != "raw/2026/04/30/trace_123/multipart_part_000001.bin" {
+		t.Fatalf("raw evidence args = %#v", db.rawEvidenceArgs)
+	}
+	if len(db.auditMetadata) != 1 || !strings.Contains(db.auditMetadata[0], `"object_ref":"raw/2026/04/30/trace_123/multipart_part_000001.bin"`) {
+		t.Fatalf("audit metadata = %#v", db.auditMetadata)
+	}
+	if strings.Contains(db.auditMetadata[0], "first part") {
+		t.Fatalf("audit metadata leaked body: %s", db.auditMetadata[0])
+	}
+}
+
 func TestTraceDetailRedactsRawRefsForAuditor(t *testing.T) {
 	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleAuditor, "audit-secret-0123456789abcdef", nil)
 	db.traceDetail = traceDetailWithRawRefs()
@@ -785,6 +833,24 @@ func (s fakeEvidenceStore) Get(ctx context.Context, objectRef string) (io.ReadCl
 	return io.NopCloser(strings.NewReader(s.body)), nil
 }
 
+type recordingEvidenceStore struct {
+	bodies       map[string]string
+	requestedRef string
+}
+
+func (s *recordingEvidenceStore) Put(ctx context.Context, req evidence.PutRequest) (evidence.Object, error) {
+	return evidence.Object{}, errors.New("not implemented")
+}
+
+func (s *recordingEvidenceStore) Get(ctx context.Context, objectRef string) (io.ReadCloser, error) {
+	s.requestedRef = objectRef
+	body, ok := s.bodies[objectRef]
+	if !ok {
+		return nil, errors.New("object not found")
+	}
+	return io.NopCloser(strings.NewReader(body)), nil
+}
+
 type memoryAdminDB struct {
 	user                   User
 	session                Session
@@ -796,6 +862,8 @@ type memoryAdminDB struct {
 	contextEntry           ContextCatalogEntry
 	rawEvidenceObject      EvidenceObjectSummary
 	rawEvidenceErr         error
+	rawEvidenceSQL         string
+	rawEvidenceArgs        []any
 	lookupTokenFingerprint string
 	auditErr               error
 	findUserErr            error
@@ -922,6 +990,8 @@ func (r memoryAdminRow) Scan(dest ...any) error {
 		return nil
 	}
 	if strings.Contains(r.sql, "FROM raw_evidence_objects") {
+		r.db.rawEvidenceSQL = r.sql
+		r.db.rawEvidenceArgs = append([]any(nil), r.args...)
 		if r.db.rawEvidenceErr != nil {
 			return r.db.rawEvidenceErr
 		}

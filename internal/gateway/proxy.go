@@ -427,6 +427,9 @@ func (h Handler) insertTrace(ctx context.Context, record traceRecord) error {
 			errs = append(errs, err)
 			continue
 		}
+		if object.CreatedAt.IsZero() || object.ObjectRef == "" {
+			continue
+		}
 		err = h.TraceRepo.InsertRawEvidence(ctx, traces.RawEvidenceObject{
 			TraceID:          record.traceID,
 			ObjectType:       "multipart_part",

@@ -416,7 +416,11 @@ func (h Handler) getRawEvidence(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "raw evidence path is required", http.StatusBadRequest)
 		return
 	}
-	object, err := h.repo.FindRawEvidenceObject(r.Context(), traceID, objectType)
+	objectRef := strings.TrimSpace(r.URL.Query().Get("object_ref"))
+	if objectRef == "" {
+		objectRef = strings.TrimSpace(r.URL.Query().Get("ref"))
+	}
+	object, err := h.repo.FindRawEvidenceObject(r.Context(), traceID, objectType, objectRef)
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
@@ -432,7 +436,10 @@ func (h Handler) getRawEvidence(w http.ResponseWriter, r *http.Request) {
 	}
 	defer reader.Close()
 
-	metadata, err := json.Marshal(map[string]string{"object_type": object.ObjectType})
+	metadata, err := json.Marshal(map[string]string{
+		"object_type": object.ObjectType,
+		"object_ref":  object.ObjectRef,
+	})
 	if err != nil {
 		metadata = []byte(`{}`)
 	}
