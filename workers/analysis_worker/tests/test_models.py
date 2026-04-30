@@ -34,6 +34,8 @@ def test_parse_job_keeps_gateway_contract_fields():
         "new_api_token_id": 42,
         "token_name_snapshot": "E10001",
         "identity_resolution_status": "resolved",
+        "client_ip_hash": "client_hash_current",
+        "user_agent_hash": "ua_hash_current",
         "request_body_size": 128,
         "response_body_size": 256
     }))
@@ -62,6 +64,8 @@ def test_parse_job_keeps_gateway_contract_fields():
         new_api_token_id=42,
         token_name_snapshot="E10001",
         identity_resolution_status="resolved",
+        client_ip_hash="client_hash_current",
+        user_agent_hash="ua_hash_current",
         status_code=0,
         upstream_status_code=0,
         stream=False,

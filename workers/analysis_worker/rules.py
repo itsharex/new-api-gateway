@@ -74,6 +74,7 @@ def detect_anomalies(
     if has_token_context:
         daily_total = context.daily_tokens_before + job.usage_total_tokens
         if daily_total >= context.daily_token_limit:
+            window = _day_window(job.request_started_at)
             alerts.append(_anomaly(
                 job,
                 "daily_token_limit_exceeded",
@@ -84,9 +85,12 @@ def detect_anomalies(
                     f"daily token total reached {daily_total}, meeting or exceeding "
                     f"{context.daily_token_limit}"
                 ),
+                window_start=window[0],
+                window_end=window[1],
             ))
         short_window_total = context.short_window_tokens_before + job.usage_total_tokens
         if short_window_total >= context.short_window_token_threshold:
+            window = _relative_window(job.request_started_at, seconds=5 * 60)
             alerts.append(_anomaly(
                 job,
                 "short_window_token_spike",
@@ -97,6 +101,8 @@ def detect_anomalies(
                     f"short-window token total reached {short_window_total}, meeting or exceeding "
                     f"{context.short_window_token_threshold}"
                 ),
+                window_start=window[0],
+                window_end=window[1],
             ))
     if (
         job.model_requested.strip().lower() in context.expensive_model_set()
@@ -155,6 +161,7 @@ def detect_anomalies(
         has_token_context
         and context.distinct_client_hashes_1h >= context.token_leak_distinct_client_threshold
     ):
+        window = _relative_window(job.request_started_at, seconds=60 * 60)
         alerts.append(_anomaly(
             job,
             "possible_token_leak",
@@ -165,6 +172,8 @@ def detect_anomalies(
                 f"token appeared from {context.distinct_client_hashes_1h} distinct client hashes "
                 "within the last hour"
             ),
+            window_start=window[0],
+            window_end=window[1],
         ))
     if job.capture_mode in {"raw_only", "raw_and_minimal"} and job.response_body_size > RAW_ONLY_RESPONSE_BYTES_THRESHOLD:
         alerts.append(_anomaly(
@@ -263,12 +272,36 @@ def _max_repeated_prompt_count(messages: list[NormalizedMessage]) -> int:
 def _is_off_hours(value: str, offset_hours: int) -> bool:
     if not value:
         return False
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
+    parsed = _parse_utc(value)
+    if parsed is None:
         return False
     local_time = parsed.astimezone(timezone.utc) + timedelta(hours=offset_hours)
     return local_time.hour < 8 or local_time.hour >= 20
+
+
+def _parse_utc(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def _day_window(value: str) -> tuple[str | None, str | None]:
+    parsed = _parse_utc(value)
+    if parsed is None:
+        return None, None
+    start = parsed.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = start + timedelta(days=1)
+    return start.isoformat(), end.isoformat()
+
+
+def _relative_window(value: str, seconds: int) -> tuple[str | None, str | None]:
+    parsed = _parse_utc(value)
+    if parsed is None:
+        return None, None
+    return (parsed - timedelta(seconds=seconds)).isoformat(), parsed.isoformat()
 
 
 def _anomaly(
@@ -278,13 +311,15 @@ def _anomaly(
     observed_value: float,
     threshold_value: float,
     reason: str,
+    window_start: str | None = None,
+    window_end: str | None = None,
 ) -> AnomalyAlert:
-    window_start = (
+    resolved_window_start = window_start or (
         bucket_start_hour(job.request_started_at)
         if job.request_started_at
         else MISSING_TIMESTAMP_WINDOW_START
     )
-    window_end = (
+    resolved_window_end = window_end or (
         window_end_from_start(job.request_started_at)
         if job.request_started_at
         else MISSING_TIMESTAMP_WINDOW_END
@@ -298,8 +333,8 @@ def _anomaly(
         new_api_token_id=job.new_api_token_id,
         employee_no=job.employee_no,
         token_name_snapshot=job.token_name_snapshot,
-        window_start=window_start,
-        window_end=window_end,
+        window_start=resolved_window_start,
+        window_end=resolved_window_end,
         observed_value=observed_value,
         threshold_value=threshold_value,
         baseline_value=None,

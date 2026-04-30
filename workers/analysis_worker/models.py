@@ -30,6 +30,8 @@ class TraceCapturedJob:
     new_api_token_id: int = 0
     token_name_snapshot: str = ""
     identity_resolution_status: str = ""
+    client_ip_hash: str = ""
+    user_agent_hash: str = ""
     status_code: int = 0
     upstream_status_code: int = 0
     stream: bool = False

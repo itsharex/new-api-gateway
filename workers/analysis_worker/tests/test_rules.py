@@ -250,6 +250,8 @@ def test_detects_daily_token_limit_exceeded():
     assert alerts[0].severity == "high"
     assert alerts[0].observed_value == 101000
     assert alerts[0].threshold_value == 100000
+    assert alerts[0].window_start == "2026-04-28T00:00:00+00:00"
+    assert alerts[0].window_end == "2026-04-29T00:00:00+00:00"
     assert "meeting or exceeding" in alerts[0].reason
 
 
@@ -275,6 +277,8 @@ def test_detects_short_window_token_spike():
     assert alerts[0].severity == "medium"
     assert alerts[0].observed_value == 11000
     assert alerts[0].threshold_value == 10000
+    assert alerts[0].window_start == "2026-04-28T13:40:22+00:00"
+    assert alerts[0].window_end == "2026-04-28T13:45:22+00:00"
     assert "meeting or exceeding" in alerts[0].reason
 
 
@@ -315,6 +319,8 @@ def test_detects_possible_token_leak_signal():
     assert alerts[0].severity == "high"
     assert alerts[0].observed_value == 3
     assert alerts[0].threshold_value == 3
+    assert alerts[0].window_start == "2026-04-28T12:45:22+00:00"
+    assert alerts[0].window_end == "2026-04-28T13:45:22+00:00"
 
 
 def test_does_not_emit_token_scoped_aggregate_alerts_for_empty_token_fingerprint():

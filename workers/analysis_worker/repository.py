@@ -48,14 +48,26 @@ class PostgresAnalysisRepository:
         short_window_row = cursor.fetchone()
         cursor.execute(
             """
-            SELECT COUNT(DISTINCT concat_ws(':', NULLIF(client_ip_hash, ''), NULLIF(user_agent_hash, '')))
-            FROM traces
-            WHERE token_fingerprint = %s
-              AND request_started_at >= (%s::timestamptz - interval '1 hour')
-              AND request_started_at <= %s::timestamptz
-              AND (client_ip_hash <> '' OR user_agent_hash <> '')
+            SELECT COUNT(DISTINCT client_hash)
+            FROM (
+                SELECT concat_ws(':', NULLIF(client_ip_hash, ''), NULLIF(user_agent_hash, '')) AS client_hash
+                FROM traces
+                WHERE token_fingerprint = %s
+                  AND request_started_at >= (%s::timestamptz - interval '1 hour')
+                  AND request_started_at <= %s::timestamptz
+                  AND (client_ip_hash <> '' OR user_agent_hash <> '')
+                UNION ALL
+                SELECT concat_ws(':', NULLIF(%s, ''), NULLIF(%s, '')) AS client_hash
+            ) clients
+            WHERE client_hash <> ''
             """,
-            (job.token_fingerprint, window_end, window_end),
+            (
+                job.token_fingerprint,
+                window_end,
+                window_end,
+                job.client_ip_hash,
+                job.user_agent_hash,
+            ),
         )
         client_hash_row = cursor.fetchone()
         return AnalysisContext(

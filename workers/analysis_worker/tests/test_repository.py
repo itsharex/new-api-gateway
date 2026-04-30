@@ -12,10 +12,11 @@ from repository import PostgresAnalysisRepository
 
 
 class SemanticCursor:
-    def __init__(self, rows_by_trace=None, aggregate_rows=None, distinct_client_hashes=0):
+    def __init__(self, rows_by_trace=None, aggregate_rows=None, client_rows=None, distinct_client_hashes=0):
         self.executed = []
         self.rows_by_trace = list(rows_by_trace or [])
         self.aggregate_rows = list(aggregate_rows or [])
+        self.client_rows = list(client_rows or [])
         self.distinct_client_hashes = distinct_client_hashes
         self.next_row = None
 
@@ -33,7 +34,23 @@ class SemanticCursor:
                 and window_start <= _parse_time(row["request_started_at"]) < parsed_window_end
             ),)
         elif "COUNT(DISTINCT" in query:
-            self.next_row = (self.distinct_client_hashes,)
+            if self.client_rows:
+                token_fingerprint, window_end, window_end_again, current_client_ip, current_user_agent = params
+                assert window_end == window_end_again
+                parsed_window_end = datetime.fromisoformat(window_end.replace("Z", "+00:00"))
+                window_start = parsed_window_end - timedelta(hours=1)
+                distinct_clients = {
+                    (row["client_ip_hash"], row["user_agent_hash"])
+                    for row in self.client_rows
+                    if row["token_fingerprint"] == token_fingerprint
+                    and window_start <= _parse_time(row["request_started_at"]) <= parsed_window_end
+                    and (row["client_ip_hash"] or row["user_agent_hash"])
+                }
+                if current_client_ip or current_user_agent:
+                    distinct_clients.add((current_client_ip, current_user_agent))
+                self.next_row = (len(distinct_clients),)
+            else:
+                self.next_row = (self.distinct_client_hashes,)
         elif self.aggregate_rows:
             self.next_row = self.aggregate_rows.pop(0)
         else:
@@ -307,6 +324,50 @@ def test_repository_loads_short_window_context_from_previous_5_minutes_of_traces
     assert context.daily_tokens_before == 97000
     assert context.short_window_tokens_before == 8750
     assert context.distinct_client_hashes_1h == 2
+
+
+def test_repository_counts_current_job_client_tuple_for_token_leak_context():
+    cursor = SemanticCursor(
+        aggregate_rows=[(0,)],
+        rows_by_trace=[],
+        client_rows=[
+            {
+                "token_fingerprint": "tkfp_raw",
+                "request_started_at": "2026-04-28T13:20:00Z",
+                "client_ip_hash": "client_a",
+                "user_agent_hash": "ua_a",
+            },
+            {
+                "token_fingerprint": "tkfp_raw",
+                "request_started_at": "2026-04-28T13:45:22.500Z",
+                "client_ip_hash": "client_late",
+                "user_agent_hash": "ua_late",
+            },
+            {
+                "token_fingerprint": "tkfp_raw",
+                "request_started_at": "2026-04-28T13:44:00Z",
+                "client_ip_hash": "client_b",
+                "user_agent_hash": "ua_b",
+            },
+        ],
+    )
+    repo = PostgresAnalysisRepository(SemanticConnection(cursor))
+    job = TraceCapturedJob(
+        type="trace_captured",
+        trace_id="trace_current",
+        route_pattern="/v1/chat/completions",
+        protocol_family="openai_chat",
+        capture_mode="raw_and_normalized",
+        employee_no="E10001",
+        token_fingerprint="tkfp_raw",
+        client_ip_hash="client_current",
+        user_agent_hash="ua_current",
+        request_started_at="2026-04-28T13:45:22Z",
+    )
+
+    context = repo.analysis_context_for(job)
+
+    assert context.distinct_client_hashes_1h == 3
 
 
 def test_repository_returns_default_context_without_querying_for_empty_token_fingerprint():
