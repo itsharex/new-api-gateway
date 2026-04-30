@@ -71,6 +71,26 @@ func TestRedactAuditMessageRedactsKnownSecretMarkers(t *testing.T) {
 	}
 }
 
+func TestRedactAuditMessageRedactsQueryAPIKey(t *testing.T) {
+	got := redactAuditMessage("upstream request failed for https://new-api.example/v1beta/models/gemini:generateContent?key=AIzaPlainSecret&alt=json")
+	if strings.Contains(got, "AIzaPlainSecret") {
+		t.Fatalf("redacted message leaked query key: %q", got)
+	}
+	if !strings.Contains(got, "key=[REDACTED]") || !strings.Contains(got, "alt=json") {
+		t.Fatalf("redacted message = %q, want redacted key and preserved alt", got)
+	}
+}
+
+func TestRedactAuditMessageRedactsQueryAPIKeyAfterAmpersand(t *testing.T) {
+	got := redactAuditMessage("upstream request failed for https://new-api.example/v1beta/models/gemini:generateContent?alt=json&key=AIzaPlainSecret")
+	if strings.Contains(got, "AIzaPlainSecret") {
+		t.Fatalf("redacted message leaked query key: %q", got)
+	}
+	if !strings.Contains(got, "&key=[REDACTED]") || !strings.Contains(got, "alt=json") {
+		t.Fatalf("redacted message = %q, want redacted key and preserved alt", got)
+	}
+}
+
 func TestHashAuditValueReturnsEmptyWithoutSecretOrValue(t *testing.T) {
 	if got := (Handler{}).hashAuditValue("203.0.113.10"); got != "" {
 		t.Fatalf("hash without secret = %q, want empty", got)

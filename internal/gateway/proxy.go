@@ -739,10 +739,14 @@ func (h Handler) hashAuditValue(value string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-var bearerTokenPattern = regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+`)
+var (
+	bearerTokenPattern = regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+`)
+	queryKeyPattern    = regexp.MustCompile(`(?i)([?&]key=)[^&\s]+`)
+)
 
 func redactAuditMessage(value string) string {
 	value = bearerTokenPattern.ReplaceAllString(value, `${1}[REDACTED]`)
+	value = queryKeyPattern.ReplaceAllString(value, `${1}[REDACTED]`)
 	for _, marker := range []string{"sk-", "x-api-key", "x-goog-api-key", "mj-api-secret"} {
 		if strings.Contains(strings.ToLower(value), strings.ToLower(marker)) {
 			return "[REDACTED]"
