@@ -412,3 +412,37 @@ def test_repository_returns_default_context_without_querying_for_malformed_times
     assert context.short_window_tokens_before == 0
     assert context.distinct_client_hashes_1h == 0
     assert conn.cursor_obj.executed == []
+
+
+def test_repository_queues_media_snapshot_jobs_for_media_urls():
+    conn = FakeConnection()
+    repo = PostgresAnalysisRepository(conn)
+    media_message = NormalizedMessage(
+        trace_id="trace_media",
+        direction="request",
+        sequence_index=0,
+        role="user",
+        modality="image",
+        content_text="",
+        content_text_hash="",
+        media_url="https://example.test/image.png",
+        source_path="request.messages[0].content[1]",
+        protocol_item_type="media_url",
+        token_count_estimate=0,
+        metadata={"protocol_family": "openai_chat"},
+    )
+
+    repo.save_trace_analysis([media_message], [], [], [], [])
+
+    media_queries = [
+        (query, params)
+        for query, params in conn.cursor_obj.executed
+        if "INSERT INTO media_snapshot_jobs" in query
+    ]
+    assert len(media_queries) == 1
+    assert media_queries[0][1] == (
+        "trace_media",
+        "https://example.test/image.png",
+        "request.messages[0].content[1]",
+        "generated_or_referenced_media",
+    )

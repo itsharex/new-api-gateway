@@ -97,6 +97,11 @@ class PostgresAnalysisRepository:
         anomalies: Iterable[AnomalyAlert] = (),
         coverage_alerts: Iterable[CoverageAlert] = (),
     ) -> None:
+        messages = list(messages)
+        results = list(results)
+        aggregates = list(aggregates)
+        anomalies = list(anomalies)
+        coverage_alerts = list(coverage_alerts)
         cursor = self.connection.cursor()
         for message in messages:
             cursor.execute(
@@ -130,6 +135,23 @@ class PostgresAnalysisRepository:
                     message.protocol_item_type,
                     message.token_count_estimate,
                     json.dumps(message.metadata, sort_keys=True),
+                ),
+            )
+        for message in messages:
+            if not message.media_url:
+                continue
+            cursor.execute(
+                """
+                INSERT INTO media_snapshot_jobs (
+                    trace_id, source_url, source_context, policy_reason, status
+                ) VALUES (%s,%s,%s,%s,'queued')
+                ON CONFLICT DO NOTHING
+                """,
+                (
+                    message.trace_id,
+                    message.media_url,
+                    message.source_path,
+                    "generated_or_referenced_media",
                 ),
             )
         for result in results:
