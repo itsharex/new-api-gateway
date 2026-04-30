@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -55,6 +56,36 @@ func (s FilesystemSpool) Write(ctx context.Context, envelope SpoolEnvelope) erro
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(s.dir, envelope.TraceID+".json")
+	path := filepath.Join(s.dir, spoolFilename(envelope))
 	return os.WriteFile(path, data, 0o600)
+}
+
+func spoolFilename(envelope SpoolEnvelope) string {
+	name := safeSpoolPart(envelope.TraceID)
+	if name == "" {
+		name = "trace"
+	}
+	if reason := safeSpoolPart(envelope.Reason); reason != "" {
+		name += "-" + reason
+	}
+	return name + ".json"
+}
+
+func safeSpoolPart(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '_' || r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return strings.Trim(b.String(), "_-")
 }

@@ -252,6 +252,67 @@ func TestProxySpoolErrorTypeDoesNotPersistPlaintextSecrets(t *testing.T) {
 	}
 }
 
+func TestProxySpoolPreservesRequestBodyAndHeaderCaptureFailures(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	spoolDir := t.TempDir()
+	handler := Handler{
+		UpstreamBaseURL: upstream.URL,
+		Registry:        routes.DefaultRegistry(),
+		EvidenceStore: &selectiveEvidenceStore{
+			errs: map[string]error{
+				"request_body":    errors.New("body failed for Bearer sk-body-secret"),
+				"request_headers": errors.New("headers failed for Bearer sk-header-secret?key=AIzaHeaderSecret"),
+			},
+		},
+		TraceRepo:   &memoryTraceRepo{},
+		AuditSecret: strings.Repeat("s", 32),
+		Spool:       NewFilesystemSpool(spoolDir),
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?key=AIzaRequestSecret", strings.NewReader(`{"model":"gpt-4o","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer sk-request-secret")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	files, err := filepath.Glob(filepath.Join(spoolDir, "*.json"))
+	if err != nil {
+		t.Fatalf("glob error = %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("spool files = %v, want 2 files", files)
+	}
+
+	reasons := map[string]bool{}
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read spool %s: %v", file, err)
+		}
+		for _, secret := range []string{"sk-body-secret", "sk-header-secret", "AIzaHeaderSecret", "sk-request-secret", "AIzaRequestSecret"} {
+			if strings.Contains(string(data), secret) {
+				t.Fatalf("spool leaked secret %q in %s", secret, string(data))
+			}
+		}
+		var envelope SpoolEnvelope
+		if err := json.Unmarshal(data, &envelope); err != nil {
+			t.Fatalf("unmarshal spool %s: %v", file, err)
+		}
+		reasons[envelope.Reason] = true
+	}
+	if !reasons["request_body_evidence_failed"] || !reasons["request_header_evidence_failed"] {
+		t.Fatalf("spool reasons = %v", reasons)
+	}
+}
+
 func TestProxyKeepsCaptureDegradedWhenUpstreamRequestFails(t *testing.T) {
 	repo := &memoryTraceRepo{}
 	handler := testHandler("https://upstream.test", repo, &selectiveEvidenceStore{
