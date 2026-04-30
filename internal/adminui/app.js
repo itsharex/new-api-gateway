@@ -6,19 +6,30 @@ const views = [
   { id: "overview", label: "Overview" },
   { id: "usage", label: "Usage" },
   { id: "traces", label: "Traces" },
+  { id: "identities", label: "Employee Directory" },
   { id: "anomalies", label: "Anomalies" },
   { id: "coverage", label: "Coverage" },
   { id: "lookup", label: "API Key Lookup" },
   { id: "context", label: "Context Catalog" },
+  { id: "reviews", label: "Review Decisions" },
+  { id: "settings", label: "System Settings" },
   { id: "audit", label: "Audit Logs" },
 ];
 
+function csrfToken() {
+  const match = document.cookie.split("; ").find((part) => part.startsWith("audit_admin_csrf="));
+  return match ? decodeURIComponent(match.split("=")[1] || "") : "";
+}
+
 async function api(path, options = {}) {
+  const method = String(options.method || "GET").toUpperCase();
+  const csrf = method === "GET" ? "" : csrfToken();
   const response = await fetch(`/admin/api${path}`, {
     ...options,
     credentials: "same-origin",
     headers: {
       "Content-Type": "application/json",
+      ...(csrf ? { "X-CSRF-Token": csrf } : {}),
       ...(options.headers || {}),
     },
   });
@@ -214,6 +225,9 @@ async function loadView() {
     } else if (state.view === "traces") {
       const body = await api("/traces");
       renderTraces(body);
+    } else if (state.view === "identities") {
+      const body = await api("/token-identities");
+      renderIdentities(body);
     } else if (state.view === "anomalies") {
       const body = await api("/anomalies");
       renderAnomalies(body);
@@ -225,6 +239,12 @@ async function loadView() {
     } else if (state.view === "context") {
       const body = await api("/context-catalog");
       renderContext(body);
+    } else if (state.view === "reviews") {
+      const body = await api("/review-decisions");
+      renderReviews(body);
+    } else if (state.view === "settings") {
+      const body = await api("/settings");
+      renderSettings(body);
     } else if (state.view === "audit") {
       const body = await api("/audit-logs");
       renderAudit(body);
@@ -293,6 +313,26 @@ function renderTraces(body) {
       }
     });
   });
+}
+
+function renderIdentities(body) {
+  body = body || {};
+  const rows = arrayValue(body.token_identities).map((item) => [
+    item.employee_no,
+    item.display_name,
+    item.department,
+    item.fingerprint_display,
+    item.new_api_token_id,
+    item.token_name_raw,
+    item.token_group,
+    item.last_seen_at,
+  ]);
+  renderShell(
+    page(
+      "Employee Directory",
+      `<section class="panel">${table(["Employee", "Name", "Department", "Fingerprint", "Token ID", "Token Name", "Group", "Last Seen"], rows)}</section>`,
+    ),
+  );
 }
 
 function renderTraceDetail(body) {
@@ -513,6 +553,31 @@ function renderContext(body, message = "") {
       renderContext(body, `<section class="panel error">${escapeHTML(error.message)}</section>`);
     }
   });
+}
+
+function renderReviews(body) {
+  body = body || {};
+  const rows = arrayValue(body.review_decisions).map((item) => [
+    item.created_at,
+    item.target_type,
+    item.target_id,
+    badge(item.decision),
+    item.reviewer_username,
+    item.note,
+  ]);
+  renderShell(page("Review Decisions", `<section class="panel">${table(["Time", "Target Type", "Target", "Decision", "Reviewer", "Note"], rows)}</section>`));
+}
+
+function renderSettings(body) {
+  body = body || {};
+  const settings = body.settings || {};
+  const rows = [
+    ["Employee Pattern", settings.employee_no_pattern],
+    ["Metrics Enabled", settings.metrics_enabled ? "true" : "false"],
+    ["API Key Lookup Limit", settings.lookup_limit],
+    ["Raw Evidence Limit", settings.raw_access_limit],
+  ];
+  renderShell(page("System Settings", `<section class="panel settings-list">${table(["Setting", "Value"], rows)}</section>`));
 }
 
 function renderAudit(body) {

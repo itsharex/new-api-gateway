@@ -26,7 +26,8 @@ type Handler struct {
 	auth          Auth
 	auditSecret   string
 	evidenceStore evidence.Store
-	mux           *http.ServeMux
+	lookupLimiter RateLimiter
+	rawLimiter    RateLimiter
 }
 
 func NewHandler(cfg HandlerConfig) Handler {
@@ -34,27 +35,42 @@ func NewHandler(cfg HandlerConfig) Handler {
 	if auth.Repo.db == nil {
 		auth.Repo = cfg.Repo
 	}
-	h := Handler{repo: cfg.Repo, auth: auth, auditSecret: cfg.AuditSecret, evidenceStore: cfg.EvidenceStore, mux: http.NewServeMux()}
-	h.mux.HandleFunc("POST /admin/api/login", h.login)
-	h.mux.Handle("GET /admin/api/me", h.auth.Middleware(http.HandlerFunc(h.me)))
-	h.mux.Handle("GET /admin/api/overview", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.overview))))
-	h.mux.Handle("GET /admin/api/usage", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.listUsage))))
-	h.mux.Handle("GET /admin/api/traces/{trace_id}", h.auth.Middleware(h.auth.Require(PermissionViewNormalizedTraces, http.HandlerFunc(h.getTraceDetail))))
-	h.mux.Handle("GET /admin/api/context-catalog", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.listContextCatalog))))
-	h.mux.Handle("POST /admin/api/context-catalog", h.auth.Middleware(h.auth.Require(PermissionReview, http.HandlerFunc(h.createContextCatalogEntry))))
-	h.mux.Handle("GET /admin/api/audit-logs", h.auth.Middleware(h.auth.Require(PermissionManageUsers, http.HandlerFunc(h.listAuditLogs))))
-	h.mux.HandleFunc("POST /admin/api/logout", h.logout)
-	h.mux.Handle("GET /admin/api/traces", h.auth.Middleware(h.auth.Require(PermissionViewNormalizedTraces, http.HandlerFunc(h.listTraces))))
-	h.mux.Handle("GET /admin/api/anomalies", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.listAnomalies))))
-	h.mux.Handle("GET /admin/api/coverage-alerts", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.listCoverageAlerts))))
-	h.mux.Handle("POST /admin/api/reviews", h.auth.Middleware(h.auth.Require(PermissionReview, http.HandlerFunc(h.createReview))))
-	h.mux.Handle("POST /admin/api/api-key-lookup", h.auth.Middleware(h.auth.Require(PermissionAPIKeyLookup, http.HandlerFunc(h.createAPIKeyLookup))))
-	h.mux.Handle("GET /admin/api/raw-evidence/{trace_id}/{object_type}", h.auth.Middleware(h.auth.Require(PermissionRawEvidence, http.HandlerFunc(h.getRawEvidence))))
+	h := Handler{
+		repo:          cfg.Repo,
+		auth:          auth,
+		auditSecret:   cfg.AuditSecret,
+		evidenceStore: cfg.EvidenceStore,
+		lookupLimiter: NewMemoryRateLimiter(20, time.Hour),
+		rawLimiter:    NewMemoryRateLimiter(120, time.Hour),
+	}
 	return h
 }
 
+func (h Handler) routes() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /admin/api/login", h.login)
+	mux.Handle("GET /admin/api/me", h.auth.Middleware(http.HandlerFunc(h.me)))
+	mux.Handle("GET /admin/api/overview", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.overview))))
+	mux.Handle("GET /admin/api/usage", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.listUsage))))
+	mux.Handle("GET /admin/api/traces/{trace_id}", h.auth.Middleware(h.auth.Require(PermissionViewNormalizedTraces, http.HandlerFunc(h.getTraceDetail))))
+	mux.Handle("GET /admin/api/context-catalog", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.listContextCatalog))))
+	mux.Handle("POST /admin/api/context-catalog", h.auth.Middleware(h.requireCSRF(h.auth.Require(PermissionReview, http.HandlerFunc(h.createContextCatalogEntry)))))
+	mux.Handle("GET /admin/api/audit-logs", h.auth.Middleware(h.auth.Require(PermissionManageUsers, http.HandlerFunc(h.listAuditLogs))))
+	mux.HandleFunc("POST /admin/api/logout", h.logout)
+	mux.Handle("GET /admin/api/traces", h.auth.Middleware(h.auth.Require(PermissionViewNormalizedTraces, http.HandlerFunc(h.listTraces))))
+	mux.Handle("GET /admin/api/anomalies", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.listAnomalies))))
+	mux.Handle("GET /admin/api/coverage-alerts", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.listCoverageAlerts))))
+	mux.Handle("POST /admin/api/reviews", h.auth.Middleware(h.requireCSRF(h.auth.Require(PermissionReview, http.HandlerFunc(h.createReview)))))
+	mux.Handle("POST /admin/api/api-key-lookup", h.auth.Middleware(h.requireCSRF(h.auth.Require(PermissionAPIKeyLookup, http.HandlerFunc(h.createAPIKeyLookup)))))
+	mux.Handle("GET /admin/api/raw-evidence/{trace_id}/{object_type}", h.auth.Middleware(h.auth.Require(PermissionRawEvidence, http.HandlerFunc(h.getRawEvidence))))
+	mux.Handle("GET /admin/api/token-identities", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.listTokenIdentities))))
+	mux.Handle("GET /admin/api/review-decisions", h.auth.Middleware(h.auth.Require(PermissionReview, http.HandlerFunc(h.listReviewDecisions))))
+	mux.Handle("GET /admin/api/settings", h.auth.Middleware(h.auth.Require(PermissionManageUsers, http.HandlerFunc(h.systemSettings))))
+	return mux
+}
+
 func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.mux.ServeHTTP(w, r)
+	h.routes().ServeHTTP(w, r)
 }
 
 func (h Handler) login(w http.ResponseWriter, r *http.Request) {
@@ -84,12 +100,18 @@ func (h Handler) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to create session", http.StatusInternalServerError)
 		return
 	}
+	csrfToken, err := NewCSRFToken()
+	if err != nil {
+		http.Error(w, "failed to create csrf token", http.StatusInternalServerError)
+		return
+	}
 	expiresAt := h.auth.now().Add(12 * time.Hour)
-	if err := h.repo.CreateSession(r.Context(), Session{SessionID: sessionID, UserID: user.ID, ExpiresAt: expiresAt}); err != nil {
+	if err := h.repo.CreateSession(r.Context(), Session{SessionID: sessionID, UserID: user.ID, ExpiresAt: expiresAt, CSRFToken: csrfToken}); err != nil {
 		http.Error(w, "failed to create session", http.StatusInternalServerError)
 		return
 	}
 	http.SetCookie(w, h.auth.sessionCookie(sessionID, expiresAt))
+	http.SetCookie(w, h.auth.csrfCookie(csrfToken, expiresAt))
 	_ = h.repo.InsertAuditActionLog(r.Context(), AuditActionLog{
 		ActorUserID:   user.ID,
 		ActorUsername: user.Username,
@@ -112,6 +134,7 @@ func (h Handler) me(w http.ResponseWriter, r *http.Request) {
 func (h Handler) logout(w http.ResponseWriter, r *http.Request) {
 	now := h.auth.now()
 	http.SetCookie(w, h.auth.clearCookie())
+	http.SetCookie(w, h.auth.clearCSRFCookie())
 
 	if cookie, err := r.Cookie(h.auth.CookieName); err == nil {
 		if sessionID, ok := h.auth.verifyCookie(cookie.Value); ok {
@@ -133,6 +156,26 @@ func (h Handler) logout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h Handler) requireCSRF(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			next.ServeHTTP(w, r)
+			return
+		}
+		cookieName := h.auth.CSRFCookieName
+		if cookieName == "" {
+			cookieName = "audit_admin_csrf"
+		}
+		cookie, err := r.Cookie(cookieName)
+		if err != nil || cookie.Value == "" || r.Header.Get("X-CSRF-Token") != cookie.Value {
+			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (h Handler) listTraces(w http.ResponseWriter, r *http.Request) {
@@ -176,6 +219,41 @@ func (h Handler) listUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"usage": items})
+}
+
+func (h Handler) listTokenIdentities(w http.ResponseWriter, r *http.Request) {
+	items, err := h.repo.ListTokenIdentities(r.Context(), TokenIdentityFilter{
+		EmployeeNo:       r.URL.Query().Get("employee_no"),
+		TokenFingerprint: r.URL.Query().Get("token_fingerprint"),
+		Limit:            100,
+	})
+	if err != nil {
+		http.Error(w, "failed to list token identities", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"token_identities": items})
+}
+
+func (h Handler) listReviewDecisions(w http.ResponseWriter, r *http.Request) {
+	items, err := h.repo.ListReviewDecisions(r.Context(), ReviewDecisionFilter{
+		TargetType: r.URL.Query().Get("target_type"),
+		TargetID:   r.URL.Query().Get("target_id"),
+		Limit:      100,
+	})
+	if err != nil {
+		http.Error(w, "failed to list review decisions", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"review_decisions": items})
+}
+
+func (h Handler) systemSettings(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"settings": SystemSettingsSummary{
+		EmployeeNoPattern: "configured by EMPLOYEE_NO_PATTERN",
+		MetricsEnabled:    true,
+		LookupLimit:       20,
+		RawAccessLimit:    120,
+	}})
 }
 
 func (h Handler) getTraceDetail(w http.ResponseWriter, r *http.Request) {
@@ -366,6 +444,10 @@ func (h Handler) createReview(w http.ResponseWriter, r *http.Request) {
 
 func (h Handler) createAPIKeyLookup(w http.ResponseWriter, r *http.Request) {
 	principal, _ := PrincipalFromContext(r.Context())
+	if !h.lookupLimiter.Allow(principal.Username+":api_key_lookup", h.auth.now()) {
+		http.Error(w, http.StatusText(http.StatusTooManyRequests), http.StatusTooManyRequests)
+		return
+	}
 	var input struct {
 		APIKey string `json:"api_key"`
 	}
@@ -410,6 +492,10 @@ func canonicalizeLookupKey(value string) string {
 
 func (h Handler) getRawEvidence(w http.ResponseWriter, r *http.Request) {
 	principal, _ := PrincipalFromContext(r.Context())
+	if !h.rawLimiter.Allow(principal.Username+":raw_evidence", h.auth.now()) {
+		http.Error(w, http.StatusText(http.StatusTooManyRequests), http.StatusTooManyRequests)
+		return
+	}
 	traceID := strings.TrimSpace(r.PathValue("trace_id"))
 	objectType := strings.TrimSpace(r.PathValue("object_type"))
 	if traceID == "" || objectType == "" {

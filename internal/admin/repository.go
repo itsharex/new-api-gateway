@@ -49,8 +49,8 @@ func (r Repository) CreateSession(ctx context.Context, session Session) error {
 		return ErrAdminDBRequired
 	}
 	_, err := r.db.Exec(ctx, `
-INSERT INTO audit_sessions (session_id, user_id, expires_at)
-VALUES ($1,$2,$3)`, session.SessionID, session.UserID, session.ExpiresAt)
+INSERT INTO audit_sessions (session_id, user_id, expires_at, csrf_token)
+VALUES ($1,$2,$3,$4)`, session.SessionID, session.UserID, session.ExpiresAt, session.CSRFToken)
 	return err
 }
 
@@ -387,6 +387,116 @@ LIMIT $%d`, strings.Join(where, " AND "), len(args))
 			&item.ErrorCount,
 			&item.TotalTokens,
 			&item.EstimatedCost,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r Repository) ListTokenIdentities(ctx context.Context, filter TokenIdentityFilter) ([]TokenIdentitySummary, error) {
+	if r.db == nil {
+		return nil, ErrAdminDBRequired
+	}
+	limit := filter.Limit
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	where := []string{"1=1"}
+	args := []any{}
+	add := func(clause string, value any) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(clause, len(args)))
+	}
+	if filter.EmployeeNo != "" {
+		add("c.employee_no = $%d", filter.EmployeeNo)
+	}
+	if filter.TokenFingerprint != "" {
+		add("c.token_fingerprint = $%d", filter.TokenFingerprint)
+	}
+	args = append(args, limit)
+	query := fmt.Sprintf(`
+SELECT c.fingerprint_display, c.token_fingerprint, c.new_api_token_id,
+       c.token_name_raw, c.employee_no, COALESCE(s.display_name, ''),
+       COALESCE(s.department, c.department), c.token_status, c.token_group,
+       c.last_seen_at::text
+FROM token_identity_cache c
+LEFT JOIN audit_subjects s ON s.employee_no = c.employee_no
+WHERE %s
+ORDER BY c.last_seen_at DESC
+LIMIT $%d`, strings.Join(where, " AND "), len(args))
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TokenIdentitySummary{}
+	for rows.Next() {
+		var item TokenIdentitySummary
+		if err := rows.Scan(
+			&item.FingerprintDisplay,
+			&item.TokenFingerprint,
+			&item.NewAPITokenID,
+			&item.TokenNameRaw,
+			&item.EmployeeNo,
+			&item.DisplayName,
+			&item.Department,
+			&item.TokenStatus,
+			&item.TokenGroup,
+			&item.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r Repository) ListReviewDecisions(ctx context.Context, filter ReviewDecisionFilter) ([]ReviewDecision, error) {
+	if r.db == nil {
+		return nil, ErrAdminDBRequired
+	}
+	limit := filter.Limit
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	where := []string{"1=1"}
+	args := []any{}
+	add := func(clause string, value any) {
+		args = append(args, value)
+		where = append(where, fmt.Sprintf(clause, len(args)))
+	}
+	if filter.TargetType != "" {
+		add("target_type = $%d", filter.TargetType)
+	}
+	if filter.TargetID != "" {
+		add("target_id = $%d", filter.TargetID)
+	}
+	args = append(args, limit)
+	query := fmt.Sprintf(`
+SELECT target_type, target_id, decision, reviewer_id, reviewer_username,
+       note, created_at
+FROM review_decisions
+WHERE %s
+ORDER BY created_at DESC
+LIMIT $%d`, strings.Join(where, " AND "), len(args))
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ReviewDecision{}
+	for rows.Next() {
+		var item ReviewDecision
+		if err := rows.Scan(
+			&item.TargetType,
+			&item.TargetID,
+			&item.Decision,
+			&item.ReviewerID,
+			&item.ReviewerUsername,
+			&item.Note,
+			&item.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

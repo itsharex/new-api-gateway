@@ -16,11 +16,12 @@ import (
 type principalContextKey struct{}
 
 type Auth struct {
-	Repo          Repository
-	SessionSecret string
-	CookieName    string
-	CookieSecure  bool
-	Now           func() time.Time
+	Repo           Repository
+	SessionSecret  string
+	CookieName     string
+	CSRFCookieName string
+	CookieSecure   bool
+	Now            func() time.Time
 }
 
 func (a Auth) now() time.Time {
@@ -38,6 +39,14 @@ func NewSessionID() (string, error) {
 	return "sess_" + hex.EncodeToString(bytes[:]), nil
 }
 
+func NewCSRFToken() (string, error) {
+	var bytes [32]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return "", err
+	}
+	return "csrf_" + hex.EncodeToString(bytes[:]), nil
+}
+
 func (a Auth) sessionCookie(sessionID string, expiresAt time.Time) *http.Cookie {
 	return &http.Cookie{
 		Name:     a.CookieName,
@@ -47,6 +56,22 @@ func (a Auth) sessionCookie(sessionID string, expiresAt time.Time) *http.Cookie 
 		HttpOnly: true,
 		Secure:   a.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
+	}
+}
+
+func (a Auth) csrfCookie(token string, expiresAt time.Time) *http.Cookie {
+	name := a.CSRFCookieName
+	if name == "" {
+		name = "audit_admin_csrf"
+	}
+	return &http.Cookie{
+		Name:     name,
+		Value:    token,
+		Path:     "/admin",
+		Expires:  expiresAt.UTC(),
+		HttpOnly: false,
+		Secure:   a.CookieSecure,
+		SameSite: http.SameSiteStrictMode,
 	}
 }
 
@@ -60,6 +85,23 @@ func (a Auth) clearCookie() *http.Cookie {
 		HttpOnly: true,
 		Secure:   a.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
+	}
+}
+
+func (a Auth) clearCSRFCookie() *http.Cookie {
+	name := a.CSRFCookieName
+	if name == "" {
+		name = "audit_admin_csrf"
+	}
+	return &http.Cookie{
+		Name:     name,
+		Value:    "",
+		Path:     "/admin",
+		Expires:  time.Unix(0, 0).UTC(),
+		MaxAge:   -1,
+		HttpOnly: false,
+		Secure:   a.CookieSecure,
+		SameSite: http.SameSiteStrictMode,
 	}
 }
 

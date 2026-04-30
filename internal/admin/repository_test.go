@@ -20,6 +20,7 @@ func TestRepositoryCreateSessionStoresOnlySessionID(t *testing.T) {
 		SessionID: "sess_123",
 		UserID:    7,
 		ExpiresAt: time.Unix(2000, 0).UTC(),
+		CSRFToken: "csrf_123",
 	})
 
 	if err != nil {
@@ -28,10 +29,10 @@ func TestRepositoryCreateSessionStoresOnlySessionID(t *testing.T) {
 	if !strings.Contains(execer.sql, "INSERT INTO audit_sessions") {
 		t.Fatalf("sql = %s", execer.sql)
 	}
-	if len(execer.args) != 3 {
-		t.Fatalf("arg count = %d, want 3", len(execer.args))
+	if len(execer.args) != 4 {
+		t.Fatalf("arg count = %d, want 4", len(execer.args))
 	}
-	if execer.args[0] != "sess_123" || execer.args[1] != int64(7) {
+	if execer.args[0] != "sess_123" || execer.args[1] != int64(7) || execer.args[3] != "csrf_123" {
 		t.Fatalf("args = %#v", execer.args)
 	}
 }
@@ -229,6 +230,35 @@ func TestRepositoryListUsageAggregatesCapsLimitAndBindsFilters(t *testing.T) {
 	}
 	if got := db.queryArgs[len(db.queryArgs)-1]; got != 100 {
 		t.Fatalf("limit arg = %#v, want capped 100", got)
+	}
+}
+
+func TestListTokenIdentitiesQueryUsesCacheAndSubjects(t *testing.T) {
+	db := &recordingAdminDB{}
+	repo := NewRepository(db)
+	_, _ = repo.ListTokenIdentities(context.Background(), TokenIdentityFilter{EmployeeNo: "E10001", Limit: 500})
+
+	if !strings.Contains(db.querySQL, "FROM token_identity_cache") {
+		t.Fatalf("query = %s", db.querySQL)
+	}
+	if !strings.Contains(db.querySQL, "LEFT JOIN audit_subjects") {
+		t.Fatalf("query missing audit subject enrichment: %s", db.querySQL)
+	}
+	if got := db.queryArgs[len(db.queryArgs)-1]; got != 100 {
+		t.Fatalf("limit = %#v, want capped 100", got)
+	}
+}
+
+func TestListReviewDecisionsQuery(t *testing.T) {
+	db := &recordingAdminDB{}
+	repo := NewRepository(db)
+	_, _ = repo.ListReviewDecisions(context.Background(), ReviewDecisionFilter{TargetType: "anomaly", Limit: 500})
+
+	if !strings.Contains(db.querySQL, "FROM review_decisions") {
+		t.Fatalf("query = %s", db.querySQL)
+	}
+	if got := db.queryArgs[len(db.queryArgs)-1]; got != 100 {
+		t.Fatalf("limit = %#v, want capped 100", got)
 	}
 }
 

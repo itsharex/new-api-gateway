@@ -38,6 +38,7 @@ type Session struct {
 	SessionID string
 	UserID    int64
 	ExpiresAt time.Time
+	CSRFToken string
 }
 
 type Principal struct {
@@ -174,6 +175,38 @@ type UsageBucket struct {
 	ErrorCount         int64  `json:"error_count"`
 	TotalTokens        int64  `json:"total_tokens"`
 	EstimatedCost      string `json:"estimated_cost"`
+}
+
+type TokenIdentityFilter struct {
+	EmployeeNo       string
+	TokenFingerprint string
+	Limit            int
+}
+
+type TokenIdentitySummary struct {
+	FingerprintDisplay string `json:"fingerprint_display"`
+	TokenFingerprint   string `json:"token_fingerprint"`
+	NewAPITokenID      int    `json:"new_api_token_id"`
+	TokenNameRaw       string `json:"token_name_raw"`
+	EmployeeNo         string `json:"employee_no"`
+	DisplayName        string `json:"display_name"`
+	Department         string `json:"department"`
+	TokenStatus        int    `json:"token_status"`
+	TokenGroup         string `json:"token_group"`
+	LastSeenAt         string `json:"last_seen_at"`
+}
+
+type ReviewDecisionFilter struct {
+	TargetType string
+	TargetID   string
+	Limit      int
+}
+
+type SystemSettingsSummary struct {
+	EmployeeNoPattern string `json:"employee_no_pattern"`
+	MetricsEnabled    bool   `json:"metrics_enabled"`
+	LookupLimit       int    `json:"lookup_limit"`
+	RawAccessLimit    int    `json:"raw_access_limit"`
 }
 
 type TraceDetail struct {

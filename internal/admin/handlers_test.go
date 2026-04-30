@@ -49,12 +49,22 @@ func TestLoginMeLogoutFlow(t *testing.T) {
 		t.Fatal("login response leaked password hash")
 	}
 	cookies := loginRec.Result().Cookies()
-	if len(cookies) != 1 || cookies[0].Name != "audit_admin_session" {
+	var sessionCookie *http.Cookie
+	var csrfCookie *http.Cookie
+	for _, cookie := range cookies {
+		switch cookie.Name {
+		case "audit_admin_session":
+			sessionCookie = cookie
+		case "audit_admin_csrf":
+			csrfCookie = cookie
+		}
+	}
+	if sessionCookie == nil || csrfCookie == nil {
 		t.Fatalf("cookies = %#v", cookies)
 	}
 
 	meReq := httptest.NewRequest(http.MethodGet, "/admin/api/me", nil)
-	meReq.AddCookie(cookies[0])
+	meReq.AddCookie(sessionCookie)
 	meRec := httptest.NewRecorder()
 	handler.ServeHTTP(meRec, meReq)
 
@@ -75,7 +85,7 @@ func TestLoginMeLogoutFlow(t *testing.T) {
 	}
 
 	logoutReq := httptest.NewRequest(http.MethodPost, "/admin/api/logout", nil)
-	logoutReq.AddCookie(cookies[0])
+	logoutReq.AddCookie(sessionCookie)
 	logoutRec := httptest.NewRecorder()
 	handler.ServeHTTP(logoutRec, logoutReq)
 	if logoutRec.Code != http.StatusNoContent {
@@ -273,7 +283,7 @@ func TestCreateReviewRejectsInvalidInput(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			handler, db, cookie := newAuthenticatedReviewHandler(t)
 			req := httptest.NewRequest(http.MethodPost, "/admin/api/reviews", bytes.NewBufferString(tt.body))
-			req.AddCookie(cookie)
+			addAuthenticatedCookies(req, cookie)
 			rec := httptest.NewRecorder()
 
 			handler.ServeHTTP(rec, req)
@@ -293,7 +303,7 @@ func TestCreateReviewWritesValidAuditMetadata(t *testing.T) {
 	db.auditActions = nil
 	db.auditMetadata = nil
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/reviews", bytes.NewBufferString(`{"target_type":"anomaly","target_id":"anom_1","decision":"acknowledge","note":"seen"}`))
-	req.AddCookie(cookie)
+	addAuthenticatedCookies(req, cookie)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -326,7 +336,7 @@ func TestAPIKeyLookupDoesNotPersistPlaintextKeyInAuditLog(t *testing.T) {
 	wantFingerprint := fingerprint.Compute("secret", auditSecret)
 
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/api-key-lookup", bytes.NewBufferString(`{"api_key":"`+plaintextKey+`"}`))
-	req.AddCookie(cookie)
+	addAuthenticatedCookies(req, cookie)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -360,6 +370,38 @@ func TestAPIKeyLookupDoesNotPersistPlaintextKeyInAuditLog(t *testing.T) {
 	}, " ")
 	if strings.Contains(auditText, plaintextKey) {
 		t.Fatal("audit log persisted plaintext key")
+	}
+}
+
+func TestUnsafeAdminRequestRequiresCSRFToken(t *testing.T) {
+	h, _, cookie := newAuthenticatedAdminHandler(t, RoleRawAccess, "audit-secret-0123456789abcdef", nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/api-key-lookup", strings.NewReader(`{"api_key":"sk-secret-extra"}`))
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestAPIKeyLookupRateLimit(t *testing.T) {
+	h, _, cookie := newAuthenticatedAdminHandler(t, RoleRawAccess, "audit-secret-0123456789abcdef", nil)
+	h.lookupLimiter = NewMemoryRateLimiter(1, time.Hour)
+	h.auth.CSRFCookieName = "audit_admin_csrf"
+
+	for attempt := 0; attempt < 2; attempt++ {
+		req := httptest.NewRequest(http.MethodPost, "/admin/api/api-key-lookup", strings.NewReader(`{"api_key":"sk-secret-extra"}`))
+		req.AddCookie(cookie)
+		req.Header.Set("X-CSRF-Token", "test-csrf")
+		req.AddCookie(&http.Cookie{Name: h.auth.CSRFCookieName, Value: "test-csrf"})
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if attempt == 1 && rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("second status = %d, want 429", rec.Code)
+		}
 	}
 }
 
@@ -403,6 +445,34 @@ func TestRawEvidenceAccessStreamsObjectAndWritesAuditLog(t *testing.T) {
 	log := db.auditLogs[0]
 	if log.Action != "raw_evidence_access" || log.TraceID != "trace_123" || log.TargetID != "request_body" {
 		t.Fatalf("audit log = %#v", log)
+	}
+}
+
+func TestRawEvidenceAccessRateLimit(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleRawAccess, "audit-secret-0123456789abcdef", fakeEvidenceStore{
+		body: "raw evidence bytes",
+	})
+	handler.rawLimiter = NewMemoryRateLimiter(1, time.Hour)
+	db.rawEvidenceObject = EvidenceObjectSummary{
+		TraceID:     "trace_123",
+		ObjectType:  "request_body",
+		ObjectRef:   "raw/trace_123/request_body.bin",
+		ContentType: "application/json",
+		SizeBytes:   18,
+		SHA256:      "abc123",
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		req := httptest.NewRequest(http.MethodGet, "/admin/api/raw-evidence/trace_123/request_body", nil)
+		req.AddCookie(cookie)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if attempt == 0 && rec.Code != http.StatusOK {
+			t.Fatalf("first status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+		}
+		if attempt == 1 && rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("second status = %d, want 429", rec.Code)
+		}
 	}
 }
 
@@ -619,6 +689,40 @@ func TestOverviewRequiresAggregatePermission(t *testing.T) {
 	}
 }
 
+func TestProductCompletionRoutesReturnJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		role    Role
+		path    string
+		wantKey string
+	}{
+		{name: "token identities", role: RoleViewer, path: "/admin/api/token-identities", wantKey: "token_identities"},
+		{name: "review decisions", role: RoleAuditor, path: "/admin/api/review-decisions", wantKey: "review_decisions"},
+		{name: "settings", role: RoleAdmin, path: "/admin/api/settings", wantKey: "settings"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler, _, cookie := newAuthenticatedAdminHandler(t, tt.role, "", nil)
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			req.AddCookie(cookie)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+			}
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			if _, ok := body[tt.wantKey]; !ok {
+				t.Fatalf("body missing %q: %s", tt.wantKey, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestContextCatalogCreateRequiresReviewPermissionAndWritesActor(t *testing.T) {
 	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleAuditor, "", nil)
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/context-catalog", bytes.NewBufferString(`{
@@ -633,7 +737,7 @@ func TestContextCatalogCreateRequiresReviewPermissionAndWritesActor(t *testing.T
 		"expected_usage_level":"medium",
 		"active":true
 	}`))
-	req.AddCookie(cookie)
+	addAuthenticatedCookies(req, cookie)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -653,7 +757,7 @@ func TestContextCatalogCreateDefaultsOmittedActiveToTrue(t *testing.T) {
 		"name":"default-active",
 		"expected_usage_level":"low"
 	}`))
-	req.AddCookie(cookie)
+	addAuthenticatedCookies(req, cookie)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -674,7 +778,7 @@ func TestContextCatalogCreatePersistsExplicitActiveFalse(t *testing.T) {
 		"expected_usage_level":"low",
 		"active":false
 	}`))
-	req.AddCookie(cookie)
+	addAuthenticatedCookies(req, cookie)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -695,7 +799,7 @@ func TestContextCatalogCreateAuditFailureReturnsErrorAfterUpsert(t *testing.T) {
 		"name":"audit-failure",
 		"expected_usage_level":"medium"
 	}`))
-	req.AddCookie(cookie)
+	addAuthenticatedCookies(req, cookie)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -714,7 +818,7 @@ func TestContextCatalogCreateRejectsInvalidInput(t *testing.T) {
 		"context_type":"unknown",
 		"name":"invalid-context"
 	}`))
-	req.AddCookie(cookie)
+	addAuthenticatedCookies(req, cookie)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -736,7 +840,7 @@ func TestContextCatalogCreateResponseDoesNotEchoServerManagedFields(t *testing.T
 		"created_at":"client-created",
 		"updated_at":"client-updated"
 	}`))
-	req.AddCookie(cookie)
+	addAuthenticatedCookies(req, cookie)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -814,7 +918,30 @@ func newAuthenticatedAdminHandler(t *testing.T, role Role, auditSecret string, e
 	if loginRec.Code != http.StatusOK {
 		t.Fatalf("login status = %d, body = %s", loginRec.Code, loginRec.Body.String())
 	}
-	return handler, db, loginRec.Result().Cookies()[0]
+	var sessionCookie *http.Cookie
+	var csrfCookie *http.Cookie
+	for _, cookie := range loginRec.Result().Cookies() {
+		switch cookie.Name {
+		case "audit_admin_session":
+			sessionCookie = cookie
+		case "audit_admin_csrf":
+			csrfCookie = cookie
+		}
+	}
+	if sessionCookie == nil || csrfCookie == nil {
+		t.Fatalf("login cookies = %#v", loginRec.Result().Cookies())
+	}
+	sessionCookie.Unparsed = append(sessionCookie.Unparsed, csrfCookie.Value)
+	return handler, db, sessionCookie
+}
+
+func addAuthenticatedCookies(req *http.Request, cookie *http.Cookie) {
+	req.AddCookie(cookie)
+	if len(cookie.Unparsed) == 0 || cookie.Unparsed[0] == "" {
+		return
+	}
+	req.Header.Set("X-CSRF-Token", cookie.Unparsed[0])
+	req.AddCookie(&http.Cookie{Name: "audit_admin_csrf", Value: cookie.Unparsed[0]})
 }
 
 type fakeEvidenceStore struct {
@@ -878,6 +1005,9 @@ func (m *memoryAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgco
 			SessionID: args[0].(string),
 			UserID:    args[1].(int64),
 			ExpiresAt: args[2].(time.Time),
+		}
+		if len(args) > 3 {
+			m.session.CSRFToken = args[3].(string)
 		}
 	case strings.Contains(sql, "UPDATE audit_sessions SET revoked_at"):
 		if m.revokeErr != nil {
