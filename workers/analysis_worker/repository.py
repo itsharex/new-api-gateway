@@ -11,7 +11,6 @@ from models import (
     TraceCapturedJob,
     UsageAggregateDelta,
     bucket_start_day,
-    bucket_start_hour,
 )
 
 
@@ -20,9 +19,10 @@ class PostgresAnalysisRepository:
         self.connection = connection
 
     def analysis_context_for(self, job: TraceCapturedJob) -> AnalysisContext:
+        if not job.token_fingerprint:
+            return AnalysisContext()
         cursor = self.connection.cursor()
         daily_bucket = bucket_start_day(job.request_started_at)
-        hour_bucket = bucket_start_hour(job.request_started_at)
         window_end = job.request_started_at or datetime.now(timezone.utc).isoformat()
         cursor.execute(
             """
@@ -38,14 +38,14 @@ class PostgresAnalysisRepository:
         daily_row = cursor.fetchone()
         cursor.execute(
             """
-            SELECT COALESCE(SUM(total_tokens), 0)
-            FROM usage_aggregates
+            SELECT COALESCE(SUM(usage_total_tokens), 0)
+            FROM traces
             WHERE token_fingerprint = %s
-              AND employee_no = %s
-              AND bucket_size = 'hour'
-              AND bucket_start = %s::timestamptz
+              AND employee_no_snapshot = %s
+              AND request_started_at >= (%s::timestamptz - interval '5 minutes')
+              AND request_started_at < %s::timestamptz
             """,
-            (job.token_fingerprint, job.employee_no, hour_bucket),
+            (job.token_fingerprint, job.employee_no, window_end, window_end),
         )
         short_window_row = cursor.fetchone()
         cursor.execute(

@@ -198,6 +198,7 @@ def test_detects_expensive_model_overuse():
     assert alerts[0].severity == "high"
     assert alerts[0].observed_value == 500
     assert alerts[0].threshold_value == 500
+    assert "meeting or exceeding" in alerts[0].reason
 
 
 def test_detects_long_output_anomaly():
@@ -207,6 +208,7 @@ def test_detects_long_output_anomaly():
     assert alerts[0].severity == "medium"
     assert alerts[0].observed_value == 8000
     assert alerts[0].threshold_value == 8000
+    assert "meeting or exceeding" in alerts[0].reason
 
 
 def test_detects_repeated_prompt_within_trace():
@@ -248,6 +250,7 @@ def test_detects_daily_token_limit_exceeded():
     assert alerts[0].severity == "high"
     assert alerts[0].observed_value == 101000
     assert alerts[0].threshold_value == 100000
+    assert "meeting or exceeding" in alerts[0].reason
 
 
 def test_detects_short_window_token_spike():
@@ -262,6 +265,7 @@ def test_detects_short_window_token_spike():
     assert alerts[0].severity == "medium"
     assert alerts[0].observed_value == 11000
     assert alerts[0].threshold_value == 10000
+    assert "meeting or exceeding" in alerts[0].reason
 
 
 def test_detects_off_hours_high_usage():
@@ -276,6 +280,7 @@ def test_detects_off_hours_high_usage():
     assert alerts[0].severity == "medium"
     assert alerts[0].observed_value == 2000
     assert alerts[0].threshold_value == 2000
+    assert "meeting or exceeding" in alerts[0].reason
 
 
 def test_detects_possible_token_leak_signal():
@@ -287,3 +292,28 @@ def test_detects_possible_token_leak_signal():
     assert alerts[0].severity == "high"
     assert alerts[0].observed_value == 3
     assert alerts[0].threshold_value == 3
+
+
+def test_does_not_emit_token_scoped_aggregate_alerts_for_empty_token_fingerprint():
+    context = AnalysisContext(
+        daily_tokens_before=200000,
+        short_window_tokens_before=20000,
+        distinct_client_hashes_1h=10,
+    )
+
+    alerts = detect_anomalies(job(
+        token_fingerprint="",
+        usage_total_tokens=1,
+        request_started_at="2026-04-28T02:45:22Z",
+    ), context=context)
+
+    assert [alert.anomaly_type for alert in alerts] == []
+
+
+def test_malformed_request_timestamp_is_not_off_hours():
+    alerts = detect_anomalies(job(
+        request_started_at="not-a-timestamp",
+        usage_total_tokens=2000,
+    ))
+
+    assert [alert.anomaly_type for alert in alerts] == []

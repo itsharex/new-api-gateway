@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from models import (
     AnalysisResult,
     AnomalyAlert,
@@ -7,6 +9,51 @@ from models import (
     UsageAggregateDelta,
 )
 from repository import PostgresAnalysisRepository
+
+
+class SemanticCursor:
+    def __init__(self, rows_by_trace=None, aggregate_rows=None, distinct_client_hashes=0):
+        self.executed = []
+        self.rows_by_trace = list(rows_by_trace or [])
+        self.aggregate_rows = list(aggregate_rows or [])
+        self.distinct_client_hashes = distinct_client_hashes
+        self.next_row = None
+
+    def execute(self, query, params):
+        self.executed.append((query, params))
+        if "FROM traces" in query and "usage_total_tokens" in query:
+            token_fingerprint, employee_no, window_end, window_end_again = params
+            assert window_end == window_end_again
+            parsed_window_end = datetime.fromisoformat(window_end.replace("Z", "+00:00"))
+            window_start = parsed_window_end - timedelta(minutes=5)
+            self.next_row = (sum(
+                row["usage_total_tokens"]
+                for row in self.rows_by_trace
+                if row["token_fingerprint"] == token_fingerprint
+                and row["employee_no"] == employee_no
+                and window_start <= _parse_time(row["request_started_at"]) < parsed_window_end
+            ),)
+        elif "COUNT(DISTINCT" in query:
+            self.next_row = (self.distinct_client_hashes,)
+        elif self.aggregate_rows:
+            self.next_row = self.aggregate_rows.pop(0)
+        else:
+            self.next_row = (0,)
+
+    def fetchone(self):
+        return self.next_row
+
+
+class SemanticConnection:
+    def __init__(self, cursor):
+        self.cursor_obj = cursor
+
+    def cursor(self):
+        return self.cursor_obj
+
+
+def _parse_time(value):
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
 class FakeCursor:
@@ -194,6 +241,92 @@ def test_repository_loads_analysis_context_from_aggregates_and_recent_trace_hash
     assert context.distinct_client_hashes_1h == 3
     queries = "\n".join(query for query, _ in conn.cursor_obj.executed)
     assert "bucket_size = 'day'" in queries
-    assert "bucket_size = 'hour'" in queries
+    assert "SUM(usage_total_tokens)" in queries
+    assert "interval '5 minutes'" in queries
     assert "client_ip_hash" in queries
     assert "user_agent_hash" in queries
+
+
+def test_repository_loads_short_window_context_from_previous_5_minutes_of_traces():
+    cursor = SemanticCursor(
+        aggregate_rows=[(90000,)],
+        distinct_client_hashes=2,
+        rows_by_trace=[
+            {
+                "token_fingerprint": "tkfp_raw",
+                "employee_no": "E10001",
+                "request_started_at": "2026-04-28T13:40:21Z",
+                "usage_total_tokens": 9000,
+            },
+            {
+                "token_fingerprint": "tkfp_raw",
+                "employee_no": "E10001",
+                "request_started_at": "2026-04-28T13:40:22Z",
+                "usage_total_tokens": 300,
+            },
+            {
+                "token_fingerprint": "tkfp_raw",
+                "employee_no": "E10001",
+                "request_started_at": "2026-04-28T13:44:22Z",
+                "usage_total_tokens": 450,
+            },
+            {
+                "token_fingerprint": "tkfp_raw",
+                "employee_no": "E10001",
+                "request_started_at": "2026-04-28T13:45:22Z",
+                "usage_total_tokens": 2000,
+            },
+            {
+                "token_fingerprint": "other_token",
+                "employee_no": "E10001",
+                "request_started_at": "2026-04-28T13:44:22Z",
+                "usage_total_tokens": 7000,
+            },
+            {
+                "token_fingerprint": "tkfp_raw",
+                "employee_no": "E99999",
+                "request_started_at": "2026-04-28T13:44:22Z",
+                "usage_total_tokens": 8000,
+            },
+        ],
+    )
+    repo = PostgresAnalysisRepository(SemanticConnection(cursor))
+    job = TraceCapturedJob(
+        type="trace_captured",
+        trace_id="trace_current",
+        route_pattern="/v1/chat/completions",
+        protocol_family="openai_chat",
+        capture_mode="raw_and_normalized",
+        employee_no="E10001",
+        token_fingerprint="tkfp_raw",
+        usage_total_tokens=2000,
+        request_started_at="2026-04-28T13:45:22Z",
+    )
+
+    context = repo.analysis_context_for(job)
+
+    assert context.daily_tokens_before == 90000
+    assert context.short_window_tokens_before == 750
+    assert context.distinct_client_hashes_1h == 2
+
+
+def test_repository_returns_default_context_without_querying_for_empty_token_fingerprint():
+    conn = FakeConnection()
+    repo = PostgresAnalysisRepository(conn)
+    job = TraceCapturedJob(
+        type="trace_captured",
+        trace_id="trace_empty_token",
+        route_pattern="/v1/chat/completions",
+        protocol_family="openai_chat",
+        capture_mode="raw_and_normalized",
+        employee_no="E10001",
+        token_fingerprint="",
+        request_started_at="2026-04-28T13:45:22Z",
+    )
+
+    context = repo.analysis_context_for(job)
+
+    assert context.daily_tokens_before == 0
+    assert context.short_window_tokens_before == 0
+    assert context.distinct_client_hashes_1h == 0
+    assert conn.cursor_obj.executed == []

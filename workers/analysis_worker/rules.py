@@ -70,32 +70,34 @@ def detect_anomalies(
             threshold_value=HIGH_TRACE_TOKEN_THRESHOLD,
             reason=f"single trace used {job.usage_total_tokens} tokens, exceeding {HIGH_TRACE_TOKEN_THRESHOLD}",
         ))
-    daily_total = context.daily_tokens_before + job.usage_total_tokens
-    if daily_total > context.daily_token_limit:
-        alerts.append(_anomaly(
-            job,
-            "daily_token_limit_exceeded",
-            "high",
-            observed_value=daily_total,
-            threshold_value=context.daily_token_limit,
-            reason=(
-                f"daily token total reached {daily_total}, exceeding "
-                f"{context.daily_token_limit}"
-            ),
-        ))
-    short_window_total = context.short_window_tokens_before + job.usage_total_tokens
-    if short_window_total > context.short_window_token_threshold:
-        alerts.append(_anomaly(
-            job,
-            "short_window_token_spike",
-            "medium",
-            observed_value=short_window_total,
-            threshold_value=context.short_window_token_threshold,
-            reason=(
-                f"short-window token total reached {short_window_total}, exceeding "
-                f"{context.short_window_token_threshold}"
-            ),
-        ))
+    has_token_context = bool(job.token_fingerprint)
+    if has_token_context:
+        daily_total = context.daily_tokens_before + job.usage_total_tokens
+        if daily_total > context.daily_token_limit:
+            alerts.append(_anomaly(
+                job,
+                "daily_token_limit_exceeded",
+                "high",
+                observed_value=daily_total,
+                threshold_value=context.daily_token_limit,
+                reason=(
+                    f"daily token total reached {daily_total}, meeting or exceeding "
+                    f"{context.daily_token_limit}"
+                ),
+            ))
+        short_window_total = context.short_window_tokens_before + job.usage_total_tokens
+        if short_window_total > context.short_window_token_threshold:
+            alerts.append(_anomaly(
+                job,
+                "short_window_token_spike",
+                "medium",
+                observed_value=short_window_total,
+                threshold_value=context.short_window_token_threshold,
+                reason=(
+                    f"short-window token total reached {short_window_total}, meeting or exceeding "
+                    f"{context.short_window_token_threshold}"
+                ),
+            ))
     if (
         job.model_requested.strip().lower() in context.expensive_model_set()
         and job.usage_total_tokens >= context.expensive_model_token_threshold
@@ -107,7 +109,8 @@ def detect_anomalies(
             observed_value=job.usage_total_tokens,
             threshold_value=context.expensive_model_token_threshold,
             reason=(
-                f"expensive model {job.model_requested} used {job.usage_total_tokens} tokens, exceeding "
+                f"expensive model {job.model_requested} used {job.usage_total_tokens} tokens, "
+                "meeting or exceeding "
                 f"{context.expensive_model_token_threshold}"
             ),
         ))
@@ -119,7 +122,7 @@ def detect_anomalies(
             observed_value=job.usage_completion_tokens,
             threshold_value=context.long_output_token_threshold,
             reason=(
-                f"completion used {job.usage_completion_tokens} tokens, exceeding "
+                f"completion used {job.usage_completion_tokens} tokens, meeting or exceeding "
                 f"{context.long_output_token_threshold}"
             ),
         ))
@@ -144,11 +147,14 @@ def detect_anomalies(
             observed_value=job.usage_total_tokens,
             threshold_value=context.off_hours_token_threshold,
             reason=(
-                f"off-hours trace used {job.usage_total_tokens} tokens, exceeding "
+                f"off-hours trace used {job.usage_total_tokens} tokens, meeting or exceeding "
                 f"{context.off_hours_token_threshold}"
             ),
         ))
-    if context.distinct_client_hashes_1h >= context.token_leak_distinct_client_threshold:
+    if (
+        has_token_context
+        and context.distinct_client_hashes_1h >= context.token_leak_distinct_client_threshold
+    ):
         alerts.append(_anomaly(
             job,
             "possible_token_leak",
@@ -257,7 +263,10 @@ def _max_repeated_prompt_count(messages: list[NormalizedMessage]) -> int:
 def _is_off_hours(value: str, offset_hours: int) -> bool:
     if not value:
         return False
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
     local_time = parsed.astimezone(timezone.utc) + timedelta(hours=offset_hours)
     return local_time.hour < 8 or local_time.hour >= 20
 
