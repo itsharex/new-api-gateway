@@ -177,3 +177,55 @@ def test_generic_json_prompt_is_used_for_images():
     assert messages[0].role == "user"
     assert messages[0].content_text == "Draw the launch diagram"
     assert messages[0].protocol_item_type == "generic_prompt"
+
+
+def test_normalizes_gemini_contents_text_and_response():
+    trace_job = job(protocol_family="gemini", route_pattern="/v1beta/models/gemini:generateContent")
+    request = {
+        "contents": [
+            {"role": "user", "parts": [{"text": "debug the gateway"}]},
+            {"role": "model", "parts": [{"text": "previous answer"}]},
+        ]
+    }
+    response = {"candidates": [{"content": {"role": "model", "parts": [{"text": "fixed"}]}}]}
+
+    messages, _ = normalize_json_trace(trace_job, json.dumps(request), json.dumps(response))
+
+    assert [message.content_text for message in messages] == ["debug the gateway", "previous answer", "fixed"]
+    assert messages[0].protocol_item_type == "gemini_content_part"
+
+
+def test_normalizes_image_url_and_base64_media():
+    trace_job = job(protocol_family="openai_chat", route_pattern="/v1/chat/completions")
+    request = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "inspect this"},
+                    {"type": "image_url", "image_url": {"url": "https://example.test/a.png"}},
+                    {"type": "input_audio", "input_audio": {"data": "aGVsbG8=", "format": "wav"}},
+                ],
+            }
+        ]
+    }
+
+    messages, _ = normalize_json_trace(trace_job, json.dumps(request), "{}")
+
+    assert any(message.modality == "image" and message.media_url == "https://example.test/a.png" for message in messages)
+    assert any(message.modality == "audio" and message.protocol_item_type == "base64_media" for message in messages)
+
+
+def test_normalizes_sse_event_stream_response():
+    trace_job = job(protocol_family="openai_chat", route_pattern="/v1/chat/completions")
+    request = {"messages": [{"role": "user", "content": "stream please"}]}
+    response = "\n".join([
+        'data: {"choices":[{"delta":{"role":"assistant","content":"hello"}}]}',
+        'data: {"choices":[{"delta":{"content":" world"}}]}',
+        "data: [DONE]",
+        "",
+    ])
+
+    messages, _ = normalize_json_trace(trace_job, json.dumps(request), response)
+
+    assert any(message.direction == "response" and message.content_text == "hello world" for message in messages)

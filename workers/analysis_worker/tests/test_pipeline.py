@@ -85,6 +85,43 @@ def test_process_job_line_reads_evidence_normalizes_and_persists(tmp_path: Path)
     assert repo.aggregates[0].response_body_bytes == 256
 
 
+def test_process_job_line_reconstructs_sse_response(tmp_path: Path):
+    evidence_dir = tmp_path / "raw" / "2026" / "04" / "28" / "trace_stream"
+    evidence_dir.mkdir(parents=True)
+    (evidence_dir / "request_body.bin").write_text(json.dumps({
+        "model": "gpt-4.1",
+        "messages": [{"role": "user", "content": "Stream this"}],
+    }), encoding="utf-8")
+    (evidence_dir / "response_body.bin").write_text("\n".join([
+        'data: {"choices":[{"delta":{"role":"assistant","content":"hello"}}]}',
+        'data: {"choices":[{"delta":{"content":" world"}}]}',
+        "data: [DONE]",
+        "",
+    ]), encoding="utf-8")
+    repo = RecordingRepository()
+    line = json.dumps({
+        "type": "trace_captured",
+        "trace_id": "trace_stream",
+        "route_pattern": "/v1/chat/completions",
+        "protocol_family": "openai_chat",
+        "capture_mode": "raw_and_normalized",
+        "employee_no": "E10001",
+        "request_raw_ref": "raw/2026/04/28/trace_stream/request_body.bin",
+        "response_raw_ref": "raw/2026/04/28/trace_stream/response_body.bin",
+        "model_requested": "gpt-4.1",
+        "usage_total_tokens": 10,
+        "status_code": 200,
+        "upstream_status_code": 200,
+        "stream": True,
+        "request_started_at": "2026-04-28T13:45:22Z",
+    })
+
+    response = process_job_line(line, FileEvidenceStore(tmp_path), repo)
+
+    assert response["normalized_message_count"] == 2
+    assert any(message.direction == "response" and message.content_text == "hello world" for message in repo.messages)
+
+
 def test_process_job_line_persists_work_relevance_result(tmp_path: Path):
     evidence_dir = tmp_path / "raw" / "2026" / "04" / "28" / "trace_work"
     evidence_dir.mkdir(parents=True)
