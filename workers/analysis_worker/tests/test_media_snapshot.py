@@ -66,6 +66,18 @@ def test_rejects_hostnames_that_resolve_to_shared_address_space(resolved_ip):
         validate_snapshot_url("https://assets.example.test/image.png", policy)
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://[64:ff9b::a9fe:a9fe]/latest/meta-data",
+        "http://[64:ff9b:1::a9fe:a9fe]/latest/meta-data",
+    ],
+)
+def test_rejects_nat64_ipv4_translation_literals(url):
+    with pytest.raises(ValueError, match="private or metadata"):
+        validate_snapshot_url(url, MediaSnapshotPolicy())
+
+
 def test_rejects_non_allowlisted_domain_when_allowlist_is_configured():
     policy = MediaSnapshotPolicy(
         allowed_domains={"assets.company.test"},

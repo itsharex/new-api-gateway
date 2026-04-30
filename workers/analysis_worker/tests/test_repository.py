@@ -477,11 +477,13 @@ def test_repository_skips_obvious_non_http_media_urls():
 
 
 def test_media_snapshot_upgrade_migration_defines_idempotent_job_key():
-    migration_path = Path(__file__).parents[3] / "migrations" / "0012_media_snapshot_job_uniqueness.sql"
-    migration = migration_path.read_text(encoding="utf-8")
+    migrations_dir = Path(__file__).parents[3] / "migrations"
+    initial_migration = (migrations_dir / "0011_media_snapshot_jobs.sql").read_text(encoding="utf-8")
+    upgrade_migration = (migrations_dir / "0012_media_snapshot_job_uniqueness.sql").read_text(encoding="utf-8")
 
-    assert "WITH ranked_duplicates AS" in migration
-    assert "DELETE FROM media_snapshot_jobs" in migration
-    assert "ROW_NUMBER() OVER" in migration
-    assert "CREATE UNIQUE INDEX IF NOT EXISTS idx_media_snapshot_jobs_unique_source" in migration
-    assert "trace_id, source_url, source_context, policy_reason" in migration
+    assert "idx_media_snapshot_jobs_unique_source" not in initial_migration
+    assert "WITH ranked_duplicates AS" in upgrade_migration
+    assert "DELETE FROM media_snapshot_jobs" in upgrade_migration
+    assert "ROW_NUMBER() OVER" in upgrade_migration
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS idx_media_snapshot_jobs_unique_source" in upgrade_migration
+    assert "trace_id, source_url, source_context, policy_reason" in upgrade_migration

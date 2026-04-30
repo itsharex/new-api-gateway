@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from ipaddress import IPv4Address, IPv6Address, ip_address
+from ipaddress import IPv4Address, IPv6Address, ip_address, ip_network
 import socket
 from typing import Callable, Iterable
 from urllib.parse import ParseResult, urlparse
@@ -8,6 +8,10 @@ from urllib.parse import ParseResult, urlparse
 METADATA_HOSTS = {"169.254.169.254", "metadata.google.internal"}
 LOCALHOST_HOSTS = {"localhost"}
 Resolver = Callable[[str], Iterable[str]]
+NAT64_TRANSLATION_NETWORKS = (
+    ip_network("64:ff9b::/96"),
+    ip_network("64:ff9b:1::/48"),
+)
 
 
 @dataclass(frozen=True)
@@ -55,7 +59,12 @@ def _canonical_allowed_domains(domains: set[str]) -> set[str]:
 
 
 def _address_is_blocked(address: IPv4Address | IPv6Address) -> bool:
-    return address.is_multicast or not address.is_global or str(address) == "169.254.169.254"
+    return (
+        address.is_multicast
+        or not address.is_global
+        or str(address) == "169.254.169.254"
+        or any(address in network for network in NAT64_TRANSLATION_NETWORKS)
+    )
 
 
 def _canonical_parse_result(parsed: ParseResult, hostname: str) -> ParseResult:
