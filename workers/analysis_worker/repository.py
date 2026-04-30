@@ -1,12 +1,71 @@
 import json
+from datetime import datetime, timezone
 from typing import Iterable
 
-from models import AnalysisResult, AnomalyAlert, CoverageAlert, NormalizedMessage, UsageAggregateDelta
+from models import (
+    AnalysisContext,
+    AnalysisResult,
+    AnomalyAlert,
+    CoverageAlert,
+    NormalizedMessage,
+    TraceCapturedJob,
+    UsageAggregateDelta,
+    bucket_start_day,
+    bucket_start_hour,
+)
 
 
 class PostgresAnalysisRepository:
     def __init__(self, connection):
         self.connection = connection
+
+    def analysis_context_for(self, job: TraceCapturedJob) -> AnalysisContext:
+        cursor = self.connection.cursor()
+        daily_bucket = bucket_start_day(job.request_started_at)
+        hour_bucket = bucket_start_hour(job.request_started_at)
+        window_end = job.request_started_at or datetime.now(timezone.utc).isoformat()
+        cursor.execute(
+            """
+            SELECT COALESCE(SUM(total_tokens), 0)
+            FROM usage_aggregates
+            WHERE token_fingerprint = %s
+              AND employee_no = %s
+              AND bucket_size = 'day'
+              AND bucket_start = %s::timestamptz
+            """,
+            (job.token_fingerprint, job.employee_no, daily_bucket),
+        )
+        daily_row = cursor.fetchone()
+        cursor.execute(
+            """
+            SELECT COALESCE(SUM(total_tokens), 0)
+            FROM usage_aggregates
+            WHERE token_fingerprint = %s
+              AND employee_no = %s
+              AND bucket_size = 'hour'
+              AND bucket_start = %s::timestamptz
+            """,
+            (job.token_fingerprint, job.employee_no, hour_bucket),
+        )
+        short_window_row = cursor.fetchone()
+        cursor.execute(
+            """
+            SELECT COUNT(DISTINCT concat_ws(':', NULLIF(client_ip_hash, ''), NULLIF(user_agent_hash, '')))
+            FROM traces
+            WHERE token_fingerprint = %s
+              AND request_started_at >= (%s::timestamptz - interval '1 hour')
+              AND request_started_at <= %s::timestamptz
+              AND (client_ip_hash <> '' OR user_agent_hash <> '')
+            """,
+            (job.token_fingerprint, window_end, window_end),
+        )
+        client_hash_row = cursor.fetchone()
+        return AnalysisContext(
+            daily_total_tokens=int(daily_row[0] if daily_row else 0),
+            short_window_total_tokens=int(short_window_row[0] if short_window_row else 0),
+            distinct_client_hashes_last_hour=int(client_hash_row[0] if client_hash_row else 0),
+            local_timezone_offset_hours=8,
+        )
 
     def save_trace_analysis(
         self,

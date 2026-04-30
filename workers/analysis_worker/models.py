@@ -39,6 +39,25 @@ class TraceCapturedJob:
 
 
 @dataclass(frozen=True)
+class AnalysisContext:
+    daily_total_tokens: int = 0
+    short_window_total_tokens: int = 0
+    distinct_client_hashes_last_hour: int = 0
+    local_timezone_offset_hours: int | None = None
+    expensive_models: tuple[str, ...] = ("gpt-4.5-preview", "o1-pro")
+    daily_token_threshold: int = 100_000
+    short_window_token_threshold: int = 10_000
+    expensive_model_token_threshold: int = 500
+    long_output_completion_token_threshold: int = 8_000
+    repeated_prompt_threshold: int = 3
+    off_hours_total_token_threshold: int = 2_000
+    distinct_client_hashes_threshold: int = 3
+
+    def expensive_model_set(self) -> set[str]:
+        return {model.strip().lower() for model in self.expensive_models if model.strip()}
+
+
+@dataclass(frozen=True)
 class NormalizedMessage:
     trace_id: str
     direction: str

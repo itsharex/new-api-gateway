@@ -1,4 +1,4 @@
-from models import NormalizedMessage, TraceCapturedJob, WorkRelevanceAssessment
+from models import AnalysisContext, NormalizedMessage, TraceCapturedJob, WorkRelevanceAssessment
 from rules import DETECTOR_VERSION, detect_anomalies, detect_coverage_alerts, detect_work_relevance_anomalies
 
 
@@ -171,3 +171,104 @@ def test_does_not_detect_low_work_relevance_high_cost_for_low_tokens():
     )
 
     assert detect_work_relevance_anomalies(job(usage_total_tokens=100), assessment) == []
+
+
+def test_detects_missing_employee_number():
+    alerts = detect_anomalies(job(employee_no="", status_code=401, upstream_status_code=401))
+
+    assert [alert.anomaly_type for alert in alerts] == ["missing_employee_no"]
+    assert alerts[0].severity == "high"
+    assert alerts[0].observed_value == 1
+    assert alerts[0].threshold_value == 0
+
+
+def test_detects_expensive_model_overuse():
+    alerts = detect_anomalies(job(model_requested="o1-pro", usage_total_tokens=501))
+
+    assert [alert.anomaly_type for alert in alerts] == ["expensive_model_overuse"]
+    assert alerts[0].severity == "high"
+    assert alerts[0].observed_value == 501
+    assert alerts[0].threshold_value == 500
+
+
+def test_detects_long_output_anomaly():
+    alerts = detect_anomalies(job(usage_completion_tokens=8001, usage_total_tokens=9000))
+
+    assert [alert.anomaly_type for alert in alerts] == ["long_output_anomaly"]
+    assert alerts[0].severity == "medium"
+    assert alerts[0].observed_value == 8001
+    assert alerts[0].threshold_value == 8000
+
+
+def test_detects_repeated_prompt_within_trace():
+    messages = [
+        NormalizedMessage(
+            trace_id="trace_1",
+            direction="request",
+            sequence_index=index,
+            role="user",
+            modality="text",
+            content_text="Run the same prompt",
+            content_text_hash="same_hash",
+            media_url="",
+            source_path=f"request.messages[{index}]",
+            protocol_item_type="openai_chat_message",
+            token_count_estimate=4,
+            metadata={},
+        )
+        for index in range(3)
+    ]
+
+    alerts = detect_anomalies(job(), messages=messages)
+
+    assert [alert.anomaly_type for alert in alerts] == ["repeated_prompt"]
+    assert alerts[0].severity == "medium"
+    assert alerts[0].observed_value == 3
+    assert alerts[0].threshold_value == 3
+
+
+def test_detects_daily_token_limit_exceeded():
+    context = AnalysisContext(daily_total_tokens=100001)
+
+    alerts = detect_anomalies(job(), context=context)
+
+    assert [alert.anomaly_type for alert in alerts] == ["daily_token_limit_exceeded"]
+    assert alerts[0].severity == "high"
+    assert alerts[0].observed_value == 100001
+    assert alerts[0].threshold_value == 100000
+
+
+def test_detects_short_window_token_spike():
+    context = AnalysisContext(short_window_total_tokens=10001)
+
+    alerts = detect_anomalies(job(), context=context)
+
+    assert [alert.anomaly_type for alert in alerts] == ["short_window_token_spike"]
+    assert alerts[0].severity == "medium"
+    assert alerts[0].observed_value == 10001
+    assert alerts[0].threshold_value == 10000
+
+
+def test_detects_off_hours_high_usage():
+    context = AnalysisContext(local_timezone_offset_hours=8)
+
+    alerts = detect_anomalies(job(
+        request_started_at="2026-04-28T14:45:22Z",
+        usage_total_tokens=2001,
+    ), context=context)
+
+    assert [alert.anomaly_type for alert in alerts] == ["off_hours_high_usage"]
+    assert alerts[0].severity == "medium"
+    assert alerts[0].observed_value == 2001
+    assert alerts[0].threshold_value == 2000
+
+
+def test_detects_possible_token_leak_signal():
+    context = AnalysisContext(distinct_client_hashes_last_hour=3)
+
+    alerts = detect_anomalies(job(), context=context)
+
+    assert [alert.anomaly_type for alert in alerts] == ["possible_token_leak"]
+    assert alerts[0].severity == "high"
+    assert alerts[0].observed_value == 3
+    assert alerts[0].threshold_value == 3

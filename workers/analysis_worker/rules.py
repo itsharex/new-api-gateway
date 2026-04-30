@@ -1,4 +1,7 @@
+from datetime import datetime, timedelta, timezone
+
 from models import (
+    AnalysisContext,
     AnomalyAlert,
     CoverageAlert,
     NormalizedMessage,
@@ -23,7 +26,13 @@ MISSING_TIMESTAMP_WINDOW_START = "1970-01-01T00:00:00+00:00"
 MISSING_TIMESTAMP_WINDOW_END = "1970-01-01T00:01:00+00:00"
 
 
-def detect_anomalies(job: TraceCapturedJob) -> list[AnomalyAlert]:
+def detect_anomalies(
+    job: TraceCapturedJob,
+    messages: list[NormalizedMessage] | None = None,
+    context: AnalysisContext | None = None,
+) -> list[AnomalyAlert]:
+    messages = messages or []
+    context = context or AnalysisContext()
     alerts: list[AnomalyAlert] = []
     if _upstream_success(job) and not job.employee_no:
         alerts.append(_anomaly(
@@ -33,6 +42,15 @@ def detect_anomalies(job: TraceCapturedJob) -> list[AnomalyAlert]:
             observed_value=1,
             threshold_value=0,
             reason="identity was unresolved while upstream returned a successful response",
+        ))
+    if not job.employee_no and not _upstream_success(job):
+        alerts.append(_anomaly(
+            job,
+            "missing_employee_no",
+            "high",
+            observed_value=1,
+            threshold_value=0,
+            reason="trace did not resolve to an employee number",
         ))
     if job.identity_resolution_status == "invalid_employee_no":
         alerts.append(_anomaly(
@@ -51,6 +69,94 @@ def detect_anomalies(job: TraceCapturedJob) -> list[AnomalyAlert]:
             observed_value=job.usage_total_tokens,
             threshold_value=HIGH_TRACE_TOKEN_THRESHOLD,
             reason=f"single trace used {job.usage_total_tokens} tokens, exceeding {HIGH_TRACE_TOKEN_THRESHOLD}",
+        ))
+    if context.daily_total_tokens > context.daily_token_threshold:
+        alerts.append(_anomaly(
+            job,
+            "daily_token_limit_exceeded",
+            "high",
+            observed_value=context.daily_total_tokens,
+            threshold_value=context.daily_token_threshold,
+            reason=(
+                f"daily token total reached {context.daily_total_tokens}, exceeding "
+                f"{context.daily_token_threshold}"
+            ),
+        ))
+    if context.short_window_total_tokens > context.short_window_token_threshold:
+        alerts.append(_anomaly(
+            job,
+            "short_window_token_spike",
+            "medium",
+            observed_value=context.short_window_total_tokens,
+            threshold_value=context.short_window_token_threshold,
+            reason=(
+                f"short-window token total reached {context.short_window_total_tokens}, exceeding "
+                f"{context.short_window_token_threshold}"
+            ),
+        ))
+    if (
+        job.model_requested.strip().lower() in context.expensive_model_set()
+        and job.usage_total_tokens > context.expensive_model_token_threshold
+    ):
+        alerts.append(_anomaly(
+            job,
+            "expensive_model_overuse",
+            "high",
+            observed_value=job.usage_total_tokens,
+            threshold_value=context.expensive_model_token_threshold,
+            reason=(
+                f"expensive model {job.model_requested} used {job.usage_total_tokens} tokens, exceeding "
+                f"{context.expensive_model_token_threshold}"
+            ),
+        ))
+    if job.usage_completion_tokens > context.long_output_completion_token_threshold:
+        alerts.append(_anomaly(
+            job,
+            "long_output_anomaly",
+            "medium",
+            observed_value=job.usage_completion_tokens,
+            threshold_value=context.long_output_completion_token_threshold,
+            reason=(
+                f"completion used {job.usage_completion_tokens} tokens, exceeding "
+                f"{context.long_output_completion_token_threshold}"
+            ),
+        ))
+    repeated_prompt_count = _max_repeated_prompt_count(messages)
+    if repeated_prompt_count >= context.repeated_prompt_threshold:
+        alerts.append(_anomaly(
+            job,
+            "repeated_prompt",
+            "medium",
+            observed_value=repeated_prompt_count,
+            threshold_value=context.repeated_prompt_threshold,
+            reason=f"same request prompt appeared {repeated_prompt_count} times within one trace",
+        ))
+    if (
+        _is_off_hours(job.request_started_at, context.local_timezone_offset_hours)
+        and job.usage_total_tokens > context.off_hours_total_token_threshold
+    ):
+        alerts.append(_anomaly(
+            job,
+            "off_hours_high_usage",
+            "medium",
+            observed_value=job.usage_total_tokens,
+            threshold_value=context.off_hours_total_token_threshold,
+            reason=(
+                f"off-hours trace used {job.usage_total_tokens} tokens, exceeding "
+                f"{context.off_hours_total_token_threshold}"
+            ),
+        ))
+    if context.distinct_client_hashes_last_hour >= context.distinct_client_hashes_threshold:
+        alerts.append(_anomaly(
+            job,
+            "possible_token_leak",
+            "high",
+            observed_value=context.distinct_client_hashes_last_hour,
+            threshold_value=context.distinct_client_hashes_threshold,
+            reason=(
+                f"token appeared from {context.distinct_client_hashes_last_hour} distinct client hashes "
+                "within the last hour"
+            ),
         ))
     if job.capture_mode in {"raw_only", "raw_and_minimal"} and job.response_body_size > RAW_ONLY_RESPONSE_BYTES_THRESHOLD:
         alerts.append(_anomaly(
@@ -130,6 +236,28 @@ def detect_coverage_alerts(job: TraceCapturedJob, messages: list[NormalizedMessa
 def _upstream_success(job: TraceCapturedJob) -> bool:
     status = job.upstream_status_code or job.status_code
     return 200 <= status < 400
+
+
+def _max_repeated_prompt_count(messages: list[NormalizedMessage]) -> int:
+    counts: dict[str, int] = {}
+    for message in messages:
+        if message.direction != "request":
+            continue
+        if message.role and message.role != "user":
+            continue
+        key = message.content_text_hash or message.content_text.strip().lower()
+        if not key:
+            continue
+        counts[key] = counts.get(key, 0) + 1
+    return max(counts.values(), default=0)
+
+
+def _is_off_hours(value: str, offset_hours: int | None) -> bool:
+    if offset_hours is None or not value:
+        return False
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    local_time = parsed.astimezone(timezone.utc) + timedelta(hours=offset_hours)
+    return local_time.hour < 8 or local_time.hour >= 20
 
 
 def _anomaly(

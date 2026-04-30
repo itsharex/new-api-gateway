@@ -11,7 +11,15 @@ import redis
 from context_repository import PostgresContextRepository
 from evidence import FileEvidenceStore
 from heartbeat import HeartbeatRepository
-from models import ContextCatalogEntry, TraceCapturedJob, UsageAggregateDelta, bucket_start_day, bucket_start_hour, parse_job
+from models import (
+    AnalysisContext,
+    ContextCatalogEntry,
+    TraceCapturedJob,
+    UsageAggregateDelta,
+    bucket_start_day,
+    bucket_start_hour,
+    parse_job,
+)
 from normalizers import normalize_json_trace
 from repository import PostgresAnalysisRepository
 from rules import detect_anomalies, detect_coverage_alerts, detect_work_relevance_anomalies
@@ -81,8 +89,10 @@ def process_trace(
     work_relevance = classify_work_relevance(job, messages, list(contexts or []))
     results.append(work_relevance.to_analysis_result())
     aggregates = aggregate_deltas(job)
+    load_analysis_context = getattr(repository, "analysis_context_for", None)
+    analysis_context = load_analysis_context(job) if load_analysis_context else AnalysisContext()
     anomalies = [
-        *detect_anomalies(job),
+        *detect_anomalies(job, messages, analysis_context),
         *detect_work_relevance_anomalies(job, work_relevance),
     ]
     coverage_alerts = detect_coverage_alerts(job, messages)

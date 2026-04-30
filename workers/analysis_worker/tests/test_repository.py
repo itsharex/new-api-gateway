@@ -1,18 +1,31 @@
-from models import AnalysisResult, AnomalyAlert, CoverageAlert, NormalizedMessage, UsageAggregateDelta
+from models import (
+    AnalysisResult,
+    AnomalyAlert,
+    CoverageAlert,
+    NormalizedMessage,
+    TraceCapturedJob,
+    UsageAggregateDelta,
+)
 from repository import PostgresAnalysisRepository
 
 
 class FakeCursor:
-    def __init__(self):
+    def __init__(self, fetch_values=None):
         self.executed = []
+        self.fetch_values = list(fetch_values or [])
 
     def execute(self, query, params):
         self.executed.append((query, params))
 
+    def fetchone(self):
+        if not self.fetch_values:
+            return None
+        return self.fetch_values.pop(0)
+
 
 class FakeConnection:
-    def __init__(self):
-        self.cursor_obj = FakeCursor()
+    def __init__(self, fetch_values=None):
+        self.cursor_obj = FakeCursor(fetch_values)
         self.committed = False
 
     def cursor(self):
@@ -158,3 +171,29 @@ def test_repository_inserts_messages_results_aggregates_anomalies_and_coverage()
         query for query, _ in conn.cursor_obj.executed if "INSERT INTO analysis_results" in query
     ]
     assert len(analysis_queries) == 2
+
+
+def test_repository_loads_analysis_context_from_aggregates_and_recent_trace_hashes():
+    conn = FakeConnection(fetch_values=[(90000,), (7000,), (3,)])
+    repo = PostgresAnalysisRepository(conn)
+    job = TraceCapturedJob(
+        type="trace_captured",
+        trace_id="trace_1",
+        route_pattern="/v1/chat/completions",
+        protocol_family="openai_chat",
+        capture_mode="raw_and_normalized",
+        employee_no="E10001",
+        token_fingerprint="tkfp_raw",
+        request_started_at="2026-04-28T13:45:22Z",
+    )
+
+    context = repo.analysis_context_for(job)
+
+    assert context.daily_total_tokens == 90000
+    assert context.short_window_total_tokens == 7000
+    assert context.distinct_client_hashes_last_hour == 3
+    queries = "\n".join(query for query, _ in conn.cursor_obj.executed)
+    assert "bucket_size = 'day'" in queries
+    assert "bucket_size = 'hour'" in queries
+    assert "client_ip_hash" in queries
+    assert "user_agent_hash" in queries

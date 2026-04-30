@@ -5,7 +5,7 @@ from pathlib import Path
 
 from evidence import FileEvidenceStore
 from main import process_job_line
-from models import ContextCatalogEntry
+from models import AnalysisContext, ContextCatalogEntry
 
 
 class RecordingRepository:
@@ -15,6 +15,12 @@ class RecordingRepository:
         self.aggregates = []
         self.anomalies = []
         self.coverage_alerts = []
+        self.analysis_context = AnalysisContext()
+        self.context_requests = []
+
+    def analysis_context_for(self, job):
+        self.context_requests.append(job.trace_id)
+        return self.analysis_context
 
     def save_trace_analysis(self, messages, results, aggregates, anomalies=(), coverage_alerts=()):
         self.messages.extend(messages)
@@ -214,6 +220,42 @@ def test_process_job_line_persists_anomaly_and_coverage_alert(tmp_path: Path):
         "high_trace_tokens",
     ]
     assert [alert.alert_code for alert in repo.coverage_alerts] == ["normalization_gap"]
+
+
+def test_process_job_line_uses_repository_analysis_context(tmp_path: Path):
+    evidence_dir = tmp_path / "raw" / "2026" / "04" / "28" / "trace_context"
+    evidence_dir.mkdir(parents=True)
+    (evidence_dir / "request_body.bin").write_text(json.dumps({
+        "model": "gpt-4.1",
+        "messages": [{"role": "user", "content": "Summarize incident"}]
+    }), encoding="utf-8")
+    (evidence_dir / "response_body.bin").write_text(json.dumps({
+        "choices": [{"message": {"role": "assistant", "content": "Incident resolved"}}],
+        "usage": {"total_tokens": 18}
+    }), encoding="utf-8")
+    repo = RecordingRepository()
+    repo.analysis_context = AnalysisContext(daily_total_tokens=100001)
+    line = json.dumps({
+        "type": "trace_captured",
+        "trace_id": "trace_context",
+        "route_pattern": "/v1/chat/completions",
+        "protocol_family": "openai_chat",
+        "capture_mode": "raw_and_normalized",
+        "employee_no": "E10001",
+        "request_raw_ref": "raw/2026/04/28/trace_context/request_body.bin",
+        "response_raw_ref": "raw/2026/04/28/trace_context/response_body.bin",
+        "model_requested": "gpt-4.1",
+        "usage_total_tokens": 18,
+        "status_code": 200,
+        "upstream_status_code": 200,
+        "request_started_at": "2026-04-28T13:45:22Z",
+    })
+
+    response = process_job_line(line, FileEvidenceStore(tmp_path), repo)
+
+    assert repo.context_requests == ["trace_context"]
+    assert response["anomaly_count"] == 1
+    assert [alert.anomaly_type for alert in repo.anomalies] == ["daily_token_limit_exceeded"]
 
 
 def test_process_job_line_detects_low_work_relevance_high_cost(tmp_path: Path):
