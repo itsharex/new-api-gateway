@@ -102,6 +102,15 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			RequestSize: capturedReq.SizeBytes,
 		})
 	}
+	multipartParts := []MultipartPartEvidence{}
+	if isMultipart(req) {
+		parts, err := captureMultipartParts(traceID, capturedReq.ContentType, capturedReq.BodyBytes)
+		if err != nil {
+			h.reportAuditError(auditCtx, err)
+		} else {
+			multipartParts = parts
+		}
+	}
 	cancelAudit()
 
 	auditCtx, cancelAudit = h.auditContext(req.Context())
@@ -138,6 +147,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			startedAt:            startedAt,
 			requestObject:        requestObject,
 			requestHeadersObject: requestHeadersObject,
+			multipartParts:       multipartParts,
 			requestContentType:   capturedReq.ContentType,
 			modelRequested:       modelRequested,
 			requestSize:          capturedReq.SizeBytes,
@@ -172,6 +182,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			finishedAt:           finishedAt,
 			requestObject:        requestObject,
 			requestHeadersObject: requestHeadersObject,
+			multipartParts:       multipartParts,
 			requestContentType:   capturedReq.ContentType,
 			modelRequested:       modelRequested,
 			requestSize:          capturedReq.SizeBytes,
@@ -198,6 +209,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			startedAt:            startedAt,
 			requestObject:        requestObject,
 			requestHeadersObject: requestHeadersObject,
+			multipartParts:       multipartParts,
 			requestContentType:   capturedReq.ContentType,
 			modelRequested:       modelRequested,
 			requestSize:          capturedReq.SizeBytes,
@@ -233,6 +245,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			finishedAt:            finishedAt,
 			requestObject:         requestObject,
 			requestHeadersObject:  requestHeadersObject,
+			multipartParts:        multipartParts,
 			responseHeadersObject: responseHeadersObject,
 			requestContentType:    capturedReq.ContentType,
 			responseContentType:   upstreamResp.Header.Get("Content-Type"),
@@ -278,6 +291,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		requestObject:         requestObject,
 		responseObject:        responseObject,
 		requestHeadersObject:  requestHeadersObject,
+		multipartParts:        multipartParts,
 		responseHeadersObject: responseHeadersObject,
 		requestContentType:    capturedReq.ContentType,
 		responseContentType:   upstreamResp.Header.Get("Content-Type"),
@@ -313,6 +327,7 @@ type traceRecord struct {
 	responseObject        evidence.Object
 	requestHeadersObject  evidence.Object
 	responseHeadersObject evidence.Object
+	multipartParts        []MultipartPartEvidence
 	requestContentType    string
 	responseContentType   string
 	modelRequested        string
@@ -400,6 +415,31 @@ func (h Handler) insertTrace(ctx context.Context, record traceRecord) error {
 	}
 	if record.requestHeadersObject.ObjectRef != "" {
 		if err := h.insertEvidenceObject(ctx, record.traceID, "request_headers", record.requestHeadersObject); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	for _, part := range record.multipartParts {
+		object, err := h.putEvidence(ctx, record.traceID, "multipart_part", part.ContentType, part.Data)
+		if err != nil {
+			h.reportAuditError(ctx, err)
+			errs = append(errs, err)
+			continue
+		}
+		err = h.TraceRepo.InsertRawEvidence(ctx, traces.RawEvidenceObject{
+			TraceID:          record.traceID,
+			ObjectType:       "multipart_part",
+			ObjectRef:        object.ObjectRef,
+			StorageBackend:   object.StorageBackend,
+			ContentType:      object.ContentType,
+			OriginalFilename: part.Filename,
+			SizeBytes:        object.SizeBytes,
+			SHA256:           object.SHA256,
+			RedactionStatus:  "not_redacted",
+			EncryptionStatus: object.StorageBackend,
+			CreatedAt:        object.CreatedAt,
+		})
+		if err != nil {
+			h.reportAuditError(ctx, err)
 			errs = append(errs, err)
 		}
 	}

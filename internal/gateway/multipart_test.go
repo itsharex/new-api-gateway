@@ -65,3 +65,33 @@ func TestDetectMultipartNilRequest(t *testing.T) {
 		t.Fatal("expected non-multipart")
 	}
 }
+
+func TestCaptureMultipartPartsExtractsFieldsAndFiles(t *testing.T) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("prompt", "make a diagram"); err != nil {
+		t.Fatalf("WriteField error = %v", err)
+	}
+	part, err := writer.CreateFormFile("image", "input.png")
+	if err != nil {
+		t.Fatalf("CreateFormFile error = %v", err)
+	}
+	_, _ = part.Write([]byte("png-bytes"))
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	parts, err := captureMultipartParts("trace_1", writer.FormDataContentType(), body.Bytes())
+	if err != nil {
+		t.Fatalf("captureMultipartParts error = %v", err)
+	}
+	if len(parts) != 2 {
+		t.Fatalf("parts = %#v", parts)
+	}
+	if parts[0].Name != "prompt" || parts[0].Filename != "" || string(parts[0].Data) != "make a diagram" {
+		t.Fatalf("field part = %#v", parts[0])
+	}
+	if parts[1].Name != "image" || parts[1].Filename != "input.png" || parts[1].ContentType != "application/octet-stream" {
+		t.Fatalf("file part = %#v", parts[1])
+	}
+}

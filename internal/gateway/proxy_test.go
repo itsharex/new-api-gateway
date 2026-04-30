@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -594,6 +595,53 @@ func TestProxyRecordsHeaderEvidenceAndMinimalMetadata(t *testing.T) {
 	}
 	if job.ClientIPHash != trace.ClientIPHash || job.UserAgentHash != trace.UserAgentHash {
 		t.Fatalf("job audit hashes = %+v", job)
+	}
+}
+
+func TestProxyPersistsMultipartPartEvidence(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("prompt", "make a diagram"); err != nil {
+		t.Fatalf("WriteField error = %v", err)
+	}
+	part, err := writer.CreateFormFile("image", "input.png")
+	if err != nil {
+		t.Fatalf("CreateFormFile error = %v", err)
+	}
+	_, _ = part.Write([]byte("png-bytes"))
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	repo := &memoryTraceRepo{}
+	handler := testHandler(upstream.URL, repo, evidence.NewFilesystemStore(t.TempDir()))
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewReader(body.Bytes()))
+	req.Header.Set("Authorization", "Bearer sk-abc123")
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var multipartObjects []traces.RawEvidenceObject
+	for _, object := range repo.rawEvidence {
+		if object.ObjectType == "multipart_part" {
+			multipartObjects = append(multipartObjects, object)
+		}
+	}
+	if len(multipartObjects) != 2 {
+		t.Fatalf("multipart objects = %#v", multipartObjects)
+	}
+	if multipartObjects[1].OriginalFilename != "input.png" || multipartObjects[1].ContentType != "application/octet-stream" {
+		t.Fatalf("file multipart object = %#v", multipartObjects[1])
 	}
 }
 
