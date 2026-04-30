@@ -328,6 +328,7 @@ type traceRecord struct {
 	responseObject        evidence.Object
 	requestHeadersObject  evidence.Object
 	responseHeadersObject evidence.Object
+	websocketLogObject    evidence.Object
 	multipartParts        []MultipartPartEvidence
 	requestContentType    string
 	responseContentType   string
@@ -458,6 +459,11 @@ func (h Handler) insertTrace(ctx context.Context, record traceRecord) error {
 			errs = append(errs, err)
 		}
 	}
+	if record.websocketLogObject.ObjectRef != "" {
+		if err := h.insertEvidenceObject(ctx, record.traceID, "websocket_log", record.websocketLogObject); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
@@ -565,7 +571,19 @@ func (h Handler) serveWebSocketTunnel(w http.ResponseWriter, req *http.Request, 
 		return
 	}
 	if upstreamResp.StatusCode == http.StatusSwitchingProtocols {
-		copyBidirectional(clientConn, clientRW.Reader, upstreamConn, upstreamReader)
+		wsLog := newBoundedWebSocketLog(1 << 20)
+		copyBidirectional(clientConn, clientRW.Reader, upstreamConn, upstreamReader, wsLog)
+		if body := wsLog.Bytes(); len(body) > 0 {
+			auditCtx, cancelAudit := h.auditContext(req.Context())
+			object, err := h.putEvidence(auditCtx, record.traceID, "websocket_log", "text/plain", body)
+			cancelAudit()
+			if err != nil {
+				h.reportAuditError(req.Context(), err)
+				record.skipPostPersistence = true
+			} else {
+				record.websocketLogObject = object
+			}
+		}
 	}
 	h.recordWebSocketTrace(req, record, record.statusCode, record.upstreamCode)
 }
@@ -653,22 +671,36 @@ func dialUpstream(ctx context.Context, target *url.URL) (net.Conn, error) {
 	}
 }
 
-func copyBidirectional(clientConn net.Conn, clientReader *bufio.Reader, upstreamConn net.Conn, upstreamReader *bufio.Reader) {
+func copyBidirectional(clientConn net.Conn, clientReader *bufio.Reader, upstreamConn net.Conn, upstreamReader *bufio.Reader, wsLog *boundedWebSocketLog) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, _ = io.Copy(upstreamConn, io.MultiReader(clientReader, clientConn))
+		var reader io.Reader = io.MultiReader(clientReader, clientConn)
+		if wsLog != nil {
+			reader = io.TeeReader(reader, writerFunc(wsLog.WriteClient))
+		}
+		_, _ = io.Copy(upstreamConn, reader)
 		_ = upstreamConn.Close()
 		_ = clientConn.Close()
 	}()
 	go func() {
 		defer wg.Done()
-		_, _ = io.Copy(clientConn, io.MultiReader(upstreamReader, upstreamConn))
+		var reader io.Reader = io.MultiReader(upstreamReader, upstreamConn)
+		if wsLog != nil {
+			reader = io.TeeReader(reader, writerFunc(wsLog.WriteUpstream))
+		}
+		_, _ = io.Copy(clientConn, reader)
 		_ = clientConn.Close()
 		_ = upstreamConn.Close()
 	}()
 	wg.Wait()
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(data []byte) (int, error) {
+	return f(data)
 }
 
 func (h Handler) serveStreamingResponse(w http.ResponseWriter, req *http.Request, upstreamResp *http.Response, record traceRecord) {

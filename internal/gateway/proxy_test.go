@@ -1145,8 +1145,9 @@ func TestProxyTunnelsRealtimeWebSocketUpgrade(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	repo := &notifyingTraceRepo{traces: make(chan traces.Trace, 1)}
-	proxy := httptest.NewServer(testHandler(upstream.URL, repo, evidence.NewFilesystemStore(t.TempDir())))
+	repo := &notifyingTraceRepo{traces: make(chan traces.Trace, 1), rawEvidence: make(chan traces.RawEvidenceObject, 8)}
+	store := evidence.NewFilesystemStore(t.TempDir())
+	proxy := httptest.NewServer(testHandler(upstream.URL, repo, store))
 	defer proxy.Close()
 
 	proxyURL, err := url.Parse(proxy.URL)
@@ -1214,6 +1215,39 @@ func TestProxyTunnelsRealtimeWebSocketUpgrade(t *testing.T) {
 		}
 	case <-time.After(250 * time.Millisecond):
 		t.Fatal("websocket trace was not persisted after tunnel closed")
+	}
+	var logObject traces.RawEvidenceObject
+	for range 8 {
+		select {
+		case object := <-repo.rawEvidence:
+			if object.ObjectType == "websocket_log" {
+				logObject = object
+			}
+		case <-time.After(250 * time.Millisecond):
+			t.Fatal("websocket log evidence was not persisted")
+		}
+		if logObject.ObjectRef != "" {
+			break
+		}
+	}
+	if logObject.ObjectRef == "" {
+		t.Fatal("missing websocket_log raw evidence object")
+	}
+	reader, err := store.Get(context.Background(), logObject.ObjectRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	logBody, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logText := string(logBody)
+	if strings.Contains(logText, "sk-abc123") {
+		t.Fatalf("websocket log leaked key: %s", logText)
+	}
+	if !strings.Contains(logText, "client ping") || !strings.Contains(logText, "upstream echo: ping") {
+		t.Fatalf("websocket log missing tunneled messages: %s", logText)
 	}
 }
 
@@ -2051,7 +2085,8 @@ func (r cancelOnEOFReadCloser) Close() error {
 }
 
 type notifyingTraceRepo struct {
-	traces chan traces.Trace
+	traces      chan traces.Trace
+	rawEvidence chan traces.RawEvidenceObject
 }
 
 func (r *notifyingTraceRepo) InsertTrace(ctx context.Context, trace traces.Trace) error {
@@ -2060,6 +2095,9 @@ func (r *notifyingTraceRepo) InsertTrace(ctx context.Context, trace traces.Trace
 }
 
 func (r *notifyingTraceRepo) InsertRawEvidence(ctx context.Context, object traces.RawEvidenceObject) error {
+	if r.rawEvidence != nil {
+		r.rawEvidence <- object
+	}
 	return nil
 }
 
