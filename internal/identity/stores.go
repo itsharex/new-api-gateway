@@ -13,6 +13,49 @@ type Cache interface {
 	Set(ctx context.Context, snapshot Snapshot) error
 }
 
+type ChainCache struct {
+	Caches []Cache
+}
+
+func (c ChainCache) Get(ctx context.Context, fingerprint string) (Snapshot, bool, error) {
+	var firstErr error
+	for index, cache := range c.Caches {
+		if isNilInterface(cache) {
+			continue
+		}
+		snapshot, ok, err := cache.Get(ctx, fingerprint)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if !ok {
+			continue
+		}
+		for backfillIndex := 0; backfillIndex < index; backfillIndex++ {
+			if !isNilInterface(c.Caches[backfillIndex]) {
+				_ = c.Caches[backfillIndex].Set(ctx, snapshot)
+			}
+		}
+		return snapshot, true, nil
+	}
+	return Snapshot{}, false, firstErr
+}
+
+func (c ChainCache) Set(ctx context.Context, snapshot Snapshot) error {
+	var firstErr error
+	for _, cache := range c.Caches {
+		if isNilInterface(cache) {
+			continue
+		}
+		if err := cache.Set(ctx, snapshot); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
 // TokenLookup finds New API tokens by their canonical key.
 // FindByCanonicalKey returns ErrTokenNotFound when no token exists for the key.
 type TokenLookup interface {

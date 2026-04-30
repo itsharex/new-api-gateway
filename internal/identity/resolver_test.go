@@ -283,7 +283,7 @@ func TestResolverContinuesToLookupAfterCacheGetError(t *testing.T) {
 	if lookup.calls != 1 {
 		t.Fatalf("lookup called %d times", lookup.calls)
 	}
-	if got.ResolutionStatus != ResolutionStatusResolved || got.IdentityCacheStatus != IdentityCacheStatusCacheErrorDBLookup {
+	if got.ResolutionStatus != ResolutionStatusResolved || got.IdentityCacheStatus != IdentityCacheStatusCacheError {
 		t.Fatalf("unexpected snapshot %#v", got)
 	}
 	if cache.setCalls != 1 {

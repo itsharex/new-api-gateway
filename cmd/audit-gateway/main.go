@@ -106,7 +106,10 @@ func buildHandler(cfg config.Config, pool *pgxpool.Pool, redisClient *redis.Clie
 		EvidenceStore:   evidence.NewFilesystemStore(cfg.EvidenceStorageDir),
 		TraceRepo:       traces.NewPostgresRepository(pool),
 		IdentityResolver: identity.Resolver{
-			Cache:             identity.RedisCache{Client: redisClient},
+			Cache: identity.ChainCache{Caches: []identity.Cache{
+				identity.RedisCache{Client: redisClient},
+				identity.PostgresCache{DB: pool},
+			}},
 			Lookup:            identity.PostgresTokenLookup{Pool: pool},
 			EmployeeNoPattern: cfg.EmployeeNoPattern,
 		},

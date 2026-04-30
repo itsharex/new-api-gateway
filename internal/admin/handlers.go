@@ -401,21 +401,11 @@ func (h Handler) createAPIKeyLookup(w http.ResponseWriter, r *http.Request) {
 }
 
 func canonicalizeLookupKey(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
+	canonical, ok := authkeys.Canonicalize(value)
+	if !ok {
 		return ""
 	}
-	req, err := http.NewRequest(http.MethodGet, "/", nil)
-	if err == nil {
-		req.Header.Set("Authorization", "Bearer "+value)
-		if result, ok := authkeys.Extract(req); ok {
-			return result.CanonicalKey
-		}
-	}
-	if strings.HasPrefix(strings.ToLower(value), "bearer ") {
-		value = strings.TrimSpace(value[7:])
-	}
-	return strings.TrimPrefix(value, "sk-")
+	return canonical
 }
 
 func (h Handler) getRawEvidence(w http.ResponseWriter, r *http.Request) {

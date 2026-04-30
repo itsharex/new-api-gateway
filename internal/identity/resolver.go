@@ -15,10 +15,12 @@ const (
 	ResolutionStatusInvalidEmployeeNo = "invalid_employee_no"
 	ResolutionStatusDBError           = "db_error"
 	ResolutionStatusNotFound          = "not_found"
+	ResolutionStatusExtractFailed     = "extract_failed"
+	ResolutionStatusResolveFailed     = "resolve_failed"
 
-	IdentityCacheStatusHit                = "redis_or_local_hit"
-	IdentityCacheStatusMissDBLookup       = "miss_db_lookup"
-	IdentityCacheStatusCacheErrorDBLookup = "cache_error_db_lookup"
+	IdentityCacheStatusHit          = "cache_hit"
+	IdentityCacheStatusMissDBLookup = "miss_db_lookup"
+	IdentityCacheStatusCacheError   = "cache_error"
 )
 
 var (
@@ -45,7 +47,7 @@ func (r Resolver) Resolve(ctx context.Context, canonicalKey, fingerprintValue, f
 	if !isNilInterface(cache) {
 		cached, ok, err := cache.Get(ctx, fingerprintValue)
 		if err != nil {
-			cacheStatus = IdentityCacheStatusCacheErrorDBLookup
+			cacheStatus = IdentityCacheStatusCacheError
 		} else if ok {
 			cached.IdentityCacheStatus = IdentityCacheStatusHit
 			return cached, nil

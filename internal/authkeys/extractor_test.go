@@ -18,7 +18,7 @@ func TestExtractCanonicalKeyFromSupportedSources(t *testing.T) {
 			setup: func(req *http.Request) {
 				req.Header.Set("Authorization", "Bearer sk-abc123-extra")
 			},
-			wantKey:  "abc123-extra",
+			wantKey:  "abc123",
 			wantFrom: SourceAuthorization,
 		},
 		{
@@ -26,13 +26,13 @@ func TestExtractCanonicalKeyFromSupportedSources(t *testing.T) {
 			setup: func(req *http.Request) {
 				req.Header.Set("x-api-key", "sk-claude123-extra")
 			},
-			wantKey:  "claude123-extra",
+			wantKey:  "claude123",
 			wantFrom: SourceAnthropic,
 		},
 		{
 			name:     "gemini query key",
 			url:      "/v1beta/models/gemini:generateContent?key=sk-gemini123-extra",
-			wantKey:  "gemini123-extra",
+			wantKey:  "gemini123",
 			wantFrom: SourceGeminiQuery,
 		},
 		{
@@ -40,7 +40,7 @@ func TestExtractCanonicalKeyFromSupportedSources(t *testing.T) {
 			setup: func(req *http.Request) {
 				req.Header.Set("x-goog-api-key", "sk-google123-extra")
 			},
-			wantKey:  "google123-extra",
+			wantKey:  "google123",
 			wantFrom: SourceGeminiHeader,
 		},
 		{
@@ -48,7 +48,7 @@ func TestExtractCanonicalKeyFromSupportedSources(t *testing.T) {
 			setup: func(req *http.Request) {
 				req.Header.Set("mj-api-secret", "sk-mj123-extra")
 			},
-			wantKey:  "mj123-extra",
+			wantKey:  "mj123",
 			wantFrom: SourceMidjourney,
 		},
 		{
@@ -56,7 +56,7 @@ func TestExtractCanonicalKeyFromSupportedSources(t *testing.T) {
 			setup: func(req *http.Request) {
 				req.Header.Set("Sec-WebSocket-Protocol", "realtime, openai-insecure-api-key.sk-real123-extra, openai-beta.realtime-v1")
 			},
-			wantKey:  "real123-extra",
+			wantKey:  "real123",
 			wantFrom: SourceRealtime,
 		},
 	}
@@ -94,7 +94,7 @@ func TestExtractAuthorizationBearerSchemeIsCaseInsensitive(t *testing.T) {
 	if !ok {
 		t.Fatal("expected key")
 	}
-	if result.CanonicalKey != "mixed-case" {
+	if result.CanonicalKey != "mixed" {
 		t.Fatalf("CanonicalKey = %q", result.CanonicalKey)
 	}
 	if result.Source != SourceAuthorization {
@@ -102,7 +102,32 @@ func TestExtractAuthorizationBearerSchemeIsCaseInsensitive(t *testing.T) {
 	}
 }
 
-func TestExtractPreservesDistinctHyphenatedKeys(t *testing.T) {
+func TestExtractCanonicalizesNewAPICompositeKeys(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "sk prefix and suffix", raw: "sk-abc123-extra", want: "abc123"},
+		{name: "bearer and suffix", raw: "Bearer sk-employee-prod", want: "employee"},
+		{name: "spaces", raw: "  sk-team-alpha-prod  ", want: "team"},
+		{name: "plain key without suffix", raw: "plainkey", want: "plainkey"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := Canonicalize(tt.raw)
+			if !ok {
+				t.Fatal("expected canonical key")
+			}
+			if got != tt.want {
+				t.Fatalf("Canonicalize(%q) = %q, want %q", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractHyphenatedCompositeKeysShareNewAPICanonicalSegment(t *testing.T) {
 	firstReq, _ := http.NewRequest(http.MethodPost, "/v1/messages", nil)
 	firstReq.Header.Set("x-api-key", "sk-team-alpha-prod")
 	secondReq, _ := http.NewRequest(http.MethodPost, "/v1/messages", nil)
@@ -116,14 +141,11 @@ func TestExtractPreservesDistinctHyphenatedKeys(t *testing.T) {
 	if !ok {
 		t.Fatal("expected second key")
 	}
-	if first.CanonicalKey != "team-alpha-prod" {
-		t.Fatalf("first CanonicalKey = %q", first.CanonicalKey)
+	if first.CanonicalKey != "team" {
+		t.Fatalf("first CanonicalKey = %q, want team", first.CanonicalKey)
 	}
-	if second.CanonicalKey != "team-alpha-dev" {
-		t.Fatalf("second CanonicalKey = %q", second.CanonicalKey)
-	}
-	if first.CanonicalKey == second.CanonicalKey {
-		t.Fatalf("distinct hyphenated keys collided: %q", first.CanonicalKey)
+	if second.CanonicalKey != "team" {
+		t.Fatalf("second CanonicalKey = %q, want team", second.CanonicalKey)
 	}
 }
 
@@ -142,7 +164,7 @@ func TestExtractSkipsInvalidOrEmptySourcesAndFallsBack(t *testing.T) {
 				req.Header.Set("Authorization", "Basic sk-invalid")
 				req.Header.Set("x-api-key", "sk-fallback-anthropic")
 			},
-			wantKey:  "fallback-anthropic",
+			wantKey:  "fallback",
 			wantFrom: SourceAnthropic,
 			wantOK:   true,
 		},
@@ -152,7 +174,7 @@ func TestExtractSkipsInvalidOrEmptySourcesAndFallsBack(t *testing.T) {
 				req.Header.Set("Authorization", "Bearer sk-")
 				req.Header.Set("x-api-key", "sk-fallback-empty-auth")
 			},
-			wantKey:  "fallback-empty-auth",
+			wantKey:  "fallback",
 			wantFrom: SourceAnthropic,
 			wantOK:   true,
 		},
@@ -162,7 +184,7 @@ func TestExtractSkipsInvalidOrEmptySourcesAndFallsBack(t *testing.T) {
 				req.Header.Set("Authorization", "   ")
 				req.Header.Set("x-api-key", "sk-fallback-blank-auth")
 			},
-			wantKey:  "fallback-blank-auth",
+			wantKey:  "fallback",
 			wantFrom: SourceAnthropic,
 			wantOK:   true,
 		},
@@ -179,7 +201,7 @@ func TestExtractSkipsInvalidOrEmptySourcesAndFallsBack(t *testing.T) {
 				req.Header.Set("x-api-key", "   ")
 			},
 			url:      "/v1beta/models/gemini:generateContent?key=sk-fallback-query",
-			wantKey:  "fallback-query",
+			wantKey:  "fallback",
 			wantFrom: SourceGeminiQuery,
 			wantOK:   true,
 		},
@@ -189,7 +211,7 @@ func TestExtractSkipsInvalidOrEmptySourcesAndFallsBack(t *testing.T) {
 				req.Header.Set("x-goog-api-key", "sk-fallback-google")
 			},
 			url:      "/v1beta/models/gemini:generateContent?key=sk-",
-			wantKey:  "fallback-google",
+			wantKey:  "fallback",
 			wantFrom: SourceGeminiHeader,
 			wantOK:   true,
 		},
@@ -199,7 +221,7 @@ func TestExtractSkipsInvalidOrEmptySourcesAndFallsBack(t *testing.T) {
 				req.Header.Set("x-goog-api-key", "sk-")
 				req.Header.Set("mj-api-secret", "sk-fallback-mj")
 			},
-			wantKey:  "fallback-mj",
+			wantKey:  "fallback",
 			wantFrom: SourceMidjourney,
 			wantOK:   true,
 		},
@@ -209,7 +231,7 @@ func TestExtractSkipsInvalidOrEmptySourcesAndFallsBack(t *testing.T) {
 				req.Header.Set("mj-api-secret", " \t ")
 				req.Header.Set("Sec-WebSocket-Protocol", "realtime, openai-insecure-api-key.sk-fallback-real")
 			},
-			wantKey:  "fallback-real",
+			wantKey:  "fallback",
 			wantFrom: SourceRealtime,
 			wantOK:   true,
 		},
@@ -225,7 +247,7 @@ func TestExtractSkipsInvalidOrEmptySourcesAndFallsBack(t *testing.T) {
 			setup: func(req *http.Request) {
 				req.Header.Set("Sec-WebSocket-Protocol", "openai-insecure-api-key.sk-, openai-insecure-api-key.sk-real-later")
 			},
-			wantKey:  "real-later",
+			wantKey:  "real",
 			wantFrom: SourceRealtime,
 			wantOK:   true,
 		},
@@ -275,7 +297,7 @@ func TestExtractSourcePrecedence(t *testing.T) {
 				req.Header.Set("x-goog-api-key", "sk-google-key")
 			},
 			url:      "/v1beta/models/gemini:generateContent?key=sk-query-key",
-			wantKey:  "auth-key",
+			wantKey:  "auth",
 			wantFrom: SourceAuthorization,
 		},
 		{
@@ -284,7 +306,7 @@ func TestExtractSourcePrecedence(t *testing.T) {
 				req.Header.Set("x-api-key", "sk-anthropic-key")
 			},
 			url:      "/v1beta/models/gemini:generateContent?key=sk-query-key",
-			wantKey:  "anthropic-key",
+			wantKey:  "anthropic",
 			wantFrom: SourceAnthropic,
 		},
 		{
@@ -293,7 +315,7 @@ func TestExtractSourcePrecedence(t *testing.T) {
 				req.Header.Set("x-goog-api-key", "sk-google-key")
 			},
 			url:      "/v1beta/models/gemini:generateContent?key=sk-query-key",
-			wantKey:  "query-key",
+			wantKey:  "query",
 			wantFrom: SourceGeminiQuery,
 		},
 	}

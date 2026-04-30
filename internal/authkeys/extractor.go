@@ -60,9 +60,13 @@ func authorizationBearerKey(value string) (string, bool) {
 	return canonicalKey(parts[1])
 }
 
-func canonicalKey(value string) (string, bool) {
+func Canonicalize(value string) (string, bool) {
 	key := canonicalize(value)
 	return key, key != ""
+}
+
+func canonicalKey(value string) (string, bool) {
+	return Canonicalize(value)
 }
 
 func canonicalize(value string) string {
@@ -70,5 +74,9 @@ func canonicalize(value string) string {
 	if strings.HasPrefix(strings.ToLower(value), "bearer ") {
 		value = strings.TrimSpace(value[7:])
 	}
-	return strings.TrimPrefix(value, "sk-")
+	value = strings.TrimPrefix(value, "sk-")
+	if index := strings.Index(value, "-"); index >= 0 {
+		value = value[:index]
+	}
+	return strings.TrimSpace(value)
 }

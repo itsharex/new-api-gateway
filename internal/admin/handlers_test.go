@@ -323,7 +323,7 @@ func TestAPIKeyLookupDoesNotPersistPlaintextKeyInAuditLog(t *testing.T) {
 	db.auditLogs = nil
 	db.auditActions = nil
 	db.auditMetadata = nil
-	wantFingerprint := fingerprint.Compute("secret-plain-text", auditSecret)
+	wantFingerprint := fingerprint.Compute("secret", auditSecret)
 
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/api-key-lookup", bytes.NewBufferString(`{"api_key":"`+plaintextKey+`"}`))
 	req.AddCookie(cookie)
