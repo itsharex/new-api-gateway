@@ -117,6 +117,7 @@ func buildHandler(cfg config.Config, pool *pgxpool.Pool, redisClient *redis.Clie
 		AuditError:      auditErrorLogger(logger),
 		JobPublisher:    jobs.NewRedisListPublisher(redisClient, jobs.DefaultRedisListName),
 		CoverageEmitter: alerts.NewPostgresRepository(pool),
+		Spool:           gateway.NewFilesystemSpool(cfg.DegradedSpoolDir),
 	}
 }
 

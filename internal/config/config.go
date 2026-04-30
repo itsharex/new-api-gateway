@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ type Config struct {
 	NewAPIBaseURL            string
 	AuditHMACSecret          string
 	EvidenceStorageDir       string
+	DegradedSpoolDir         string
 	PostgresDSN              string
 	RedisAddr                string
 	EmployeeNoPattern        *regexp.Regexp
@@ -117,6 +119,11 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, err
 	}
 
+	degradedSpoolDir, err := getenvDefault("DEGRADED_SPOOL_DIR", filepath.Join(os.TempDir(), "new-api-gateway-spool"))
+	if err != nil {
+		return Config{}, err
+	}
+
 	postgresDSN, err := requiredEnv("POSTGRES_DSN")
 	if err != nil {
 		return Config{}, err
@@ -138,6 +145,7 @@ func LoadFromEnv() (Config, error) {
 		NewAPIBaseURL:            newAPIBaseURL,
 		AuditHMACSecret:          auditHMACSecret,
 		EvidenceStorageDir:       evidenceStorageDir,
+		DegradedSpoolDir:         degradedSpoolDir,
 		PostgresDSN:              postgresDSN,
 		RedisAddr:                redisAddr,
 		EmployeeNoPattern:        compiled,

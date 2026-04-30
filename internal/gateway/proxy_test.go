@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -156,6 +157,43 @@ func TestProxyForwardsAndRecordsTrace(t *testing.T) {
 	}
 	if repo.traces[0].EmployeeNoSnapshot != "E12345" {
 		t.Fatalf("EmployeeNoSnapshot = %q", repo.traces[0].EmployeeNoSnapshot)
+	}
+}
+
+func TestProxyForwardsWhenRequestEvidenceStoreFails(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	spoolDir := t.TempDir()
+	handler := Handler{
+		UpstreamBaseURL: upstream.URL,
+		Registry:        routes.DefaultRegistry(),
+		EvidenceStore: &selectiveEvidenceStore{
+			errs: map[string]error{"request_body": errors.New("object store down")},
+		},
+		TraceRepo:   &memoryTraceRepo{},
+		AuditSecret: strings.Repeat("s", 32),
+		Spool:       NewFilesystemSpool(spoolDir),
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer sk-abc-extra")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	files, err := filepath.Glob(filepath.Join(spoolDir, "*.json"))
+	if err != nil {
+		t.Fatalf("glob error = %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("spool files = %v", files)
 	}
 }
 

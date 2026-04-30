@@ -49,6 +49,7 @@ type Handler struct {
 	WebSocketHandshakeTimeout time.Duration
 	JobPublisher              jobs.Publisher
 	CoverageEmitter           alerts.Emitter
+	Spool                     Spool
 }
 
 const (
@@ -89,24 +90,40 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	snapshot := h.resolveIdentity(req.Context(), authResult, hasAuth)
 
 	auditCtx, cancelAudit := h.auditContext(req.Context())
-	requestObject, err := h.putEvidence(auditCtx, traceID, "request_body", capturedReq.ContentType, capturedReq.BodyBytes)
-	if err != nil {
-		h.reportAuditError(auditCtx, err)
-		cancelAudit()
-		http.Error(w, "failed to store request evidence", http.StatusInternalServerError)
-		return
+	requestObject, requestCaptureErr := h.putEvidence(auditCtx, traceID, "request_body", capturedReq.ContentType, capturedReq.BodyBytes)
+	if requestCaptureErr != nil {
+		h.reportAuditError(auditCtx, requestCaptureErr)
+		h.writeSpool(auditCtx, SpoolEnvelope{
+			TraceID:     traceID,
+			Method:      req.Method,
+			Path:        req.URL.Path,
+			Reason:      "request_body_evidence_failed",
+			ErrorType:   requestCaptureErr.Error(),
+			RequestSize: capturedReq.SizeBytes,
+		})
 	}
 	cancelAudit()
 
 	auditCtx, cancelAudit = h.auditContext(req.Context())
-	requestHeadersObject, err := h.putHeaderEvidence(auditCtx, traceID, "request_headers", req.Header)
-	if err != nil {
-		h.reportAuditError(auditCtx, err)
-		cancelAudit()
-		http.Error(w, "failed to store request header evidence", http.StatusInternalServerError)
-		return
+	requestHeadersObject, requestHeaderCaptureErr := h.putHeaderEvidence(auditCtx, traceID, "request_headers", req.Header)
+	if requestHeaderCaptureErr != nil {
+		h.reportAuditError(auditCtx, requestHeaderCaptureErr)
+		h.writeSpool(auditCtx, SpoolEnvelope{
+			TraceID:     traceID,
+			Method:      req.Method,
+			Path:        req.URL.Path,
+			Reason:      "request_header_evidence_failed",
+			ErrorType:   requestHeaderCaptureErr.Error(),
+			RequestSize: capturedReq.SizeBytes,
+		})
 	}
 	cancelAudit()
+	requestDegradedErr := firstNonNil(requestCaptureErr, requestHeaderCaptureErr)
+	errorType, errorMessage := "", ""
+	if requestDegradedErr != nil {
+		errorType = "capture_degraded"
+		errorMessage = requestDegradedErr.Error()
+	}
 
 	modelRequested := extractRequestModel(req.URL.Path, capturedReq.BodyBytes)
 
@@ -126,6 +143,8 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			snapshot:             snapshot,
 			stream:               true,
 			unknownRoute:         unknownRoute,
+			errorType:            errorType,
+			errorMessage:         errorMessage,
 		})
 		return
 	}
@@ -184,6 +203,8 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			unknownRoute:         unknownRoute,
 			responseStartedAt:    responseStartedAt,
 			responseHeaders:      responseHeaders,
+			errorType:            errorType,
+			errorMessage:         errorMessage,
 		})
 		return
 	}
@@ -266,6 +287,8 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		skipPostPersistence:   skipPostPersistence,
 		responseStartedAt:     responseStartedAt,
 		responseHeaders:       responseHeaders,
+		errorType:             errorType,
+		errorMessage:          errorMessage,
 	})
 
 	copyHeaders(w.Header(), upstreamResp.Header)
@@ -729,6 +752,15 @@ func (h Handler) insertEvidenceObject(ctx context.Context, traceID, objectType s
 	return err
 }
 
+func (h Handler) writeSpool(ctx context.Context, envelope SpoolEnvelope) {
+	if h.Spool == nil {
+		return
+	}
+	if err := h.Spool.Write(ctx, envelope); err != nil {
+		h.reportAuditError(ctx, err)
+	}
+}
+
 func (h Handler) hashAuditValue(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" || h.AuditSecret == "" {
@@ -779,6 +811,15 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func firstNonNil(errs ...error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func clientIP(req *http.Request) string {

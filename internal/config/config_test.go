@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -116,6 +117,30 @@ func TestLoadFromEnvUsesListenAndRedisDefaultsWhenUnset(t *testing.T) {
 	}
 	if cfg.RedisAddr != "localhost:6379" {
 		t.Fatalf("RedisAddr = %q", cfg.RedisAddr)
+	}
+}
+
+func TestLoadFromEnvLoadsDegradedSpoolDirDefaultAndOverride(t *testing.T) {
+	setValidEnv(t)
+	unsetEnv(t, "DEGRADED_SPOOL_DIR")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv returned error: %v", err)
+	}
+	wantDefault := filepath.Join(os.TempDir(), "new-api-gateway-spool")
+	if cfg.DegradedSpoolDir != wantDefault {
+		t.Fatalf("DegradedSpoolDir = %q, want %q", cfg.DegradedSpoolDir, wantDefault)
+	}
+
+	setValidEnv(t)
+	t.Setenv("DEGRADED_SPOOL_DIR", "/tmp/audit-spool")
+	cfg, err = LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv returned error: %v", err)
+	}
+	if cfg.DegradedSpoolDir != "/tmp/audit-spool" {
+		t.Fatalf("DegradedSpoolDir = %q", cfg.DegradedSpoolDir)
 	}
 }
 
