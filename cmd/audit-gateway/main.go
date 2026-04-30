@@ -237,6 +237,55 @@ WHERE worker_kind = 'analysis'`).Scan(&status.LastSeenAt, &status.WorkerCount)
 			status.Depth = depth
 			return status, err
 		},
+		RuntimeMetricsCheck: func(ctx context.Context) (ops.RuntimeMetrics, error) {
+			metrics := ops.RuntimeMetrics{IdentityStatuses: map[string]int64{}}
+			if pool == nil {
+				return metrics, errors.New("postgres pool is nil")
+			}
+			ctx, cancel := context.WithTimeout(ctx, cfg.OpsCheckTimeout)
+			defer cancel()
+			err := pool.QueryRow(ctx, `
+SELECT
+  COUNT(*),
+  COUNT(*) FILTER (WHERE error_type = 'capture_degraded'),
+  COUNT(*) FILTER (WHERE route_support_level IN ('raw_only','raw_minimal')),
+  (SELECT COUNT(*) FROM coverage_alerts WHERE status = 'open'),
+  (SELECT COUNT(*) FROM usage_anomalies WHERE status = 'open')
+FROM traces
+WHERE created_at >= now() - interval '24 hours'`).Scan(
+				&metrics.RequestCount,
+				&metrics.CaptureFailureCount,
+				&metrics.RawOnlyRouteCount,
+				&metrics.CoverageOpenCount,
+				&metrics.AnomalyOpenCount,
+			)
+			if err != nil {
+				return metrics, err
+			}
+
+			rows, err := pool.Query(ctx, `
+SELECT identity_resolution_status, COUNT(*)
+FROM traces
+WHERE created_at >= now() - interval '24 hours'
+GROUP BY identity_resolution_status`)
+			if err != nil {
+				return metrics, err
+			}
+			defer rows.Close()
+
+			for rows.Next() {
+				var status string
+				var count int64
+				if err := rows.Scan(&status, &count); err != nil {
+					return metrics, err
+				}
+				metrics.IdentityStatuses[status] = count
+			}
+			if err := rows.Err(); err != nil {
+				return metrics, err
+			}
+			return metrics, nil
+		},
 	}
 	return ops.Handler(service, cfg.OpsMetricsEnabled)
 }

@@ -32,6 +32,15 @@ func RenderMetrics(response HealthResponse, startedAt time.Time, now time.Time) 
 		}
 	}
 
+	fmt.Fprintf(&builder, "audit_gateway_requests_total %d\n", response.Metrics.RequestCount)
+	fmt.Fprintf(&builder, "audit_gateway_capture_failures_total %d\n", response.Metrics.CaptureFailureCount)
+	fmt.Fprintf(&builder, "audit_gateway_raw_only_routes_total %d\n", response.Metrics.RawOnlyRouteCount)
+	fmt.Fprintf(&builder, "audit_gateway_coverage_open %d\n", response.Metrics.CoverageOpenCount)
+	fmt.Fprintf(&builder, "audit_gateway_anomaly_open %d\n", response.Metrics.AnomalyOpenCount)
+	for _, status := range sortedMetricKeys(response.Metrics.IdentityStatuses) {
+		fmt.Fprintf(&builder, "audit_gateway_identity_status_total{status=%q} %d\n", status, response.Metrics.IdentityStatuses[status])
+	}
+
 	return builder.String()
 }
 
@@ -62,6 +71,15 @@ func sortedDependencyKeys(checks map[string]CheckStatus) []string {
 		if key == "process" {
 			continue
 		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sortedMetricKeys(values map[string]int64) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)

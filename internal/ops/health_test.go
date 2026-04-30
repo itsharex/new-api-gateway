@@ -68,6 +68,30 @@ func TestServiceReadinessReportsDegradedQueueLag(t *testing.T) {
 	}
 }
 
+func TestServiceReadinessIncludesRuntimeMetrics(t *testing.T) {
+	now := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
+	service := healthyService(now)
+	service.RuntimeMetricsCheck = func(context.Context) (RuntimeMetrics, error) {
+		return RuntimeMetrics{
+			RequestCount:        10,
+			CaptureFailureCount: 2,
+			RawOnlyRouteCount:   3,
+			IdentityStatuses:    map[string]int64{"resolved": 8},
+			CoverageOpenCount:   4,
+			AnomalyOpenCount:    5,
+		}, nil
+	}
+
+	response := service.Readiness(context.Background())
+
+	if response.Metrics.RequestCount != 10 {
+		t.Fatalf("RequestCount = %d, want 10", response.Metrics.RequestCount)
+	}
+	if response.Metrics.IdentityStatuses["resolved"] != 8 {
+		t.Fatalf("resolved identity status count = %d, want 8", response.Metrics.IdentityStatuses["resolved"])
+	}
+}
+
 func TestServiceReadinessReportsStaleWorkerHeartbeat(t *testing.T) {
 	now := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
 	service := healthyService(now)

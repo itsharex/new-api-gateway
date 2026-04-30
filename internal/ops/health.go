@@ -34,6 +34,16 @@ type HealthResponse struct {
 	Status    string                 `json:"status"`
 	CheckedAt time.Time              `json:"checked_at"`
 	Checks    map[string]CheckStatus `json:"checks"`
+	Metrics   RuntimeMetrics         `json:"metrics,omitempty"`
+}
+
+type RuntimeMetrics struct {
+	RequestCount        int64            `json:"request_count,omitempty"`
+	CaptureFailureCount int64            `json:"capture_failure_count,omitempty"`
+	RawOnlyRouteCount   int64            `json:"raw_only_route_count,omitempty"`
+	IdentityStatuses    map[string]int64 `json:"identity_statuses,omitempty"`
+	CoverageOpenCount   int64            `json:"coverage_open_count,omitempty"`
+	AnomalyOpenCount    int64            `json:"anomaly_open_count,omitempty"`
 }
 
 type WorkerHeartbeatStatus struct {
@@ -58,6 +68,7 @@ type Service struct {
 
 	WorkerHeartbeatCheck func(context.Context) (WorkerHeartbeatStatus, error)
 	QueueLagCheck        func(context.Context) (QueueLagStatus, error)
+	RuntimeMetricsCheck  func(context.Context) (RuntimeMetrics, error)
 }
 
 func (s Service) Liveness() HealthResponse {
@@ -78,11 +89,21 @@ func (s Service) Readiness(ctx context.Context) HealthResponse {
 		"worker_heartbeat": s.workerHeartbeatCheck(ctx),
 		"queue_lag":        s.queueLagCheck(ctx),
 	}
+	metrics := RuntimeMetrics{IdentityStatuses: map[string]int64{}}
+	if s.RuntimeMetricsCheck != nil {
+		if loaded, err := s.RuntimeMetricsCheck(ctx); err == nil {
+			metrics = loaded
+			if metrics.IdentityStatuses == nil {
+				metrics.IdentityStatuses = map[string]int64{}
+			}
+		}
+	}
 
 	return HealthResponse{
 		Status:    overallStatus(checks),
 		CheckedAt: s.now().UTC(),
 		Checks:    checks,
+		Metrics:   metrics,
 	}
 }
 

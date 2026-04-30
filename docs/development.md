@@ -202,3 +202,24 @@ BASE_URL=http://127.0.0.1:8080 ./scripts/smoke_ops_health.sh
 ```
 
 The smoke script expects the gateway to be running. `/readyz` can report `degraded` during local development when no analysis worker has written `worker_heartbeats`; that is acceptable as long as the response includes dependency checks and `/healthz` plus `/metrics` succeed.
+
+## Remaining MVP Gap Checks
+
+The remaining MVP hardening adds:
+
+- new-api-compatible API key canonicalization;
+- Redis plus PostgreSQL local identity cache lookup;
+- degraded capture spooling that preserves proxy forwarding;
+- multipart part evidence objects;
+- Gemini, media, and SSE worker normalization;
+- expanded explainable anomaly rules;
+- CSRF and rate limits for unsafe admin actions;
+- employee/token identity, review decision, and system settings admin views;
+- media snapshot job queueing with SSRF-safe URL validation;
+- expanded Prometheus metrics.
+
+Run the local smoke check after the gateway is running:
+
+```bash
+BASE_URL=http://127.0.0.1:8080 ./scripts/smoke_remaining_mvp.sh
+```

@@ -53,6 +53,37 @@ func TestRenderMetricsIncludesDependencyAndQueueValues(t *testing.T) {
 	)
 }
 
+func TestRenderMetricsIncludesAuditGatewayCounters(t *testing.T) {
+	response := HealthResponse{
+		Status:    statusOK,
+		CheckedAt: time.Date(2026, 4, 30, 8, 0, 0, 0, time.UTC),
+		Checks:    map[string]CheckStatus{},
+		Metrics: RuntimeMetrics{
+			RequestCount:        10,
+			CaptureFailureCount: 2,
+			RawOnlyRouteCount:   3,
+			IdentityStatuses:    map[string]int64{"resolved": 8, "missing_employee_no": 2},
+			CoverageOpenCount:   4,
+			AnomalyOpenCount:    5,
+		},
+	}
+
+	text := RenderMetrics(response, time.Date(2026, 4, 30, 7, 0, 0, 0, time.UTC), response.CheckedAt)
+
+	for _, want := range []string{
+		"audit_gateway_requests_total 10",
+		"audit_gateway_capture_failures_total 2",
+		`audit_gateway_identity_status_total{status="resolved"} 8`,
+		"audit_gateway_raw_only_routes_total 3",
+		"audit_gateway_coverage_open 4",
+		"audit_gateway_anomaly_open 5",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("metrics missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestRenderMetricsUsesStructuredValuesWhenMessagesAreHumanReadable(t *testing.T) {
 	now := time.Date(2026, 4, 28, 12, 2, 0, 0, time.UTC)
 	response := HealthResponse{
