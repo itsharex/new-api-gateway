@@ -53,6 +53,52 @@ func (fixedResolver) Resolve(ctx context.Context, canonicalKey, fingerprintValue
 	}, nil
 }
 
+func TestRedactAuditMessageRedactsBearerToken(t *testing.T) {
+	got := redactAuditMessage("upstream rejected Bearer sk-secret-token")
+	if got != "upstream rejected Bearer [REDACTED]" {
+		t.Fatalf("redacted message = %q", got)
+	}
+}
+
+func TestRedactAuditMessageRedactsKnownSecretMarkers(t *testing.T) {
+	for _, marker := range []string{"sk-", "x-api-key", "x-goog-api-key", "mj-api-secret"} {
+		t.Run(marker, func(t *testing.T) {
+			got := redactAuditMessage("upstream error contains " + marker + " value")
+			if got != "[REDACTED]" {
+				t.Fatalf("redacted message = %q, want [REDACTED]", got)
+			}
+		})
+	}
+}
+
+func TestHashAuditValueReturnsEmptyWithoutSecretOrValue(t *testing.T) {
+	if got := (Handler{}).hashAuditValue("203.0.113.10"); got != "" {
+		t.Fatalf("hash without secret = %q, want empty", got)
+	}
+	handler := Handler{AuditSecret: "0123456789abcdef0123456789abcdef"}
+	if got := handler.hashAuditValue("   "); got != "" {
+		t.Fatalf("hash for blank input = %q, want empty", got)
+	}
+}
+
+func TestHashAuditValueReturnsStableHMAC(t *testing.T) {
+	handler := Handler{AuditSecret: "0123456789abcdef0123456789abcdef"}
+	plaintext := "203.0.113.10"
+
+	first := handler.hashAuditValue(plaintext)
+	second := handler.hashAuditValue(plaintext)
+
+	if first == "" {
+		t.Fatal("hash is empty")
+	}
+	if first != second {
+		t.Fatalf("hash not stable: %q != %q", first, second)
+	}
+	if first == plaintext || strings.Contains(first, plaintext) {
+		t.Fatalf("hash leaks plaintext: %q", first)
+	}
+}
+
 func TestProxyForwardsAndRecordsTrace(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)

@@ -23,6 +23,13 @@ func TestExtractResponseModelFromJSONBody(t *testing.T) {
 	}
 }
 
+func TestExtractResponseModelReturnsEmptyForInvalidJSON(t *testing.T) {
+	got := extractResponseModel([]byte(`not-json`))
+	if got != "" {
+		t.Fatalf("model = %q, want empty", got)
+	}
+}
+
 func TestExtractOpenAIUsage(t *testing.T) {
 	usage := extractResponseUsage([]byte(`{
 		"usage": {
