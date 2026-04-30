@@ -253,6 +253,16 @@ def test_detects_daily_token_limit_exceeded():
     assert "meeting or exceeding" in alerts[0].reason
 
 
+def test_detects_daily_token_limit_at_threshold():
+    context = AnalysisContext(daily_tokens_before=99000, daily_token_limit=100000)
+
+    alerts = detect_anomalies(job(usage_total_tokens=1000), context=context)
+
+    assert [alert.anomaly_type for alert in alerts] == ["daily_token_limit_exceeded"]
+    assert alerts[0].observed_value == 100000
+    assert alerts[0].threshold_value == 100000
+
+
 def test_detects_short_window_token_spike():
     context = AnalysisContext(short_window_tokens_before=5000, short_window_token_threshold=10000)
 
@@ -266,6 +276,19 @@ def test_detects_short_window_token_spike():
     assert alerts[0].observed_value == 11000
     assert alerts[0].threshold_value == 10000
     assert "meeting or exceeding" in alerts[0].reason
+
+
+def test_detects_short_window_token_spike_at_threshold():
+    context = AnalysisContext(short_window_tokens_before=5000, short_window_token_threshold=10000)
+
+    alerts = detect_anomalies(job(
+        usage_total_tokens=5000,
+        request_started_at="2026-04-28T02:45:22Z",
+    ), context=context)
+
+    assert [alert.anomaly_type for alert in alerts] == ["short_window_token_spike"]
+    assert alerts[0].observed_value == 10000
+    assert alerts[0].threshold_value == 10000
 
 
 def test_detects_off_hours_high_usage():

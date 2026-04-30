@@ -73,7 +73,7 @@ def detect_anomalies(
     has_token_context = bool(job.token_fingerprint)
     if has_token_context:
         daily_total = context.daily_tokens_before + job.usage_total_tokens
-        if daily_total > context.daily_token_limit:
+        if daily_total >= context.daily_token_limit:
             alerts.append(_anomaly(
                 job,
                 "daily_token_limit_exceeded",
@@ -86,7 +86,7 @@ def detect_anomalies(
                 ),
             ))
         short_window_total = context.short_window_tokens_before + job.usage_total_tokens
-        if short_window_total > context.short_window_token_threshold:
+        if short_window_total >= context.short_window_token_threshold:
             alerts.append(_anomaly(
                 job,
                 "short_window_token_spike",

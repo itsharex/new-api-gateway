@@ -22,7 +22,7 @@ class SemanticCursor:
     def execute(self, query, params):
         self.executed.append((query, params))
         if "FROM traces" in query and "usage_total_tokens" in query:
-            token_fingerprint, employee_no, window_end, window_end_again = params
+            token_fingerprint, window_end, window_end_again = params
             assert window_end == window_end_again
             parsed_window_end = datetime.fromisoformat(window_end.replace("Z", "+00:00"))
             window_start = parsed_window_end - timedelta(minutes=5)
@@ -30,7 +30,6 @@ class SemanticCursor:
                 row["usage_total_tokens"]
                 for row in self.rows_by_trace
                 if row["token_fingerprint"] == token_fingerprint
-                and row["employee_no"] == employee_no
                 and window_start <= _parse_time(row["request_started_at"]) < parsed_window_end
             ),)
         elif "COUNT(DISTINCT" in query:
@@ -249,7 +248,7 @@ def test_repository_loads_analysis_context_from_aggregates_and_recent_trace_hash
 
 def test_repository_loads_short_window_context_from_previous_5_minutes_of_traces():
     cursor = SemanticCursor(
-        aggregate_rows=[(90000,)],
+        aggregate_rows=[(97000,)],
         distinct_client_hashes=2,
         rows_by_trace=[
             {
@@ -305,8 +304,8 @@ def test_repository_loads_short_window_context_from_previous_5_minutes_of_traces
 
     context = repo.analysis_context_for(job)
 
-    assert context.daily_tokens_before == 90000
-    assert context.short_window_tokens_before == 750
+    assert context.daily_tokens_before == 97000
+    assert context.short_window_tokens_before == 8750
     assert context.distinct_client_hashes_1h == 2
 
 

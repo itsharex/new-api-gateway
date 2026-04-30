@@ -29,11 +29,10 @@ class PostgresAnalysisRepository:
             SELECT COALESCE(SUM(total_tokens), 0)
             FROM usage_aggregates
             WHERE token_fingerprint = %s
-              AND employee_no = %s
               AND bucket_size = 'day'
               AND bucket_start = %s::timestamptz
             """,
-            (job.token_fingerprint, job.employee_no, daily_bucket),
+            (job.token_fingerprint, daily_bucket),
         )
         daily_row = cursor.fetchone()
         cursor.execute(
@@ -41,11 +40,10 @@ class PostgresAnalysisRepository:
             SELECT COALESCE(SUM(usage_total_tokens), 0)
             FROM traces
             WHERE token_fingerprint = %s
-              AND employee_no_snapshot = %s
               AND request_started_at >= (%s::timestamptz - interval '5 minutes')
               AND request_started_at < %s::timestamptz
             """,
-            (job.token_fingerprint, job.employee_no, window_end, window_end),
+            (job.token_fingerprint, window_end, window_end),
         )
         short_window_row = cursor.fetchone()
         cursor.execute(
