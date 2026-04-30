@@ -124,6 +124,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		errorType = "capture_degraded"
 		errorMessage = requestDegradedErr.Error()
 	}
+	requestBodyCaptureDegraded := requestCaptureErr != nil
 
 	modelRequested := extractRequestModel(req.URL.Path, capturedReq.BodyBytes)
 
@@ -143,6 +144,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			snapshot:             snapshot,
 			stream:               true,
 			unknownRoute:         unknownRoute,
+			skipPostPersistence:  requestBodyCaptureDegraded,
 			errorType:            errorType,
 			errorMessage:         errorMessage,
 		})
@@ -175,6 +177,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			requestSize:          capturedReq.SizeBytes,
 			snapshot:             snapshot,
 			unknownRoute:         unknownRoute,
+			skipPostPersistence:  requestBodyCaptureDegraded,
 			errorType:            mergeTraceErrorType(errorType, "upstream_request_error"),
 			errorMessage:         mergeTraceErrorMessage(errorMessage, err.Error()),
 		})
@@ -203,6 +206,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			unknownRoute:         unknownRoute,
 			responseStartedAt:    responseStartedAt,
 			responseHeaders:      responseHeaders,
+			skipPostPersistence:  requestBodyCaptureDegraded,
 			errorType:            errorType,
 			errorMessage:         errorMessage,
 		})
@@ -250,7 +254,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	auditCtx, cancelAudit = h.auditContext(req.Context())
 	defer cancelAudit()
 	responseObject, err := h.putEvidence(auditCtx, traceID, "response_body", upstreamResp.Header.Get("Content-Type"), responseBody)
-	skipPostPersistence := false
+	skipPostPersistence := requestBodyCaptureDegraded
 	if err != nil {
 		h.reportAuditError(auditCtx, err)
 		skipPostPersistence = true

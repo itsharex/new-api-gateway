@@ -841,6 +841,57 @@ func TestProxyDoesNotPublishJobOrCoverageWhenResponseEvidenceStoreFails(t *testi
 	}
 }
 
+func TestProxyDoesNotPublishJobOrCoverageWhenRequestBodyCaptureDegraded(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	spoolDir := t.TempDir()
+	repo := &memoryTraceRepo{}
+	publisher := &recordingJobPublisher{}
+	emitter := &recordingCoverageEmitter{}
+	handler := testHandler(upstream.URL, repo, &selectiveEvidenceStore{
+		errs: map[string]error{"request_body": errors.New("request evidence failed")},
+	})
+	handler.JobPublisher = publisher
+	handler.CoverageEmitter = emitter
+	handler.Spool = NewFilesystemSpool(spoolDir)
+
+	req := httptest.NewRequest(http.MethodPost, "/mj/submit/imagine", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer sk-abc123")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(repo.traces) != 1 {
+		t.Fatalf("expected 1 trace, got %d", len(repo.traces))
+	}
+	if repo.traces[0].ErrorType != "capture_degraded" {
+		t.Fatalf("ErrorType = %q", repo.traces[0].ErrorType)
+	}
+	if repo.traces[0].RequestRawRef != "" {
+		t.Fatalf("RequestRawRef = %q, want empty", repo.traces[0].RequestRawRef)
+	}
+	files, err := filepath.Glob(filepath.Join(spoolDir, "*.json"))
+	if err != nil {
+		t.Fatalf("glob error = %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("spool files = %v", files)
+	}
+	if len(publisher.jobs) != 0 {
+		t.Fatalf("published jobs = %d, want 0", len(publisher.jobs))
+	}
+	if len(emitter.alerts) != 0 {
+		t.Fatalf("coverage alerts = %d, want 0", len(emitter.alerts))
+	}
+}
+
 func TestProxyNonStreamingAuditPersistenceSurvivesCanceledRequestContext(t *testing.T) {
 	repo := &contextRejectingTraceRepo{}
 	store := &contextRejectingEvidenceStore{}
