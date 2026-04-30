@@ -167,6 +167,35 @@ def test_openai_responses_input_message_items_preserve_boundaries_and_roles():
     assert [message.source_path for message in messages[:2]] == ["request.input[0]", "request.input[1]"]
 
 
+def test_openai_responses_response_media_blocks_are_normalized():
+    request_body = json.dumps({"model": "gpt-4.1", "input": "Describe the output image."})
+    response_body = json.dumps({
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": "Here is the rendered image."},
+                    {"type": "image", "url": "https://example.test/out.png"},
+                ],
+            }
+        ],
+    })
+
+    messages, _ = normalize_json_trace(job("openai_responses", "/v1/responses"), request_body, response_body)
+
+    assert any(
+        message.direction == "response" and message.content_text == "Here is the rendered image."
+        for message in messages
+    )
+    assert any(
+        message.direction == "response"
+        and message.modality == "image"
+        and message.media_url == "https://example.test/out.png"
+        for message in messages
+    )
+
+
 def test_generic_json_prompt_is_used_for_images():
     request_body = json.dumps({"model": "gpt-image-1", "prompt": "Draw the launch diagram"})
     response_body = json.dumps({"created": 1777366800})
@@ -248,12 +277,57 @@ def test_does_not_persist_base64_data_url_media_payloads():
         assert data_url not in serialized_metadata
 
 
+def test_does_not_persist_base64_audio_data_url_payloads():
+    trace_job = job(protocol_family="openai_chat", route_pattern="/v1/chat/completions")
+    data_url = "data:audio/wav;base64,aGVsbG8="
+    request = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_audio", "input_audio": {"url": data_url}},
+                ],
+            }
+        ]
+    }
+
+    messages, _ = normalize_json_trace(trace_job, json.dumps(request), "{}")
+
+    audio_messages = [message for message in messages if message.modality == "audio"]
+    assert len(audio_messages) == 1
+    assert audio_messages[0].protocol_item_type == "base64_media"
+    assert audio_messages[0].media_url == ""
+    for message in messages:
+        serialized_metadata = json.dumps(message.metadata)
+        assert "aGVsbG8=" not in message.content_text
+        assert "aGVsbG8=" not in message.media_url
+        assert "aGVsbG8=" not in serialized_metadata
+        assert data_url not in message.content_text
+        assert data_url not in message.media_url
+        assert data_url not in serialized_metadata
+
+
 def test_normalizes_sse_event_stream_response():
     trace_job = job(protocol_family="openai_chat", route_pattern="/v1/chat/completions")
     request = {"messages": [{"role": "user", "content": "stream please"}]}
     response = "\n".join([
         'data: {"choices":[{"delta":{"role":"assistant","content":"hello"}}]}',
         'data: {"choices":[{"delta":{"content":" world"}}]}',
+        "data: [DONE]",
+        "",
+    ])
+
+    messages, _ = normalize_json_trace(trace_job, json.dumps(request), response)
+
+    assert any(message.direction == "response" and message.content_text == "hello world" for message in messages)
+
+
+def test_normalizes_openai_responses_sse_output_text_delta():
+    trace_job = job(protocol_family="openai_responses", route_pattern="/v1/responses")
+    request = {"input": "stream please"}
+    response = "\n".join([
+        'data: {"type":"response.output_text.delta","delta":"hello"}',
+        'data: {"type":"response.output_text.delta","delta":" world"}',
         "data: [DONE]",
         "",
     ])

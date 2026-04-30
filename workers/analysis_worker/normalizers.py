@@ -103,10 +103,16 @@ def _normalize_openai_responses(
     output = response_json.get("output")
     if isinstance(output, list):
         for index, item in enumerate(output):
-            text = _content_to_text(item)
-            if text:
-                role = str(item.get("role", "assistant")) if isinstance(item, dict) else "assistant"
-                messages.append(_message(job, "response", len(messages), role, text, f"response.output[{index}]", "openai_responses_output"))
+            role = str(item.get("role", "assistant")) if isinstance(item, dict) else "assistant"
+            content = item.get("content") if isinstance(item, dict) and "content" in item else item
+            messages.extend(_part_messages(
+                job,
+                "response",
+                role,
+                content,
+                f"response.output[{index}]",
+                "openai_responses_output",
+            ))
     for sequence_index, message in enumerate(messages):
         messages[sequence_index] = _with_sequence_index(message, sequence_index)
     return messages
@@ -219,7 +225,7 @@ def _media_message(
         return _url_media_message(job, direction, role, media_url, source_path, "image")
     if item_type == "input_audio" and isinstance(value.get("input_audio"), dict):
         audio = value["input_audio"]
-        if isinstance(audio.get("data"), str) or isinstance(audio.get("url"), str):
+        if isinstance(audio.get("data"), str):
             return _message(
                 job,
                 direction,
@@ -229,8 +235,8 @@ def _media_message(
                 source_path,
                 "base64_media" if isinstance(audio.get("data"), str) else "media_url",
                 modality="audio",
-                media_url=audio.get("url", "") if isinstance(audio.get("url"), str) else "",
             )
+        return _url_media_message(job, direction, role, audio.get("url"), source_path, "audio")
     if isinstance(value.get("inline_data"), dict):
         inline_data = value["inline_data"]
         mime_type = inline_data.get("mime_type", "")
@@ -296,8 +302,12 @@ def _append_sse_event(events: list[dict[str, Any]], data_lines: list[str]) -> No
 
 def _response_json_from_sse_events(events: list[dict[str, Any]]) -> dict[str, Any]:
     role = "assistant"
-    content_parts: list[str] = []
+    chat_content_parts: list[str] = []
+    responses_content_parts: list[str] = []
     for event in events:
+        if event.get("type") == "response.output_text.delta" and isinstance(event.get("delta"), str):
+            responses_content_parts.append(event["delta"])
+            continue
         choices = event.get("choices")
         if not isinstance(choices, list):
             continue
@@ -311,10 +321,20 @@ def _response_json_from_sse_events(events: list[dict[str, Any]]) -> dict[str, An
                 role = delta["role"]
             content = delta.get("content")
             if isinstance(content, str):
-                content_parts.append(content)
-    if not content_parts:
-        return {}
-    return {"choices": [{"message": {"role": role, "content": "".join(content_parts)}}]}
+                chat_content_parts.append(content)
+    if responses_content_parts:
+        return {
+            "output": [
+                {
+                    "type": "message",
+                    "role": role,
+                    "content": [{"type": "output_text", "text": "".join(responses_content_parts)}],
+                }
+            ]
+        }
+    if chat_content_parts:
+        return {"choices": [{"message": {"role": role, "content": "".join(chat_content_parts)}}]}
+    return {}
 
 
 def _content_to_text(value: Any) -> str:
