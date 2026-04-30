@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timezone
 from typing import Iterable
+from urllib.parse import urlparse
 
 from models import (
     AnalysisContext,
@@ -138,14 +139,14 @@ class PostgresAnalysisRepository:
                 ),
             )
         for message in messages:
-            if not message.media_url:
+            if not _is_snapshot_queue_candidate(message.media_url):
                 continue
             cursor.execute(
                 """
                 INSERT INTO media_snapshot_jobs (
                     trace_id, source_url, source_context, policy_reason, status
                 ) VALUES (%s,%s,%s,%s,'queued')
-                ON CONFLICT DO NOTHING
+                ON CONFLICT (trace_id, source_url, source_context, policy_reason) DO NOTHING
                 """,
                 (
                     message.trace_id,
@@ -324,3 +325,9 @@ class PostgresAnalysisRepository:
                 ),
             )
         self.connection.commit()
+
+
+def _is_snapshot_queue_candidate(media_url: str) -> bool:
+    if not media_url:
+        return False
+    return urlparse(media_url).scheme in {"http", "https"}

@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from models import (
     AnalysisResult,
@@ -446,3 +447,38 @@ def test_repository_queues_media_snapshot_jobs_for_media_urls():
         "request.messages[0].content[1]",
         "generated_or_referenced_media",
     )
+    assert "ON CONFLICT (trace_id, source_url, source_context, policy_reason) DO NOTHING" in media_queries[0][0]
+
+
+def test_repository_skips_obvious_non_http_media_urls():
+    conn = FakeConnection()
+    repo = PostgresAnalysisRepository(conn)
+    media_message = NormalizedMessage(
+        trace_id="trace_media",
+        direction="request",
+        sequence_index=0,
+        role="user",
+        modality="image",
+        content_text="",
+        content_text_hash="",
+        media_url="data:image/png;base64,abc",
+        source_path="request.messages[0].content[1]",
+        protocol_item_type="media_url",
+        token_count_estimate=0,
+        metadata={"protocol_family": "openai_chat"},
+    )
+
+    repo.save_trace_analysis([media_message], [], [], [], [])
+
+    media_queries = [
+        query for query, _ in conn.cursor_obj.executed if "INSERT INTO media_snapshot_jobs" in query
+    ]
+    assert media_queries == []
+
+
+def test_media_snapshot_migration_defines_idempotent_job_key():
+    migration = (
+        Path(__file__).parents[3] / "migrations" / "0011_media_snapshot_jobs.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "trace_id, source_url, source_context, policy_reason" in migration
