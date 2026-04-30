@@ -323,6 +323,28 @@ def test_detects_possible_token_leak_signal():
     assert alerts[0].window_end == "2026-04-28T13:45:22+00:00"
 
 
+def test_windowed_token_alerts_use_fixed_fallback_for_malformed_timestamp():
+    context = AnalysisContext(
+        daily_tokens_before=100000,
+        short_window_tokens_before=10000,
+        distinct_client_hashes_1h=3,
+    )
+
+    alerts = detect_anomalies(job(
+        request_started_at="not-a-timestamp",
+        usage_total_tokens=1,
+    ), context=context)
+
+    assert [alert.anomaly_type for alert in alerts] == [
+        "daily_token_limit_exceeded",
+        "short_window_token_spike",
+        "possible_token_leak",
+    ]
+    for alert in alerts:
+        assert alert.window_start == "1970-01-01T00:00:00+00:00"
+        assert alert.window_end == "1970-01-01T00:01:00+00:00"
+
+
 def test_does_not_emit_token_scoped_aggregate_alerts_for_empty_token_fingerprint():
     context = AnalysisContext(
         daily_tokens_before=200000,

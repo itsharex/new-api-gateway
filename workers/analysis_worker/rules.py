@@ -8,10 +8,8 @@ from models import (
     TraceCapturedJob,
     WorkRelevanceAssessment,
     anomaly_id,
-    bucket_start_hour,
     coverage_alert_id,
     stable_suffix,
-    window_end_from_start,
 )
 
 
@@ -304,6 +302,16 @@ def _relative_window(value: str, seconds: int) -> tuple[str | None, str | None]:
     return (parsed - timedelta(seconds=seconds)).isoformat(), parsed.isoformat()
 
 
+def _default_anomaly_window(value: str) -> tuple[str, str]:
+    parsed = _parse_utc(value)
+    if parsed is None:
+        return MISSING_TIMESTAMP_WINDOW_START, MISSING_TIMESTAMP_WINDOW_END
+    return (
+        parsed.replace(minute=0, second=0, microsecond=0).isoformat(),
+        (parsed + timedelta(seconds=60)).isoformat(),
+    )
+
+
 def _anomaly(
     job: TraceCapturedJob,
     anomaly_type: str,
@@ -314,16 +322,9 @@ def _anomaly(
     window_start: str | None = None,
     window_end: str | None = None,
 ) -> AnomalyAlert:
-    resolved_window_start = window_start or (
-        bucket_start_hour(job.request_started_at)
-        if job.request_started_at
-        else MISSING_TIMESTAMP_WINDOW_START
-    )
-    resolved_window_end = window_end or (
-        window_end_from_start(job.request_started_at)
-        if job.request_started_at
-        else MISSING_TIMESTAMP_WINDOW_END
-    )
+    default_window_start, default_window_end = _default_anomaly_window(job.request_started_at)
+    resolved_window_start = window_start or default_window_start
+    resolved_window_end = window_end or default_window_end
     return AnomalyAlert(
         anomaly_id=anomaly_id(anomaly_type, job.trace_id, job.employee_no),
         anomaly_type=anomaly_type,
