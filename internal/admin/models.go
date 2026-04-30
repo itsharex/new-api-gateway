@@ -46,6 +46,7 @@ type Principal struct {
 	Username    string `json:"username"`
 	DisplayName string `json:"display_name"`
 	Role        Role   `json:"role"`
+	CSRFToken   string `json:"-"`
 }
 
 type AuditActionLog struct {

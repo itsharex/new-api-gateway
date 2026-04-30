@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
@@ -169,8 +170,18 @@ func (h Handler) requireCSRF(next http.Handler) http.Handler {
 		if cookieName == "" {
 			cookieName = "audit_admin_csrf"
 		}
+		principal, ok := PrincipalFromContext(r.Context())
+		if !ok || principal.CSRFToken == "" {
+			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+			return
+		}
 		cookie, err := r.Cookie(cookieName)
-		if err != nil || cookie.Value == "" || r.Header.Get("X-CSRF-Token") != cookie.Value {
+		headerToken := r.Header.Get("X-CSRF-Token")
+		if err != nil ||
+			cookie.Value == "" ||
+			headerToken == "" ||
+			subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(headerToken)) != 1 ||
+			subtle.ConstantTimeCompare([]byte(headerToken), []byte(principal.CSRFToken)) != 1 {
 			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 			return
 		}

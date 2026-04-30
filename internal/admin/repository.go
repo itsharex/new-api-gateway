@@ -60,15 +60,15 @@ func (r Repository) PrincipalBySession(ctx context.Context, sessionID string, no
 	}
 	var principal Principal
 	err := r.db.QueryRow(ctx, `
-SELECT u.id, u.username, u.display_name, u.role
-FROM audit_sessions s
-JOIN audit_users u ON u.id = s.user_id
-WHERE s.session_id = $1
+	SELECT u.id, u.username, u.display_name, u.role, s.csrf_token
+	FROM audit_sessions s
+	JOIN audit_users u ON u.id = s.user_id
+	WHERE s.session_id = $1
   AND s.revoked_at IS NULL
   AND s.expires_at > $2
   AND u.status = 'active'
-LIMIT 1`, sessionID, now).Scan(
-		&principal.UserID, &principal.Username, &principal.DisplayName, &principal.Role,
+	LIMIT 1`, sessionID, now).Scan(
+		&principal.UserID, &principal.Username, &principal.DisplayName, &principal.Role, &principal.CSRFToken,
 	)
 	if err != nil {
 		return Principal{}, err

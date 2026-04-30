@@ -390,18 +390,31 @@ func TestUnsafeAdminRequestRequiresCSRFToken(t *testing.T) {
 func TestAPIKeyLookupRateLimit(t *testing.T) {
 	h, _, cookie := newAuthenticatedAdminHandler(t, RoleRawAccess, "audit-secret-0123456789abcdef", nil)
 	h.lookupLimiter = NewMemoryRateLimiter(1, time.Hour)
-	h.auth.CSRFCookieName = "audit_admin_csrf"
 
 	for attempt := 0; attempt < 2; attempt++ {
 		req := httptest.NewRequest(http.MethodPost, "/admin/api/api-key-lookup", strings.NewReader(`{"api_key":"sk-secret-extra"}`))
-		req.AddCookie(cookie)
-		req.Header.Set("X-CSRF-Token", "test-csrf")
-		req.AddCookie(&http.Cookie{Name: h.auth.CSRFCookieName, Value: "test-csrf"})
+		addAuthenticatedCookies(req, cookie)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		if attempt == 1 && rec.Code != http.StatusTooManyRequests {
 			t.Fatalf("second status = %d, want 429", rec.Code)
 		}
+	}
+}
+
+func TestUnsafeAdminRequestRejectsSelfConsistentForgedCSRFToken(t *testing.T) {
+	h, _, cookie := newAuthenticatedAdminHandler(t, RoleRawAccess, "audit-secret-0123456789abcdef", nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/api-key-lookup", strings.NewReader(`{"api_key":"sk-secret-extra"}`))
+	req.AddCookie(cookie)
+	req.Header.Set("X-CSRF-Token", "forged-csrf")
+	req.AddCookie(&http.Cookie{Name: "audit_admin_csrf", Value: "forged-csrf"})
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
 	}
 }
 
@@ -1107,6 +1120,9 @@ func (r memoryAdminRow) Scan(dest ...any) error {
 		*(dest[1].(*string)) = r.db.user.Username
 		*(dest[2].(*string)) = r.db.user.DisplayName
 		*(dest[3].(*Role)) = r.db.user.Role
+		if len(dest) > 4 {
+			*(dest[4].(*string)) = r.db.session.CSRFToken
+		}
 		return nil
 	}
 	if strings.Contains(r.sql, "FROM token_identity_cache") {
