@@ -229,6 +229,74 @@ def test_normalizes_gemini_contents_text_and_response():
     assert messages[0].protocol_item_type == "gemini_content_part"
 
 
+def test_normalizes_gemini_inline_data_media_without_payload():
+    trace_job = job(protocol_family="gemini", route_pattern="/v1beta/models/gemini:generateContent")
+    request = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": "inspect this"},
+                    {"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}},
+                ],
+            }
+        ]
+    }
+
+    messages, _ = normalize_json_trace(trace_job, json.dumps(request), "{}")
+
+    assert [(message.modality, message.content_text, message.protocol_item_type) for message in messages] == [
+        ("text", "inspect this", "gemini_content_part"),
+        ("image", "", "base64_media"),
+    ]
+    for message in messages:
+        serialized_metadata = json.dumps(message.metadata)
+        assert "aGVsbG8=" not in message.content_text
+        assert "aGVsbG8=" not in message.media_url
+        assert "aGVsbG8=" not in serialized_metadata
+
+
+def test_normalizes_gemini_file_data_media_url():
+    trace_job = job(protocol_family="gemini", route_pattern="/v1beta/models/gemini:generateContent")
+    request = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"fileData": {"mimeType": "audio/wav", "fileUri": "https://example.test/audio.wav"}},
+                ],
+            }
+        ]
+    }
+    response = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {"file_data": {"mime_type": "image/png", "file_uri": "https://example.test/out.png"}},
+                    ],
+                }
+            }
+        ]
+    }
+
+    messages, _ = normalize_json_trace(trace_job, json.dumps(request), json.dumps(response))
+
+    assert any(
+        message.direction == "request"
+        and message.modality == "audio"
+        and message.media_url == "https://example.test/audio.wav"
+        for message in messages
+    )
+    assert any(
+        message.direction == "response"
+        and message.modality == "image"
+        and message.media_url == "https://example.test/out.png"
+        for message in messages
+    )
+
+
 def test_normalizes_image_url_and_base64_media():
     trace_job = job(protocol_family="openai_chat", route_pattern="/v1/chat/completions")
     request = {

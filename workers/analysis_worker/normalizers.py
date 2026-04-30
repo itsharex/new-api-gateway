@@ -252,12 +252,43 @@ def _media_message(
                 modality="audio",
             )
         return _url_media_message(job, direction, role, audio.get("url"), source_path, "audio")
-    if isinstance(value.get("inline_data"), dict):
-        inline_data = value["inline_data"]
-        mime_type = inline_data.get("mime_type", "")
-        modality = "image" if isinstance(mime_type, str) and mime_type.startswith("image/") else "media"
+    inline_data = _dict_value(value, "inlineData", "inline_data")
+    if inline_data:
+        mime_type = _string_value(inline_data, "mimeType", "mime_type")
+        modality = _modality_from_mime_type(mime_type)
         return _message(job, direction, 0, role, "", source_path, "base64_media", modality=modality)
+    file_data = _dict_value(value, "fileData", "file_data")
+    if file_data:
+        mime_type = _string_value(file_data, "mimeType", "mime_type")
+        file_uri = _string_value(file_data, "fileUri", "file_uri")
+        return _url_media_message(job, direction, role, file_uri, source_path, _modality_from_mime_type(mime_type))
     return None
+
+
+def _dict_value(value: dict[str, Any], *keys: str) -> dict[str, Any]:
+    for key in keys:
+        item = value.get(key)
+        if isinstance(item, dict):
+            return item
+    return {}
+
+
+def _string_value(value: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        item = value.get(key)
+        if isinstance(item, str):
+            return item
+    return ""
+
+
+def _modality_from_mime_type(mime_type: str) -> str:
+    if mime_type.startswith("image/"):
+        return "image"
+    if mime_type.startswith("audio/"):
+        return "audio"
+    if mime_type.startswith("video/"):
+        return "video"
+    return "media"
 
 
 def _url_media_message(
