@@ -208,6 +208,7 @@ func TestProxyRecordsHeaderEvidenceAndMinimalMetadata(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{
 			"id": "chatcmpl_test",
+			"model": "gpt-4o-upstream",
 			"usage": {
 				"prompt_tokens": 11,
 				"completion_tokens": 7,
@@ -246,6 +247,9 @@ func TestProxyRecordsHeaderEvidenceAndMinimalMetadata(t *testing.T) {
 	}
 	if trace.ModelRequested != "gpt-test" {
 		t.Fatalf("ModelRequested = %q", trace.ModelRequested)
+	}
+	if trace.ModelUpstream != "gpt-4o-upstream" {
+		t.Fatalf("ModelUpstream = %q", trace.ModelUpstream)
 	}
 	if trace.RouteSupportLevel != "deep_normalized" || trace.BodyKind != "json" {
 		t.Fatalf("route/body metadata = %+v", trace)

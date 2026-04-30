@@ -16,6 +16,13 @@ func TestExtractRequestModelFromEngineEmbeddingPath(t *testing.T) {
 	}
 }
 
+func TestExtractResponseModelFromJSONBody(t *testing.T) {
+	got := extractResponseModel([]byte(`{"id":"chatcmpl_test","model":"gpt-4o-upstream","usage":{"total_tokens":3}}`))
+	if got != "gpt-4o-upstream" {
+		t.Fatalf("model = %q", got)
+	}
+}
+
 func TestExtractOpenAIUsage(t *testing.T) {
 	usage := extractResponseUsage([]byte(`{
 		"usage": {

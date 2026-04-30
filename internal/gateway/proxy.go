@@ -240,6 +240,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		skipPostPersistence = true
 	}
 	usage := extractResponseUsage(responseBody)
+	modelUpstream := extractResponseModel(responseBody)
 
 	_ = h.insertTrace(auditCtx, traceRecord{
 		traceID:               traceID,
@@ -256,6 +257,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		requestContentType:    capturedReq.ContentType,
 		responseContentType:   upstreamResp.Header.Get("Content-Type"),
 		modelRequested:        modelRequested,
+		modelUpstream:         modelUpstream,
 		usage:                 usage,
 		requestSize:           capturedReq.SizeBytes,
 		responseSize:          int64(len(responseBody)),

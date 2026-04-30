@@ -39,6 +39,16 @@ func modelFromEngineEmbeddingPath(path string) string {
 	return model
 }
 
+func extractResponseModel(body []byte) string {
+	var payload struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return ""
+	}
+	return payload.Model
+}
+
 func extractResponseUsage(body []byte) minimalUsage {
 	var payload struct {
 		Usage struct {
