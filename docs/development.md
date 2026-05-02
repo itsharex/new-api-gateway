@@ -14,6 +14,28 @@ Run schema migrations in the compose network:
 docker compose -f deploy/docker-compose.yml run --rm migrate
 ```
 
+## Data Persistence
+
+Docker Compose 使用 named volume 持久化数据：
+
+| 服务 | Volume 名称 | 容器内路径 | 说明 |
+|---|---|---|---|
+| PostgreSQL | `audit-postgres` | `/var/lib/postgresql/data` | 数据库数据 |
+| Redis | `audit-redis` | `/data` | AOF 持久化（`appendonly yes`, `appendfsync everysec`） |
+
+查看宿主机上的实际存储路径：
+
+```bash
+docker volume inspect deploy_audit-postgres
+docker volume inspect deploy_audit-redis
+```
+
+删除 volume（会清除所有数据）：
+
+```bash
+docker compose -f deploy/docker-compose.yml down -v
+```
+
 ## Tests
 
 ```bash
