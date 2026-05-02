@@ -282,7 +282,7 @@ function renderUsage(body) {
   body = body || {};
   const rows = arrayValue(body.usage).map((item) => [
     item.bucket_start,
-    item.employee_no || item.fingerprint_display,
+    item.username || item.fingerprint_display,
     item.model,
     item.route_pattern,
     formatNumber(item.request_count),
@@ -296,7 +296,7 @@ function renderTraces(body) {
   body = body || {};
   const rows = arrayValue(body.traces).map((trace) => [
     traceButton(trace.trace_id),
-    trace.employee_no || trace.fingerprint_display,
+    trace.username || trace.fingerprint_display,
     trace.model_requested,
     trace.route_pattern || trace.path,
     trace.status_code,
@@ -318,7 +318,7 @@ function renderTraces(body) {
 function renderIdentities(body) {
   body = body || {};
   const rows = arrayValue(body.token_identities).map((item) => [
-    item.employee_no,
+    item.username,
     item.display_name,
     item.department,
     item.fingerprint_display,
@@ -350,7 +350,7 @@ function renderTraceDetail(body) {
     .join(" ");
   const meta = [
     ["Trace", trace.trace_id],
-    ["Employee", trace.employee_no || trace.fingerprint_display],
+    ["Employee", trace.username || trace.fingerprint_display],
     ["Model", trace.model_requested],
     ["Route", trace.route_pattern || trace.path],
     ["Status", trace.status_code],
@@ -401,7 +401,7 @@ function renderAnomalies(body) {
     item.anomaly_id,
     badge(item.severity),
     item.anomaly_type,
-    item.employee_no || item.fingerprint_display,
+    item.username || item.fingerprint_display,
     item.observed_value,
     item.reason,
   ]);
@@ -455,7 +455,7 @@ function renderLookup(result = "") {
           <h2>Lookup Result</h2>
           <div class="meta-grid">
             <div class="meta-item"><span>Fingerprint</span>${escapeHTML(lookup.fingerprint_display)}</div>
-            <div class="meta-item"><span>Employee</span>${escapeHTML(lookup.employee_no || lookup.token_name)}</div>
+            <div class="meta-item"><span>Employee</span>${escapeHTML(lookup.username || lookup.token_name)}</div>
             <div class="meta-item"><span>Open Anomalies</span>${escapeHTML(formatNumber(lookup.open_anomaly_count))}</div>
           </div>
         </section>
@@ -572,7 +572,7 @@ function renderSettings(body) {
   body = body || {};
   const settings = body.settings || {};
   const rows = [
-    ["Employee Pattern", settings.employee_no_pattern],
+    ["Employee Pattern", settings.username_pattern],
     ["Metrics Enabled", settings.metrics_enabled ? "true" : "false"],
     ["API Key Lookup Limit", settings.lookup_limit],
     ["Raw Evidence Limit", settings.raw_access_limit],

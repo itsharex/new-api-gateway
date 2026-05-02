@@ -62,7 +62,7 @@ func TestRenderMetricsIncludesAuditGatewayCounters(t *testing.T) {
 			RequestCount:        10,
 			CaptureFailureCount: 2,
 			RawOnlyRouteCount:   3,
-			IdentityStatuses:    map[string]int64{"resolved": 8, "missing_employee_no": 2},
+			IdentityStatuses:    map[string]int64{"resolved": 8, "not_found": 2},
 			CoverageOpenCount:   4,
 			AnomalyOpenCount:    5,
 		},

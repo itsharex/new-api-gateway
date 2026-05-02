@@ -34,7 +34,7 @@ func TestRedisListPublisherPushesTraceCapturedEnvelope(t *testing.T) {
 		FingerprintDisplay:       "tkfp_display",
 		NewAPITokenID:            42,
 		TokenNameSnapshot:        "E12345",
-		IdentityResolutionStatus: "invalid_employee_no",
+		IdentityResolutionStatus: "not_found",
 		StatusCode:               200,
 		UpstreamStatusCode:       200,
 		Stream:                   false,
@@ -72,7 +72,7 @@ func TestRedisListPublisherPushesTraceCapturedEnvelope(t *testing.T) {
 	if decoded.TokenFingerprint != "tkfp_raw_value" || decoded.FingerprintDisplay != "tkfp_display" {
 		t.Fatalf("fingerprint fields = %+v", decoded)
 	}
-	if decoded.NewAPITokenID != 42 || decoded.TokenNameSnapshot != "E12345" || decoded.IdentityResolutionStatus != "invalid_employee_no" {
+	if decoded.NewAPITokenID != 42 || decoded.TokenNameSnapshot != "E12345" || decoded.IdentityResolutionStatus != "not_found" {
 		t.Fatalf("token snapshot fields = %+v", decoded)
 	}
 	if decoded.StatusCode != 200 || decoded.UpstreamStatusCode != 200 || decoded.Stream {

@@ -62,7 +62,7 @@ INSERT INTO traces (
   request_body_size, response_body_size, request_body_sha256, response_body_sha256,
   request_raw_ref, request_headers_ref, response_raw_ref, response_headers_ref,
   token_fingerprint, fingerprint_display,
-  new_api_token_id_snapshot, token_name_snapshot, employee_no_snapshot,
+  new_api_token_id_snapshot, token_name_snapshot, username_snapshot,
   audit_subject_display_name_snapshot, department_snapshot,
   identity_resolution_status, identity_cache_status, identity_resolved_at,
   model_requested, model_upstream,

@@ -140,7 +140,7 @@ func (r Repository) ListTraces(ctx context.Context, filter TraceFilter) ([]Trace
 		add("trace_id = $%d", filter.TraceID)
 	}
 	if filter.Username != "" {
-		add("employee_no_snapshot = $%d", filter.Username)
+		add("username_snapshot = $%d", filter.Username)
 	}
 	if filter.TokenFingerprint != "" {
 		add("token_fingerprint = $%d", filter.TokenFingerprint)
@@ -157,7 +157,7 @@ func (r Repository) ListTraces(ctx context.Context, filter TraceFilter) ([]Trace
 	args = append(args, limit)
 	query := fmt.Sprintf(`
 SELECT trace_id, method, path, route_pattern, protocol_family, status_code,
-       employee_no_snapshot, fingerprint_display, model_requested, usage_total_tokens,
+       username_snapshot, fingerprint_display, model_requested, usage_total_tokens,
        created_at::text
 FROM traces
 WHERE %s
@@ -191,7 +191,7 @@ func (r Repository) ListAnomalies(ctx context.Context, limit int) ([]AnomalySumm
 		limit = 100
 	}
 	rows, err := r.db.Query(ctx, `
-SELECT anomaly_id, anomaly_type, severity, status, employee_no, fingerprint_display,
+SELECT anomaly_id, anomaly_type, severity, status, username, fingerprint_display,
        observed_value::text, threshold_value::text, reason, created_at::text
 FROM usage_anomalies
 ORDER BY created_at DESC
@@ -253,7 +253,7 @@ func (r Repository) LookupTokenSummary(ctx context.Context, tokenFingerprint, fi
 	}
 	summary := LookupSummary{TokenFingerprint: tokenFingerprint, FingerprintDisplay: fingerprintDisplay}
 	err := r.db.QueryRow(ctx, `
-SELECT employee_no, new_api_token_id, token_name_raw, token_status
+SELECT username, new_api_token_id, token_name_raw, token_status
 FROM token_identity_cache
 WHERE token_fingerprint = $1
 LIMIT 1`, tokenFingerprint).Scan(&summary.Username, &summary.NewAPITokenID, &summary.TokenName, &summary.TokenStatus)
@@ -345,7 +345,7 @@ func (r Repository) ListUsageAggregates(ctx context.Context, filter UsageFilter)
 		where = append(where, fmt.Sprintf(clause, len(args)))
 	}
 	if filter.Username != "" {
-		add("employee_no = $%d", filter.Username)
+		add("username = $%d", filter.Username)
 	}
 	if filter.TokenFingerprint != "" {
 		add("token_fingerprint = $%d", filter.TokenFingerprint)
@@ -361,7 +361,7 @@ func (r Repository) ListUsageAggregates(ctx context.Context, filter UsageFilter)
 	}
 	args = append(args, limit)
 	query := fmt.Sprintf(`
-SELECT bucket_start::text, bucket_size, employee_no, token_name_snapshot, model, route_pattern,
+SELECT bucket_start::text, bucket_size, username, token_name_snapshot, model, route_pattern,
        request_count, success_count, error_count, total_tokens, estimated_cost
 FROM usage_aggregates
 WHERE %s
@@ -410,7 +410,7 @@ func (r Repository) ListTokenIdentities(ctx context.Context, filter TokenIdentit
 		where = append(where, fmt.Sprintf(clause, len(args)))
 	}
 	if filter.Username != "" {
-		add("c.employee_no = $%d", filter.Username)
+		add("c.username = $%d", filter.Username)
 	}
 	if filter.TokenFingerprint != "" {
 		add("c.token_fingerprint = $%d", filter.TokenFingerprint)
@@ -418,11 +418,11 @@ func (r Repository) ListTokenIdentities(ctx context.Context, filter TokenIdentit
 	args = append(args, limit)
 	query := fmt.Sprintf(`
 SELECT c.fingerprint_display, c.token_fingerprint, c.new_api_token_id,
-       c.token_name_raw, c.employee_no, COALESCE(s.display_name, ''),
+       c.token_name_raw, c.username, COALESCE(s.display_name, ''),
        COALESCE(s.department, c.department), c.token_status, c.token_group,
        c.last_seen_at::text
 FROM token_identity_cache c
-LEFT JOIN audit_subjects s ON s.employee_no = c.employee_no
+LEFT JOIN audit_subjects s ON s.username = c.username
 WHERE %s
 ORDER BY c.last_seen_at DESC
 LIMIT $%d`, strings.Join(where, " AND "), len(args))
@@ -549,7 +549,7 @@ func (r Repository) GetTraceDetail(ctx context.Context, traceID string) (TraceDe
 	var detail TraceDetail
 	err := r.db.QueryRow(ctx, `
 SELECT trace_id, method, path, route_pattern, protocol_family, status_code,
-       employee_no_snapshot, fingerprint_display, model_requested, usage_total_tokens,
+       username_snapshot, fingerprint_display, model_requested, usage_total_tokens,
        created_at::text, request_raw_ref, response_raw_ref, request_headers_ref,
        response_headers_ref, identity_resolution_status, analysis_status
 FROM traces

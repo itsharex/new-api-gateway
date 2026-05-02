@@ -260,7 +260,7 @@ func (h Handler) listReviewDecisions(w http.ResponseWriter, r *http.Request) {
 
 func (h Handler) systemSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"settings": SystemSettingsSummary{
-		UsernamePattern: "configured by EMPLOYEE_NO_PATTERN",
+		UsernamePattern: "configured by USERNAME_PATTERN",
 		MetricsEnabled:    true,
 		LookupLimit:       20,
 		RawAccessLimit:    120,
