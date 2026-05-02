@@ -10,13 +10,11 @@ import (
 )
 
 const (
-	ResolutionStatusResolved          = "resolved"
-	ResolutionStatusMissingEmployeeNo = "missing_employee_no"
-	ResolutionStatusInvalidEmployeeNo = "invalid_employee_no"
-	ResolutionStatusDBError           = "db_error"
-	ResolutionStatusNotFound          = "not_found"
-	ResolutionStatusExtractFailed     = "extract_failed"
-	ResolutionStatusResolveFailed     = "resolve_failed"
+	ResolutionStatusResolved         = "resolved"
+	ResolutionStatusDBError          = "db_error"
+	ResolutionStatusNotFound         = "not_found"
+	ResolutionStatusExtractFailed    = "extract_failed"
+	ResolutionStatusResolveFailed    = "resolve_failed"
 
 	IdentityCacheStatusHit          = "cache_hit"
 	IdentityCacheStatusMissDBLookup = "miss_db_lookup"
@@ -68,12 +66,12 @@ func (r Resolver) Resolve(ctx context.Context, canonicalKey, fingerprintValue, f
 		}, nil
 	}
 
-	employeeNo := employee.Normalize(token.TokenName)
+	username := employee.Normalize(token.TokenName)
 	status := ResolutionStatusResolved
-	if employeeNo == "" {
-		status = ResolutionStatusMissingEmployeeNo
-	} else if err := employee.Validate(employeeNo, r.EmployeeNoPattern); err != nil {
-		status = ResolutionStatusInvalidEmployeeNo
+	if username == "" {
+		status = ResolutionStatusDBError
+	} else if err := employee.Validate(username, r.EmployeeNoPattern); err != nil {
+		status = ResolutionStatusDBError
 	}
 
 	snapshot := Snapshot{
@@ -81,7 +79,7 @@ func (r Resolver) Resolve(ctx context.Context, canonicalKey, fingerprintValue, f
 		FingerprintDisplay:  fingerprintDisplay,
 		NewAPITokenID:       token.TokenID,
 		TokenNameRaw:        token.TokenName,
-		EmployeeNo:          employeeNo,
+		Username:           username,
 		TokenStatus:         token.TokenStatus,
 		TokenGroup:          token.TokenGroup,
 		ExpiredTime:         token.ExpiredTime,

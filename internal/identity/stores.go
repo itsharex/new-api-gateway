@@ -65,6 +65,7 @@ type TokenLookup interface {
 type NewAPIToken struct {
 	TokenID            int
 	TokenName          string
+	Username           string
 	TokenStatus        int
 	TokenGroup         string
 	ExpiredTime        int64
@@ -81,7 +82,7 @@ type Snapshot struct {
 	FingerprintDisplay  string
 	NewAPITokenID       int
 	TokenNameRaw        string
-	EmployeeNo          string
+	Username            string
 	TokenStatus         int
 	TokenGroup          string
 	ExpiredTime         int64
