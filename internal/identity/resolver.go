@@ -4,9 +4,6 @@ import (
 	"context"
 	"errors"
 	"reflect"
-	"regexp"
-
-	"github.com/your-company/new-api-gateway/internal/employee"
 )
 
 const (
@@ -21,23 +18,18 @@ const (
 	IdentityCacheStatusCacheError   = "cache_error"
 )
 
-var (
-	errResolverLookupRequired            = errors.New("identity resolver lookup is nil")
-	errResolverEmployeeNoPatternRequired = errors.New("identity resolver employee number pattern is nil")
-)
+var errResolverLookupRequired = errors.New("identity resolver lookup is nil")
 
+// Resolver resolves API key fingerprints to user identities via a
+// TokenLookup (typically NewAPILookup) with optional caching.
 type Resolver struct {
-	Cache             Cache
-	Lookup            TokenLookup
-	EmployeeNoPattern *regexp.Regexp
+	Cache  Cache
+	Lookup TokenLookup
 }
 
 func (r Resolver) Resolve(ctx context.Context, canonicalKey, fingerprintValue, fingerprintDisplay string) (Snapshot, error) {
 	if isNilInterface(r.Lookup) {
 		return Snapshot{}, errResolverLookupRequired
-	}
-	if r.EmployeeNoPattern == nil {
-		return Snapshot{}, errResolverEmployeeNoPatternRequired
 	}
 
 	cacheStatus := IdentityCacheStatusMissDBLookup
@@ -66,20 +58,12 @@ func (r Resolver) Resolve(ctx context.Context, canonicalKey, fingerprintValue, f
 		}, nil
 	}
 
-	username := employee.Normalize(token.TokenName)
-	status := ResolutionStatusResolved
-	if username == "" {
-		status = ResolutionStatusDBError
-	} else if err := employee.Validate(username, r.EmployeeNoPattern); err != nil {
-		status = ResolutionStatusDBError
-	}
-
 	snapshot := Snapshot{
 		TokenFingerprint:    fingerprintValue,
 		FingerprintDisplay:  fingerprintDisplay,
 		NewAPITokenID:       token.TokenID,
 		TokenNameRaw:        token.TokenName,
-		Username:           username,
+		Username:            token.Username,
 		TokenStatus:         token.TokenStatus,
 		TokenGroup:          token.TokenGroup,
 		ExpiredTime:         token.ExpiredTime,
@@ -89,7 +73,7 @@ func (r Resolver) Resolve(ctx context.Context, canonicalKey, fingerprintValue, f
 		UnlimitedQuota:      token.UnlimitedQuota,
 		ModelLimitsEnabled:  token.ModelLimitsEnabled,
 		ModelLimits:         token.ModelLimits,
-		ResolutionStatus:    status,
+		ResolutionStatus:    ResolutionStatusResolved,
 		IdentityCacheStatus: cacheStatus,
 	}
 	if !isNilInterface(cache) && snapshot.ResolutionStatus == ResolutionStatusResolved {

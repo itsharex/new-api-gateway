@@ -4,11 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"testing"
 )
-
-var employeeNoPattern = regexp.MustCompile(`^[A-Z][0-9]{5}$`)
 
 type fakeCache struct {
 	value        Snapshot
@@ -50,15 +47,15 @@ func (f *fakeLookup) FindByCanonicalKey(ctx context.Context, canonicalKey string
 }
 
 func TestResolverUsesCacheHit(t *testing.T) {
-	cache := &fakeCache{ok: true, value: Snapshot{TokenFingerprint: "fp", EmployeeNo: "E12345", ResolutionStatus: ResolutionStatusResolved}}
+	cache := &fakeCache{ok: true, value: Snapshot{TokenFingerprint: "fp", Username: "alice", ResolutionStatus: ResolutionStatusResolved}}
 	lookup := &fakeLookup{}
-	resolver := Resolver{Cache: cache, Lookup: lookup, EmployeeNoPattern: employeeNoPattern}
+	resolver := Resolver{Cache: cache, Lookup: lookup}
 
 	got, err := resolver.Resolve(context.Background(), "canonical", "fp", "tkfp_abc")
 	if err != nil {
 		t.Fatalf("Resolve error: %v", err)
 	}
-	if got.EmployeeNo != "E12345" || got.IdentityCacheStatus != IdentityCacheStatusHit {
+	if got.Username != "alice" || got.IdentityCacheStatus != IdentityCacheStatusHit {
 		t.Fatalf("unexpected snapshot %#v", got)
 	}
 	if lookup.calls != 0 {
@@ -67,7 +64,7 @@ func TestResolverUsesCacheHit(t *testing.T) {
 }
 
 func TestResolverReturnsErrorForNilLookup(t *testing.T) {
-	resolver := Resolver{EmployeeNoPattern: employeeNoPattern}
+	resolver := Resolver{}
 
 	if _, err := resolver.Resolve(context.Background(), "canonical", "fp", "tkfp_abc"); err == nil {
 		t.Fatal("expected error for nil lookup")
@@ -76,7 +73,7 @@ func TestResolverReturnsErrorForNilLookup(t *testing.T) {
 
 func TestResolverReturnsErrorForTypedNilLookup(t *testing.T) {
 	var lookup *fakeLookup
-	resolver := Resolver{Lookup: lookup, EmployeeNoPattern: employeeNoPattern}
+	resolver := Resolver{Lookup: lookup}
 
 	if _, err := resolver.Resolve(context.Background(), "canonical", "fp", "tkfp_abc"); err == nil {
 		t.Fatal("expected error for typed nil lookup")
@@ -85,8 +82,8 @@ func TestResolverReturnsErrorForTypedNilLookup(t *testing.T) {
 
 func TestResolverTreatsTypedNilCacheAsNoCache(t *testing.T) {
 	var cache *fakeCache
-	lookup := &fakeLookup{token: NewAPIToken{TokenID: 12, TokenName: "E12345", TokenStatus: 1}}
-	resolver := Resolver{Cache: cache, Lookup: lookup, EmployeeNoPattern: employeeNoPattern}
+	lookup := &fakeLookup{token: NewAPIToken{TokenID: 12, Username: "bob", TokenStatus: 1}}
+	resolver := Resolver{Cache: cache, Lookup: lookup}
 
 	got, err := resolver.Resolve(context.Background(), "canonical", "fp", "tkfp_abc")
 	if err != nil {
@@ -100,28 +97,19 @@ func TestResolverTreatsTypedNilCacheAsNoCache(t *testing.T) {
 	}
 }
 
-func TestResolverReturnsErrorForNilEmployeeNoPattern(t *testing.T) {
-	resolver := Resolver{Lookup: &fakeLookup{token: NewAPIToken{TokenID: 12, TokenName: "E12345"}}}
-
-	if _, err := resolver.Resolve(context.Background(), "canonical", "fp", "tkfp_abc"); err == nil {
-		t.Fatal("expected error for nil employee number pattern")
-	}
-}
-
-func TestResolverLookupConvertsTokenNameToEmployeeNo(t *testing.T) {
+func TestResolverUsesUsernameFromLookup(t *testing.T) {
 	cache := &fakeCache{}
 	resolver := Resolver{
-		Cache:             cache,
-		Lookup:            &fakeLookup{token: NewAPIToken{TokenID: 12, TokenName: " e12345 ", TokenStatus: 1}},
-		EmployeeNoPattern: employeeNoPattern,
+		Cache:  cache,
+		Lookup: &fakeLookup{token: NewAPIToken{TokenID: 12, Username: "charlie", TokenStatus: 1}},
 	}
 
 	got, err := resolver.Resolve(context.Background(), "canonical", "fp", "tkfp_abc")
 	if err != nil {
 		t.Fatalf("Resolve error: %v", err)
 	}
-	if got.EmployeeNo != "E12345" {
-		t.Fatalf("EmployeeNo = %q", got.EmployeeNo)
+	if got.Username != "charlie" {
+		t.Fatalf("Username = %q", got.Username)
 	}
 	if got.ResolutionStatus != ResolutionStatusResolved {
 		t.Fatalf("ResolutionStatus = %q", got.ResolutionStatus)
@@ -134,7 +122,8 @@ func TestResolverLookupConvertsTokenNameToEmployeeNo(t *testing.T) {
 func TestResolverCopiesTokenMetadata(t *testing.T) {
 	token := NewAPIToken{
 		TokenID:            12,
-		TokenName:          " e12345 ",
+		TokenName:          "my-token",
+		Username:           "dave",
 		TokenStatus:        1,
 		TokenGroup:         "staff",
 		ExpiredTime:        1711111111,
@@ -145,7 +134,7 @@ func TestResolverCopiesTokenMetadata(t *testing.T) {
 		ModelLimitsEnabled: true,
 		ModelLimits:        `{"gpt-4":10}`,
 	}
-	resolver := Resolver{Lookup: &fakeLookup{token: token}, EmployeeNoPattern: employeeNoPattern}
+	resolver := Resolver{Lookup: &fakeLookup{token: token}}
 
 	got, err := resolver.Resolve(context.Background(), "canonical", "fp", "tkfp_abc")
 	if err != nil {
@@ -154,7 +143,10 @@ func TestResolverCopiesTokenMetadata(t *testing.T) {
 	if got.TokenFingerprint != "fp" || got.FingerprintDisplay != "tkfp_abc" {
 		t.Fatalf("fingerprint fields not copied: %#v", got)
 	}
-	if got.NewAPITokenID != token.TokenID || got.TokenNameRaw != token.TokenName || got.TokenStatus != token.TokenStatus || got.TokenGroup != token.TokenGroup {
+	if got.NewAPITokenID != token.TokenID || got.TokenNameRaw != token.TokenName || got.Username != token.Username {
+		t.Fatalf("identity metadata not copied: %#v", got)
+	}
+	if got.TokenStatus != token.TokenStatus || got.TokenGroup != token.TokenGroup {
 		t.Fatalf("basic token metadata not copied: %#v", got)
 	}
 	if got.ExpiredTime != token.ExpiredTime || got.AccessedTime != token.AccessedTime || got.RemainQuota != token.RemainQuota || got.UsedQuota != token.UsedQuota {
@@ -165,52 +157,11 @@ func TestResolverCopiesTokenMetadata(t *testing.T) {
 	}
 }
 
-func TestResolverMarksInvalidEmployeeNo(t *testing.T) {
-	cache := &fakeCache{}
-	resolver := Resolver{
-		Cache:             cache,
-		Lookup:            &fakeLookup{token: NewAPIToken{TokenID: 12, TokenName: "alice", TokenStatus: 1}},
-		EmployeeNoPattern: employeeNoPattern,
-	}
-
-	got, err := resolver.Resolve(context.Background(), "canonical", "fp", "tkfp_abc")
-	if err != nil {
-		t.Fatalf("Resolve error: %v", err)
-	}
-	if got.ResolutionStatus != ResolutionStatusInvalidEmployeeNo {
-		t.Fatalf("ResolutionStatus = %q", got.ResolutionStatus)
-	}
-	if cache.setCalls != 0 {
-		t.Fatalf("cache Set called %d times for invalid employee no", cache.setCalls)
-	}
-}
-
-func TestResolverMarksMissingEmployeeNo(t *testing.T) {
-	cache := &fakeCache{}
-	resolver := Resolver{
-		Cache:             cache,
-		Lookup:            &fakeLookup{token: NewAPIToken{TokenID: 12, TokenName: "   ", TokenStatus: 1}},
-		EmployeeNoPattern: employeeNoPattern,
-	}
-
-	got, err := resolver.Resolve(context.Background(), "canonical", "fp", "tkfp_abc")
-	if err != nil {
-		t.Fatalf("Resolve error: %v", err)
-	}
-	if got.ResolutionStatus != ResolutionStatusMissingEmployeeNo {
-		t.Fatalf("ResolutionStatus = %q", got.ResolutionStatus)
-	}
-	if cache.setCalls != 0 {
-		t.Fatalf("cache Set called %d times for missing employee no", cache.setCalls)
-	}
-}
-
 func TestResolverMarksTokenNotFound(t *testing.T) {
 	cache := &fakeCache{}
 	resolver := Resolver{
-		Cache:             cache,
-		Lookup:            &fakeLookup{err: ErrTokenNotFound},
-		EmployeeNoPattern: employeeNoPattern,
+		Cache:  cache,
+		Lookup: &fakeLookup{err: ErrTokenNotFound},
 	}
 
 	got, err := resolver.Resolve(context.Background(), "canonical", "fp", "tkfp_abc")
@@ -231,9 +182,8 @@ func TestResolverMarksTokenNotFound(t *testing.T) {
 func TestResolverMarksWrappedTokenNotFound(t *testing.T) {
 	cache := &fakeCache{}
 	resolver := Resolver{
-		Cache:             cache,
-		Lookup:            &fakeLookup{err: fmt.Errorf("lookup failed: %w", ErrTokenNotFound)},
-		EmployeeNoPattern: employeeNoPattern,
+		Cache:  cache,
+		Lookup: &fakeLookup{err: fmt.Errorf("lookup failed: %w", ErrTokenNotFound)},
 	}
 
 	got, err := resolver.Resolve(context.Background(), "canonical", "fp", "tkfp_abc")
@@ -251,9 +201,8 @@ func TestResolverMarksWrappedTokenNotFound(t *testing.T) {
 func TestResolverMarksLookupErrorsAsDBError(t *testing.T) {
 	cache := &fakeCache{}
 	resolver := Resolver{
-		Cache:             cache,
-		Lookup:            &fakeLookup{err: errors.New("database unavailable")},
-		EmployeeNoPattern: employeeNoPattern,
+		Cache:  cache,
+		Lookup: &fakeLookup{err: errors.New("database unavailable")},
 	}
 
 	got, err := resolver.Resolve(context.Background(), "canonical", "fp", "tkfp_abc")
@@ -273,8 +222,8 @@ func TestResolverMarksLookupErrorsAsDBError(t *testing.T) {
 
 func TestResolverContinuesToLookupAfterCacheGetError(t *testing.T) {
 	cache := &fakeCache{getErr: errors.New("redis unavailable")}
-	lookup := &fakeLookup{token: NewAPIToken{TokenID: 12, TokenName: "E12345", TokenStatus: 1}}
-	resolver := Resolver{Cache: cache, Lookup: lookup, EmployeeNoPattern: employeeNoPattern}
+	lookup := &fakeLookup{token: NewAPIToken{TokenID: 12, Username: "eve", TokenStatus: 1}}
+	resolver := Resolver{Cache: cache, Lookup: lookup}
 
 	got, err := resolver.Resolve(context.Background(), "canonical", "fp", "tkfp_abc")
 	if err != nil {
@@ -294,9 +243,8 @@ func TestResolverContinuesToLookupAfterCacheGetError(t *testing.T) {
 func TestResolverIgnoresCacheSetError(t *testing.T) {
 	cache := &fakeCache{setErr: errors.New("redis unavailable")}
 	resolver := Resolver{
-		Cache:             cache,
-		Lookup:            &fakeLookup{token: NewAPIToken{TokenID: 12, TokenName: "E12345", TokenStatus: 1}},
-		EmployeeNoPattern: employeeNoPattern,
+		Cache:  cache,
+		Lookup: &fakeLookup{token: NewAPIToken{TokenID: 12, Username: "frank", TokenStatus: 1}},
 	}
 
 	got, err := resolver.Resolve(context.Background(), "canonical", "fp", "tkfp_abc")
