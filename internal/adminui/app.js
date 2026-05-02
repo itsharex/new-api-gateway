@@ -415,13 +415,14 @@ function renderCoverage(body) {
   body = body || {};
   const rows = arrayValue(body.coverage_alerts).map((item) => [
     item.alert_id,
+    item.last_seen_at,
     badge(item.severity),
     item.alert_code,
     item.method,
     item.route_pattern || item.raw_path,
     formatNumber(item.occurrence_count),
   ]);
-  renderShell(page("覆盖", `<section class="panel">${table(["ID", "Severity", "Code", "Method", "Route", "数量"], rows)}</section>`));
+  renderShell(page("覆盖", `<section class="panel">${table(["ID", "最后发现", "Severity", "Code", "Method", "Route", "数量"], rows)}</section>`));
 }
 
 function renderLookup(result = "") {
