@@ -49,10 +49,16 @@ func run(ctx context.Context, cfg config.Config, logger *log.Logger) error {
 	}
 	defer pool.Close()
 
+	newAPIPool, err := pgxpool.New(ctx, cfg.NewAPIPostgresDSN)
+	if err != nil {
+		return err
+	}
+	defer newAPIPool.Close()
+
 	redisClient := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
 	defer redisClient.Close()
 
-	handler := buildHTTPHandler(cfg, pool, redisClient, logger)
+	handler := buildHTTPHandler(cfg, pool, newAPIPool, redisClient, logger)
 	server := &http.Server{
 		Addr:    cfg.ListenAddr,
 		Handler: handler,
@@ -99,7 +105,7 @@ func serveUntilContext(ctx context.Context, server *http.Server, shutdownTimeout
 	return nil
 }
 
-func buildHandler(cfg config.Config, pool *pgxpool.Pool, redisClient *redis.Client, logger *log.Logger) gateway.Handler {
+func buildHandler(cfg config.Config, pool *pgxpool.Pool, newAPIPool *pgxpool.Pool, redisClient *redis.Client, logger *log.Logger) gateway.Handler {
 	return gateway.Handler{
 		UpstreamBaseURL: cfg.NewAPIBaseURL,
 		Registry:        routes.DefaultRegistry(),
@@ -110,8 +116,7 @@ func buildHandler(cfg config.Config, pool *pgxpool.Pool, redisClient *redis.Clie
 				identity.RedisCache{Client: redisClient},
 				identity.PostgresCache{DB: pool},
 			}},
-			Lookup:            identity.PostgresTokenLookup{Pool: pool},
-			EmployeeNoPattern: cfg.EmployeeNoPattern,
+			Lookup:            identity.NewAPILookup{Pool: newAPIPool},
 		},
 		AuditSecret:     cfg.AuditHMACSecret,
 		AuditError:      auditErrorLogger(logger),
@@ -121,8 +126,8 @@ func buildHandler(cfg config.Config, pool *pgxpool.Pool, redisClient *redis.Clie
 	}
 }
 
-func buildHTTPHandler(cfg config.Config, pool *pgxpool.Pool, redisClient *redis.Client, logger *log.Logger) http.Handler {
-	gatewayHandler := buildHandler(cfg, pool, redisClient, logger)
+func buildHTTPHandler(cfg config.Config, pool *pgxpool.Pool, newAPIPool *pgxpool.Pool, redisClient *redis.Client, logger *log.Logger) http.Handler {
+	gatewayHandler := buildHandler(cfg, pool, newAPIPool, redisClient, logger)
 	uiHandler := adminui.Handler()
 	opsHandler := buildOpsHandler(cfg, pool, redisClient)
 	if pool == nil {

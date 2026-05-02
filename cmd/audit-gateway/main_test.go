@@ -20,10 +20,9 @@ func TestBuildHandlerWiresGatewayRuntimeDependencies(t *testing.T) {
 		NewAPIBaseURL:      "https://new-api.example.test/base",
 		AuditHMACSecret:    "0123456789abcdef0123456789abcdef",
 		EvidenceStorageDir: t.TempDir(),
-		EmployeeNoPattern:  regexp.MustCompile(`^E[0-9]+$`),
 	}
 
-	handler := buildHandler(cfg, nil, nil, log.New(ioDiscard{}, "", 0))
+	handler := buildHandler(cfg, nil, nil, nil, log.New(ioDiscard{}, "", 0))
 
 	if handler.UpstreamBaseURL != cfg.NewAPIBaseURL {
 		t.Fatalf("UpstreamBaseURL = %q", handler.UpstreamBaseURL)
@@ -59,10 +58,9 @@ func TestBuildHTTPHandlerRoutesAdminBeforeProxy(t *testing.T) {
 		AdminSessionSecret: "admin-session-secret-0123456789abcdef",
 		AdminCookieName:    "audit_admin_session",
 		EvidenceStorageDir: t.TempDir(),
-		EmployeeNoPattern:  regexp.MustCompile(`^E[0-9]+$`),
 	}
 
-	handler := buildHTTPHandler(cfg, nil, nil, log.New(ioDiscard{}, "", 0))
+	handler := buildHTTPHandler(cfg, nil, nil, nil, log.New(ioDiscard{}, "", 0))
 	for _, path := range []string{"/admin/api", "/admin/api/login"} {
 		t.Run(path, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
@@ -82,13 +80,12 @@ func TestBuildHTTPHandlerServesOperationalRoutesBeforeAdminAndProxy(t *testing.T
 		NewAPIBaseURL:            "https://new-api.example.test/base",
 		AuditHMACSecret:          "0123456789abcdef0123456789abcdef",
 		EvidenceStorageDir:       t.TempDir(),
-		EmployeeNoPattern:        regexp.MustCompile(`^E[0-9]+$`),
 		OpsCheckTimeout:          50 * time.Millisecond,
 		OpsWorkerHeartbeatMaxAge: 5 * time.Minute,
 		OpsQueueLagWarnThreshold: 1000,
 		OpsMetricsEnabled:        true,
 	}
-	handler := buildHTTPHandler(cfg, nil, nil, log.New(io.Discard, "", 0))
+	handler := buildHTTPHandler(cfg, nil, nil, nil, log.New(io.Discard, "", 0))
 
 	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
 		t.Run(path, func(t *testing.T) {
@@ -108,7 +105,7 @@ func TestBuildHTTPHandlerServesOperationalRoutesBeforeAdminAndProxy(t *testing.T
 }
 
 func TestBuildHTTPHandlerServesAdminUIWithoutInterceptingAPIOrProxy(t *testing.T) {
-	handler := buildHTTPHandler(config.Config{}, nil, nil, log.New(io.Discard, "", 0))
+	handler := buildHTTPHandler(config.Config{}, nil, nil, nil, log.New(io.Discard, "", 0))
 
 	adminReq := httptest.NewRequest(http.MethodGet, "/admin", nil)
 	adminRec := httptest.NewRecorder()

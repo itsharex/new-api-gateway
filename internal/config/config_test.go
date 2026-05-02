@@ -15,7 +15,7 @@ func TestLoadFromEnvRequiresCoreValues(t *testing.T) {
 	t.Setenv("EVIDENCE_STORAGE_DIR", t.TempDir())
 	t.Setenv("POSTGRES_DSN", "postgres://audit:pass@localhost:5432/audit?sslmode=disable")
 	t.Setenv("REDIS_ADDR", "localhost:6379")
-	t.Setenv("EMPLOYEE_NO_PATTERN", `^[A-Z][0-9]{5}$`)
+	t.Setenv("NEW_API_POSTGRES_DSN", "postgres://newapi:pass@localhost:5433/newapi?sslmode=disable")
 
 	cfg, err := LoadFromEnv()
 	if err != nil {
@@ -27,8 +27,8 @@ func TestLoadFromEnvRequiresCoreValues(t *testing.T) {
 	if cfg.NewAPIBaseURL != "http://127.0.0.1:3000" {
 		t.Fatalf("NewAPIBaseURL = %q", cfg.NewAPIBaseURL)
 	}
-	if cfg.EmployeeNoPattern.String() != `^[A-Z][0-9]{5}$` {
-		t.Fatalf("EmployeeNoPattern = %q", cfg.EmployeeNoPattern.String())
+	if cfg.NewAPIPostgresDSN != "postgres://newapi:pass@localhost:5433/newapi?sslmode=disable" {
+		t.Fatalf("NewAPIPostgresDSN = %q", cfg.NewAPIPostgresDSN)
 	}
 }
 
@@ -38,7 +38,7 @@ func TestLoadFromEnvRejectsMissingSecret(t *testing.T) {
 	t.Setenv("EVIDENCE_STORAGE_DIR", t.TempDir())
 	t.Setenv("POSTGRES_DSN", "postgres://audit:pass@localhost:5432/audit?sslmode=disable")
 	t.Setenv("REDIS_ADDR", "localhost:6379")
-	t.Setenv("EMPLOYEE_NO_PATTERN", `^[A-Z][0-9]{5}$`)
+	t.Setenv("NEW_API_POSTGRES_DSN", "postgres://newapi:pass@localhost:5433/newapi?sslmode=disable")
 
 	_, err := LoadFromEnv()
 	if err == nil {
@@ -46,12 +46,12 @@ func TestLoadFromEnvRejectsMissingSecret(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnvRejectsInvalidRegex(t *testing.T) {
+func TestLoadFromEnvRejectsInvalidNewAPIDSN(t *testing.T) {
 	setValidEnv(t)
-	t.Setenv("EMPLOYEE_NO_PATTERN", `[invalid`)
+	t.Setenv("NEW_API_POSTGRES_DSN", "://not-a-dsn")
 
 	_, err := LoadFromEnv()
-	assertErrorContains(t, err, "invalid EMPLOYEE_NO_PATTERN")
+	assertErrorContains(t, err, "invalid NEW_API_POSTGRES_DSN")
 }
 
 func TestLoadFromEnvRejectsShortSecret(t *testing.T) {
@@ -194,7 +194,7 @@ func TestLoadFromEnvRejectsExplicitBlankDefaultedValues(t *testing.T) {
 		{name: "empty", value: ""},
 		{name: "blank", value: "  "},
 	} {
-		for _, key := range []string{"AUDIT_GATEWAY_LISTEN_ADDR", "REDIS_ADDR", "EMPLOYEE_NO_PATTERN"} {
+		for _, key := range []string{"AUDIT_GATEWAY_LISTEN_ADDR", "REDIS_ADDR"} {
 			t.Run(key+"/"+tc.name, func(t *testing.T) {
 				setValidEnv(t)
 				t.Setenv(key, tc.value)
@@ -305,7 +305,7 @@ func setValidEnv(t *testing.T) {
 	t.Setenv("EVIDENCE_STORAGE_DIR", t.TempDir())
 	t.Setenv("POSTGRES_DSN", "postgres://audit:pass@localhost:5432/audit?sslmode=disable")
 	t.Setenv("REDIS_ADDR", "localhost:6379")
-	t.Setenv("EMPLOYEE_NO_PATTERN", `^[A-Z][0-9]{5}$`)
+	t.Setenv("NEW_API_POSTGRES_DSN", "postgres://newapi:pass@localhost:5433/newapi?sslmode=disable")
 }
 
 func unsetEnv(t *testing.T, key string) {
