@@ -96,6 +96,7 @@ type TraceSummary struct {
 	ModelRequested     string `json:"model_requested"`
 	UsageTotalTokens   int    `json:"usage_total_tokens"`
 	CreatedAt          string `json:"created_at"`
+	NeedsReview        bool   `json:"needs_review"`
 }
 
 type AnomalySummary struct {
