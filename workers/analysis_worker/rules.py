@@ -32,16 +32,16 @@ def detect_anomalies(
     messages = messages or []
     context = context or AnalysisContext()
     alerts: list[AnomalyAlert] = []
-    if job.identity_resolution_status == "missing_employee_no":
+    if job.identity_resolution_status == "missing_username":
         alerts.append(_anomaly(
             job,
-            "missing_employee_no",
+            "missing_username",
             "high",
             observed_value=1,
             threshold_value=0,
-            reason="identity resolver marked the trace as missing an employee number",
+            reason="identity resolver marked the trace as missing a username",
         ))
-    elif _upstream_success(job) and not job.employee_no:
+    elif _upstream_success(job) and not job.username:
         alerts.append(_anomaly(
             job,
             "identity_unresolved_success",
@@ -50,14 +50,14 @@ def detect_anomalies(
             threshold_value=0,
             reason="identity was unresolved while upstream returned a successful response",
         ))
-    if job.identity_resolution_status == "invalid_employee_no":
+    if job.identity_resolution_status == "invalid_username":
         alerts.append(_anomaly(
             job,
-            "invalid_employee_no",
+            "invalid_username",
             "high",
             observed_value=1,
             threshold_value=0,
-            reason="identity resolver marked the token name snapshot as an invalid employee number",
+            reason="identity resolver marked the token name snapshot as an invalid username",
         ))
     if job.usage_total_tokens > HIGH_TRACE_TOKEN_THRESHOLD:
         alerts.append(_anomaly(
@@ -244,7 +244,7 @@ def detect_coverage_alerts(job: TraceCapturedJob, messages: list[NormalizedMessa
         message="route was marked raw_and_normalized but the worker extracted no normalized messages",
         affected_trace_count=1,
         affected_token_count=1 if job.token_fingerprint else 0,
-        affected_employee_count=1 if job.employee_no else 0,
+        affected_employee_count=1 if job.username else 0,
     )]
 
 
@@ -326,13 +326,13 @@ def _anomaly(
     resolved_window_start = window_start or default_window_start
     resolved_window_end = window_end or default_window_end
     return AnomalyAlert(
-        anomaly_id=anomaly_id(anomaly_type, job.trace_id, job.employee_no),
+        anomaly_id=anomaly_id(anomaly_type, job.trace_id, job.username),
         anomaly_type=anomaly_type,
         severity=severity,
         token_fingerprint=job.token_fingerprint,
         fingerprint_display=job.fingerprint_display,
         new_api_token_id=job.new_api_token_id,
-        employee_no=job.employee_no,
+        username=job.username,
         token_name_snapshot=job.token_name_snapshot,
         window_start=resolved_window_start,
         window_end=resolved_window_end,

@@ -181,7 +181,7 @@ class PostgresAnalysisRepository:
                 """
                 INSERT INTO usage_aggregates (
                     bucket_start, bucket_size, token_fingerprint, new_api_token_id,
-                    employee_no, token_name_snapshot, model, route_pattern, protocol_family,
+                    username, token_name_snapshot, model, route_pattern, protocol_family,
                     request_count, success_count, error_count, stream_count,
                     prompt_tokens, completion_tokens, total_tokens, reasoning_tokens, cached_tokens,
                     request_body_bytes, response_body_bytes
@@ -190,7 +190,7 @@ class PostgresAnalysisRepository:
                     %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s
                 )
                 ON CONFLICT (
-                    bucket_start, bucket_size, token_fingerprint, employee_no,
+                    bucket_start, bucket_size, token_fingerprint, username,
                     model, route_pattern, protocol_family
                 ) DO UPDATE SET
                     request_count = usage_aggregates.request_count + EXCLUDED.request_count,
@@ -211,7 +211,7 @@ class PostgresAnalysisRepository:
                     aggregate.bucket_size,
                     aggregate.token_fingerprint,
                     aggregate.new_api_token_id,
-                    aggregate.employee_no,
+                    aggregate.username,
                     aggregate.token_name_snapshot,
                     aggregate.model,
                     aggregate.route_pattern,
@@ -234,7 +234,7 @@ class PostgresAnalysisRepository:
                 """
                 INSERT INTO usage_anomalies (
                     anomaly_id, anomaly_type, severity, token_fingerprint, fingerprint_display,
-                    new_api_token_id, employee_no, token_name_snapshot, window_start, window_end,
+                    new_api_token_id, username, token_name_snapshot, window_start, window_end,
                     observed_value, threshold_value, baseline_value, model, route_pattern,
                     sample_trace_ids, reason, detector_version
                 ) VALUES (
@@ -259,7 +259,7 @@ class PostgresAnalysisRepository:
                     anomaly.token_fingerprint,
                     anomaly.fingerprint_display,
                     anomaly.new_api_token_id,
-                    anomaly.employee_no,
+                    anomaly.username,
                     anomaly.token_name_snapshot,
                     anomaly.window_start,
                     anomaly.window_end,

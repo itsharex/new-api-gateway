@@ -42,7 +42,7 @@ def aggregate_deltas(job: TraceCapturedJob) -> list[UsageAggregateDelta]:
     common = {
         "token_fingerprint": job.token_fingerprint,
         "new_api_token_id": job.new_api_token_id,
-        "employee_no": job.employee_no,
+        "username": job.username,
         "token_name_snapshot": job.token_name_snapshot,
         "model": job.model_requested,
         "route_pattern": job.route_pattern,

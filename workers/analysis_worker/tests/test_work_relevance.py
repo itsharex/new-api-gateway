@@ -9,7 +9,7 @@ def job(**overrides):
         "route_pattern": "/v1/chat/completions",
         "protocol_family": "openai_chat",
         "capture_mode": "raw_and_normalized",
-        "employee_no": "E10001",
+        "username": "alice",
         "model_requested": "gpt-4.1",
         "usage_total_tokens": 1200,
     }

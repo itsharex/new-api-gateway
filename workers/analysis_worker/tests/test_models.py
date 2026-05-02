@@ -20,7 +20,7 @@ def test_parse_job_keeps_gateway_contract_fields():
         "route_pattern": "/v1/chat/completions",
         "protocol_family": "openai_chat",
         "capture_mode": "raw_and_normalized",
-        "employee_no": "E10001",
+        "username": "alice",
         "request_raw_ref": "raw/2026/04/28/trace_123/request_body.bin",
         "response_raw_ref": "raw/2026/04/28/trace_123/response_body.bin",
         "model_requested": "gpt-4.1",
@@ -32,7 +32,7 @@ def test_parse_job_keeps_gateway_contract_fields():
         "token_fingerprint": "tkfp_raw_value",
         "fingerprint_display": "tkfp_display",
         "new_api_token_id": 42,
-        "token_name_snapshot": "E10001",
+        "token_name_snapshot": "alice",
         "identity_resolution_status": "resolved",
         "client_ip_hash": "client_hash_current",
         "user_agent_hash": "ua_hash_current",
@@ -46,7 +46,7 @@ def test_parse_job_keeps_gateway_contract_fields():
         route_pattern="/v1/chat/completions",
         protocol_family="openai_chat",
         capture_mode="raw_and_normalized",
-        employee_no="E10001",
+        username="alice",
         request_raw_ref="raw/2026/04/28/trace_123/request_body.bin",
         response_raw_ref="raw/2026/04/28/trace_123/response_body.bin",
         request_headers_ref="",
@@ -62,7 +62,7 @@ def test_parse_job_keeps_gateway_contract_fields():
         token_fingerprint="tkfp_raw_value",
         fingerprint_display="tkfp_display",
         new_api_token_id=42,
-        token_name_snapshot="E10001",
+        token_name_snapshot="alice",
         identity_resolution_status="resolved",
         client_ip_hash="client_hash_current",
         user_agent_hash="ua_hash_current",
@@ -80,8 +80,8 @@ def test_bucket_start_hour_truncates_iso_timestamp():
 
 
 def test_anomaly_id_is_stable_for_same_rule_and_trace():
-    first = anomaly_id("high_trace_tokens", "trace_123", "E10001")
-    second = anomaly_id("high_trace_tokens", "trace_123", "E10001")
+    first = anomaly_id("high_trace_tokens", "trace_123", "alice")
+    second = anomaly_id("high_trace_tokens", "trace_123", "alice")
 
     assert first == second
     assert first.startswith("anom_high_trace_tokens_")

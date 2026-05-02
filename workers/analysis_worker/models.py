@@ -12,7 +12,7 @@ class TraceCapturedJob:
     route_pattern: str
     protocol_family: str
     capture_mode: str
-    employee_no: str
+    username: str
     request_raw_ref: str = ""
     request_headers_ref: str = ""
     response_raw_ref: str = ""
@@ -96,7 +96,7 @@ class UsageAggregateDelta:
     bucket_size: str
     token_fingerprint: str
     new_api_token_id: int
-    employee_no: str
+    username: str
     token_name_snapshot: str
     model: str
     route_pattern: str
@@ -122,7 +122,7 @@ class AnomalyAlert:
     token_fingerprint: str
     fingerprint_display: str
     new_api_token_id: int
-    employee_no: str
+    username: str
     token_name_snapshot: str
     window_start: str
     window_end: str
@@ -221,8 +221,8 @@ def stable_suffix(*parts: str) -> str:
     return sha256(joined.encode("utf-8")).hexdigest()[:16]
 
 
-def anomaly_id(rule_key: str, trace_id: str, employee_no: str) -> str:
-    return f"anom_{rule_key}_{stable_suffix(rule_key, trace_id, employee_no)}"
+def anomaly_id(rule_key: str, trace_id: str, username: str) -> str:
+    return f"anom_{rule_key}_{stable_suffix(rule_key, trace_id, username)}"
 
 
 def coverage_alert_id(alert_code: str, route_pattern: str, payload_shape_hash: str) -> str:

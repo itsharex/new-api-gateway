@@ -9,13 +9,13 @@ def job(**overrides):
         "route_pattern": "/v1/chat/completions",
         "protocol_family": "openai_chat",
         "capture_mode": "raw_and_normalized",
-        "employee_no": "E10001",
+        "username": "alice",
         "model_requested": "gpt-4.1",
         "usage_total_tokens": 18,
         "token_fingerprint": "tkfp_raw",
         "fingerprint_display": "tkfp_display",
         "new_api_token_id": 42,
-        "token_name_snapshot": "E10001",
+        "token_name_snapshot": "alice",
         "status_code": 200,
         "upstream_status_code": 200,
         "request_started_at": "2026-04-28T13:45:22Z",
@@ -27,7 +27,7 @@ def job(**overrides):
 
 
 def test_detects_identity_unresolved_success():
-    alerts = detect_anomalies(job(employee_no="", status_code=200, upstream_status_code=200))
+    alerts = detect_anomalies(job(username="", status_code=200, upstream_status_code=200))
 
     assert [alert.anomaly_type for alert in alerts] == ["identity_unresolved_success"]
     assert alerts[0].severity == "high"
@@ -38,7 +38,7 @@ def test_detects_identity_unresolved_success():
 
 def test_anomaly_windows_are_deterministic_without_request_timestamp():
     alerts = detect_anomalies(job(
-        employee_no="",
+        username="",
         request_started_at="",
         status_code=200,
         upstream_status_code=200,
@@ -62,9 +62,9 @@ def test_detects_high_trace_tokens():
     assert alerts[0].sample_trace_ids == ["trace_1"]
 
 
-def test_token_name_snapshot_difference_does_not_imply_invalid_employee_number():
+def test_token_name_snapshot_difference_does_not_imply_invalid_username():
     alerts = detect_anomalies(job(
-        employee_no="E10001",
+        username="alice",
         token_name_snapshot="Alice API Token",
         identity_resolution_status="resolved",
     ))
@@ -72,14 +72,14 @@ def test_token_name_snapshot_difference_does_not_imply_invalid_employee_number()
     assert [alert.anomaly_type for alert in alerts] == []
 
 
-def test_detects_invalid_employee_number_from_identity_resolution_status():
+def test_detects_invalid_username_from_identity_resolution_status():
     alerts = detect_anomalies(job(
-        employee_no="E10001",
+        username="alice",
         token_name_snapshot="Alice API Token",
-        identity_resolution_status="invalid_employee_no",
+        identity_resolution_status="invalid_username",
     ))
 
-    assert [alert.anomaly_type for alert in alerts] == ["invalid_employee_no"]
+    assert [alert.anomaly_type for alert in alerts] == ["invalid_username"]
     assert alerts[0].severity == "high"
 
 
@@ -177,15 +177,15 @@ def test_does_not_detect_low_work_relevance_high_cost_for_low_tokens():
     assert detect_work_relevance_anomalies(job(usage_total_tokens=100), assessment) == []
 
 
-def test_detects_missing_employee_number():
+def test_detects_missing_username():
     alerts = detect_anomalies(job(
-        employee_no="",
-        identity_resolution_status="missing_employee_no",
+        username="",
+        identity_resolution_status="missing_username",
         status_code=200,
         upstream_status_code=200,
     ))
 
-    assert [alert.anomaly_type for alert in alerts] == ["missing_employee_no"]
+    assert [alert.anomaly_type for alert in alerts] == ["missing_username"]
     assert alerts[0].severity == "high"
     assert alerts[0].observed_value == 1
     assert alerts[0].threshold_value == 0
