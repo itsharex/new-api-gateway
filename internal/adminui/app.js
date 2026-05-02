@@ -401,13 +401,14 @@ function renderAnomalies(body) {
   body = body || {};
   const rows = arrayValue(body.anomalies).map((item) => [
     item.anomaly_id,
+    item.created_at,
     badge(item.severity),
     item.anomaly_type,
     item.username || item.fingerprint_display,
     item.observed_value,
     item.reason,
   ]);
-  renderShell(page("异常", `<section class="panel">${table(["ID", "Severity", "类型", "员工", "观测值", "原因"], rows)}</section>`));
+  renderShell(page("异常", `<section class="panel">${table(["ID", "时间", "Severity", "类型", "员工", "观测值", "原因"], rows)}</section>`));
 }
 
 function renderCoverage(body) {
