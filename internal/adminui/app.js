@@ -299,7 +299,7 @@ function renderUsage(body) {
 function renderTraces(body) {
   body = body || {};
   const rows = arrayValue(body.traces).map((trace) => [
-    traceButton(trace.trace_id),
+    safeHTML(traceButton(trace.trace_id).html + (trace.needs_review ? badge("review").html : "")),
     formatTime(trace.created_at),
     trace.username || trace.fingerprint_display,
     trace.model_requested,
