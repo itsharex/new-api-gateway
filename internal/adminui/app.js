@@ -289,7 +289,7 @@ function renderUsage(body) {
     formatNumber(item.total_tokens),
     money(item.estimated_cost),
   ]);
-  renderShell(page("用量", `<section class="panel">${table(["时间段", "员工", "Model", "Route", "请求数", "Token", "费用"], rows)}</section>`));
+  renderShell(page("用量", `<section class="panel">${table(["时间 (UTC+8)", "员工", "Model", "Route", "请求数", "Token", "费用"], rows)}</section>`));
 }
 
 function renderTraces(body) {
@@ -303,7 +303,7 @@ function renderTraces(body) {
     trace.status_code,
     formatNumber(trace.usage_total_tokens),
   ]);
-  renderShell(page("Trace", `<section class="panel">${table(["Trace", "时间", "员工", "Model", "Route", "Status", "Token"], rows)}</section>`));
+  renderShell(page("Trace", `<section class="panel">${table(["Trace", "时间 (UTC+8)", "员工", "Model", "Route", "Status", "Token"], rows)}</section>`));
   document.querySelectorAll("[data-trace-id]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
@@ -331,7 +331,7 @@ function renderIdentities(body) {
   renderShell(
     page(
       "员工目录",
-      `<section class="panel">${table(["员工", "名称", "部门", "Fingerprint", "Token ID", "Token Name", "分组", "最后活跃"], rows)}</section>`,
+      `<section class="panel">${table(["员工", "名称", "部门", "Fingerprint", "Token ID", "Token Name", "分组", "最后活跃 (UTC+8)"], rows)}</section>`,
     ),
   );
 }
@@ -386,7 +386,7 @@ function renderTraceDetail(body) {
       `
         <section class="panel"><div class="meta-grid">${meta}</div></section>
         <section class="panel"><h2>归一化消息</h2>${table(["序号", "方向", "角色", "模态", "类型", "内容", "Token"], messages)}</section>
-        <section class="panel"><h2>分析结果</h2>${table(["分析器", "分类", "标签", "分数", "置信度", "Severity", "时间"], analysis)}</section>
+        <section class="panel"><h2>分析结果</h2>${table(["分析器", "分类", "标签", "分数", "置信度", "Severity", "时间 (UTC+8)"], analysis)}</section>
       `,
       `<button type="button" id="back-to-traces">返回</button>`,
     ),
@@ -408,7 +408,7 @@ function renderAnomalies(body) {
     item.observed_value,
     item.reason,
   ]);
-  renderShell(page("异常", `<section class="panel">${table(["ID", "时间", "Severity", "类型", "员工", "观测值", "原因"], rows)}</section>`));
+  renderShell(page("异常", `<section class="panel">${table(["ID", "时间 (UTC+8)", "Severity", "类型", "员工", "观测值", "原因"], rows)}</section>`));
 }
 
 function renderCoverage(body) {
@@ -422,7 +422,7 @@ function renderCoverage(body) {
     item.route_pattern || item.raw_path,
     formatNumber(item.occurrence_count),
   ]);
-  renderShell(page("覆盖", `<section class="panel">${table(["ID", "最后发现", "Severity", "Code", "Method", "Route", "数量"], rows)}</section>`));
+  renderShell(page("覆盖", `<section class="panel">${table(["ID", "最后发现 (UTC+8)", "Severity", "Code", "Method", "Route", "数量"], rows)}</section>`));
 }
 
 function renderLookup(result = "") {
@@ -486,7 +486,7 @@ function renderContext(body, message = "") {
     page(
       "Context 目录",
       `
-        <section class="panel">${table(["类型", "名称", "负责人", "关键词", "使用级别", "状态", "创建时间", "更新时间"], rows)}</section>
+        <section class="panel">${table(["类型", "名称", "负责人", "关键词", "使用级别", "状态", "创建时间 (UTC+8)", "更新时间 (UTC+8)"], rows)}</section>
         ${message}
         <section class="panel">
           <h2>创建 Context</h2>
@@ -571,7 +571,7 @@ function renderReviews(body) {
     item.reviewer_username,
     item.note,
   ]);
-  renderShell(page("审核记录", `<section class="panel">${table(["时间", "目标类型", "目标", "决定", "审核人", "备注"], rows)}</section>`));
+  renderShell(page("审核记录", `<section class="panel">${table(["时间 (UTC+8)", "目标类型", "目标", "决定", "审核人", "备注"], rows)}</section>`));
 }
 
 function renderSettings(body) {
@@ -596,7 +596,7 @@ function renderAudit(body) {
     item.target_id,
     item.trace_id,
   ]);
-  renderShell(page("审计日志", `<section class="panel">${table(["时间", "操作人", "操作", "目标类型", "目标", "Trace"], rows)}</section>`));
+  renderShell(page("审计日志", `<section class="panel">${table(["时间 (UTC+8)", "操作人", "操作", "目标类型", "目标", "Trace"], rows)}</section>`));
 }
 
 async function boot() {
