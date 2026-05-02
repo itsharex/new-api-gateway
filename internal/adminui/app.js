@@ -296,13 +296,14 @@ function renderTraces(body) {
   body = body || {};
   const rows = arrayValue(body.traces).map((trace) => [
     traceButton(trace.trace_id),
+    trace.created_at,
     trace.username || trace.fingerprint_display,
     trace.model_requested,
     trace.route_pattern || trace.path,
     trace.status_code,
     formatNumber(trace.usage_total_tokens),
   ]);
-  renderShell(page("Trace", `<section class="panel">${table(["Trace", "员工", "Model", "Route", "Status", "Token"], rows)}</section>`));
+  renderShell(page("Trace", `<section class="panel">${table(["Trace", "时间", "员工", "Model", "Route", "Status", "Token"], rows)}</section>`));
   document.querySelectorAll("[data-trace-id]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
