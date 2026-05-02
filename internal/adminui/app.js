@@ -479,12 +479,14 @@ function renderContext(body, message = "") {
     arrayValue(item.keywords).join(", "),
     item.expected_usage_level,
     badge(item.active ? "active" : "inactive"),
+    item.created_at,
+    item.updated_at,
   ]);
   renderShell(
     page(
       "Context 目录",
       `
-        <section class="panel">${table(["类型", "名称", "负责人", "关键词", "使用级别", "状态"], rows)}</section>
+        <section class="panel">${table(["类型", "名称", "负责人", "关键词", "使用级别", "状态", "创建时间", "更新时间"], rows)}</section>
         ${message}
         <section class="panel">
           <h2>创建 Context</h2>

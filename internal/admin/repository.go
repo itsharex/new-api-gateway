@@ -675,7 +675,7 @@ SELECT id, context_type, name, description, keywords, aliases, owner,
        created_by, updated_by, created_at::text, updated_at::text
 FROM context_catalog
 WHERE %s
-ORDER BY context_type, name
+ORDER BY created_at DESC
 LIMIT $1`, where), args...)
 	if err != nil {
 		return nil, err
