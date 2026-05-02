@@ -729,10 +729,11 @@ func (h Handler) serveStreamingResponse(w http.ResponseWriter, req *http.Request
 	if flusher, ok := w.(http.Flusher); ok {
 		clientWriter.flusher = flusher
 	}
+	usageExtractor := newSSEUsageExtractor(clientWriter)
 
 	var written int64
 	if h.EvidenceStore == nil {
-		written, responseErr, captureErr = copyStreamToClientAndCapture(upstreamResp.Body, clientWriter, nil)
+		written, responseErr, captureErr = copyStreamToClientAndCapture(upstreamResp.Body, usageExtractor, nil)
 	} else {
 		captureCtx, cancelCapture := context.WithCancel(context.WithoutCancel(req.Context()))
 		defer cancelCapture()
@@ -755,8 +756,8 @@ func (h Handler) serveStreamingResponse(w http.ResponseWriter, req *http.Request
 			}{object: object, err: err}
 		}()
 
-		written, responseErr, captureErr = copyStreamToClientAndCapture(upstreamResp.Body, clientWriter, pw)
-		if responseErr != nil {
+		written, responseErr, captureErr = copyStreamToClientAndCapture(upstreamResp.Body, usageExtractor, pw)
+			if responseErr != nil {
 			_ = pw.CloseWithError(responseErr)
 		} else {
 			_ = pw.Close()
@@ -782,6 +783,10 @@ func (h Handler) serveStreamingResponse(w http.ResponseWriter, req *http.Request
 	record.finishedAt = h.now()
 	record.responseObject = responseObject
 	record.responseSize = written
+	record.usage = usageExtractor.usage
+	if record.modelUpstream == "" {
+		record.modelUpstream = usageExtractor.model
+	}
 	_ = h.insertTrace(auditCtx, record)
 }
 
