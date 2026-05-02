@@ -797,6 +797,9 @@ func (h Handler) emitCoverageAlert(ctx context.Context, record traceRecord) erro
 	if h.CoverageEmitter == nil {
 		return nil
 	}
+	if isIgnoredCoveragePath(record.req.URL.Path) {
+		return nil
+	}
 	var alert alerts.CoverageAlert
 	switch {
 	case record.unknownRoute:
@@ -811,6 +814,15 @@ func (h Handler) emitCoverageAlert(ctx context.Context, record traceRecord) erro
 		return err
 	}
 	return nil
+}
+
+var ignoredCoveragePaths = map[string]bool{
+	"/favicon.ico": true,
+	"/robots.txt":  true,
+}
+
+func isIgnoredCoveragePath(path string) bool {
+	return ignoredCoveragePaths[path]
 }
 
 func (h Handler) insertEvidenceObject(ctx context.Context, traceID, objectType string, object evidence.Object) error {

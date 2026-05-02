@@ -324,6 +324,12 @@ class PostgresAnalysisRepository:
                     alert.affected_user_count,
                 ),
             )
+        trace_ids = {m.trace_id for m in messages} | {r.trace_id for r in results}
+        for tid in trace_ids:
+            cursor.execute(
+                "UPDATE traces SET analysis_status = 'completed', updated_at = now() WHERE trace_id = %s",
+                (tid,),
+            )
         self.connection.commit()
 
 
