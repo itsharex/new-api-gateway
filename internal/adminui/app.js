@@ -72,6 +72,10 @@ function formatNumber(value) {
   return Number(value || 0).toLocaleString();
 }
 
+function formatTime(value) {
+  return String(value ?? "").replace(/(\d{2}:\d{2}:\d{2})\.\d+/, "$1");
+}
+
 function money(value) {
   if (value === null || value === undefined || value === "") {
     return "";
@@ -281,7 +285,7 @@ function renderOverview(body) {
 function renderUsage(body) {
   body = body || {};
   const rows = arrayValue(body.usage).map((item) => [
-    item.bucket_start,
+    formatTime(item.bucket_start),
     item.username || item.fingerprint_display,
     item.model,
     item.route_pattern,
@@ -296,7 +300,7 @@ function renderTraces(body) {
   body = body || {};
   const rows = arrayValue(body.traces).map((trace) => [
     traceButton(trace.trace_id),
-    trace.created_at,
+    formatTime(trace.created_at),
     trace.username || trace.fingerprint_display,
     trace.model_requested,
     trace.route_pattern || trace.path,
@@ -326,7 +330,7 @@ function renderIdentities(body) {
     item.new_api_token_id,
     item.token_name_raw,
     item.token_group,
-    item.last_seen_at,
+    formatTime(item.last_seen_at),
   ]);
   renderShell(
     page(
@@ -378,7 +382,7 @@ function renderTraceDetail(body) {
     item.score,
     item.confidence,
     badge(item.severity),
-    item.created_at,
+    formatTime(item.created_at),
   ]);
   renderShell(
     page(
@@ -401,7 +405,7 @@ function renderAnomalies(body) {
   body = body || {};
   const rows = arrayValue(body.anomalies).map((item) => [
     item.anomaly_id,
-    item.created_at,
+    formatTime(item.created_at),
     badge(item.severity),
     item.anomaly_type,
     item.username || item.fingerprint_display,
@@ -415,7 +419,7 @@ function renderCoverage(body) {
   body = body || {};
   const rows = arrayValue(body.coverage_alerts).map((item) => [
     item.alert_id,
-    item.last_seen_at,
+    formatTime(item.last_seen_at),
     badge(item.severity),
     item.alert_code,
     item.method,
@@ -479,8 +483,8 @@ function renderContext(body, message = "") {
     arrayValue(item.keywords).join(", "),
     item.expected_usage_level,
     badge(item.active ? "active" : "inactive"),
-    item.created_at,
-    item.updated_at,
+    formatTime(item.created_at),
+    formatTime(item.updated_at),
   ]);
   renderShell(
     page(
@@ -564,7 +568,7 @@ function renderContext(body, message = "") {
 function renderReviews(body) {
   body = body || {};
   const rows = arrayValue(body.review_decisions).map((item) => [
-    item.created_at,
+    formatTime(item.created_at),
     item.target_type,
     item.target_id,
     badge(item.decision),
@@ -589,7 +593,7 @@ function renderSettings(body) {
 function renderAudit(body) {
   body = body || {};
   const rows = arrayValue(body.audit_logs).map((item) => [
-    item.created_at,
+    formatTime(item.created_at),
     item.actor_username,
     item.action,
     item.target_type,
