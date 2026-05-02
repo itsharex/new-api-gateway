@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -23,8 +22,8 @@ type Config struct {
 	EvidenceStorageDir       string
 	DegradedSpoolDir         string
 	PostgresDSN              string
+	NewAPIPostgresDSN        string
 	RedisAddr                string
-	EmployeeNoPattern        *regexp.Regexp
 	AdminSessionSecret       string
 	AdminCookieName          string
 	AdminCookieSecure        bool
@@ -35,15 +34,6 @@ type Config struct {
 }
 
 func LoadFromEnv() (Config, error) {
-	pattern, err := getenvDefault("EMPLOYEE_NO_PATTERN", `^[A-Za-z0-9_-]{2,64}$`)
-	if err != nil {
-		return Config{}, err
-	}
-	compiled, err := regexp.Compile(pattern)
-	if err != nil {
-		return Config{}, fmt.Errorf("invalid EMPLOYEE_NO_PATTERN: %w", err)
-	}
-
 	listenAddr, err := getenvDefault("AUDIT_GATEWAY_LISTEN_ADDR", ":8080")
 	if err != nil {
 		return Config{}, err
@@ -132,6 +122,14 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, err
 	}
 
+	newAPIPostgresDSN, err := requiredEnv("NEW_API_POSTGRES_DSN")
+	if err != nil {
+		return Config{}, err
+	}
+	if err := validatePostgresDSN(newAPIPostgresDSN); err != nil {
+		return Config{}, fmt.Errorf("invalid NEW_API_POSTGRES_DSN: %w", err)
+	}
+
 	redisAddr, err := getenvDefault("REDIS_ADDR", "localhost:6379")
 	if err != nil {
 		return Config{}, err
@@ -147,8 +145,8 @@ func LoadFromEnv() (Config, error) {
 		EvidenceStorageDir:       evidenceStorageDir,
 		DegradedSpoolDir:         degradedSpoolDir,
 		PostgresDSN:              postgresDSN,
+		NewAPIPostgresDSN:        newAPIPostgresDSN,
 		RedisAddr:                redisAddr,
-		EmployeeNoPattern:        compiled,
 		AdminSessionSecret:       adminSessionSecret,
 		AdminCookieName:          adminCookieName,
 		AdminCookieSecure:        adminCookieSecure,
