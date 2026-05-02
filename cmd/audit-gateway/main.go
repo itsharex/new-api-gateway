@@ -43,13 +43,13 @@ func main() {
 }
 
 func run(ctx context.Context, cfg config.Config, logger *log.Logger) error {
-	pool, err := pgxpool.New(ctx, cfg.PostgresDSN)
+	pool, err := newPoolWithTimezone(ctx, cfg.PostgresDSN)
 	if err != nil {
 		return err
 	}
 	defer pool.Close()
 
-	newAPIPool, err := pgxpool.New(ctx, cfg.NewAPIPostgresDSN)
+	newAPIPool, err := newPoolWithTimezone(ctx, cfg.NewAPIPostgresDSN)
 	if err != nil {
 		return err
 	}
@@ -323,4 +323,13 @@ var bearerTokenPattern = regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+`
 
 func redactSecrets(value string) string {
 	return bearerTokenPattern.ReplaceAllString(value, `${1}[REDACTED]`)
+}
+
+func newPoolWithTimezone(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	config.ConnConfig.RuntimeParams["timezone"] = "Asia/Shanghai"
+	return pgxpool.NewWithConfig(ctx, config)
 }
