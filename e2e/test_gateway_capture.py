@@ -30,12 +30,12 @@ import requests
 
 GATEWAY_URL = os.environ.get("AUDIT_GATEWAY_URL", "http://localhost:8080").rstrip("/")
 UPSTREAM_URL = os.environ.get("NEW_API_BASE_URL", "http://localhost:3000").rstrip("/")
-API_KEY = os.environ.get("NEW_API_KEY", "")
+API_KEY = "sk-G0YzOkt9WQAwp8S9DL9mLKlcFNEYRjdnA4x6PMrNRgZA05l8"
 PG_DSN = os.environ.get(
     "POSTGRES_DSN",
     "postgres://audit:audit@localhost:5432/audit_gateway?sslmode=disable",
 )
-MODEL = os.environ.get("TEST_MODEL", "gpt-5.2")
+MODEL = os.environ.get("TEST_MODEL", "gpt-3.5-turbo")
 EXPECTED_USERNAME = "dave.zhao"
 
 HEADERS = {
