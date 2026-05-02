@@ -310,6 +310,12 @@ tr:last-child td {
   color: #027a48;
 }
 
+.badge.review {
+  border-color: #fedf89;
+  background: #fffaeb;
+  color: #b54708;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;
