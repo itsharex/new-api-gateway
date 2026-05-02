@@ -35,7 +35,7 @@ PG_DSN = os.environ.get(
     "POSTGRES_DSN",
     "postgres://audit:audit@localhost:5432/audit_gateway?sslmode=disable",
 )
-MODEL = os.environ.get("TEST_MODEL", "gpt-3.5-turbo")
+MODEL = os.environ.get("TEST_MODEL", "gpt-5.2")
 EXPECTED_USERNAME = "dave.zhao"
 
 HEADERS = {

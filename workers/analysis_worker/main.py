@@ -303,6 +303,9 @@ def main() -> int:
     parser.add_argument("--evidence-root", default=os.environ.get("EVIDENCE_STORAGE_DIR", ""))
     parser.add_argument("--postgres-dsn", default=os.environ.get("POSTGRES_DSN", ""))
     args = parser.parse_args()
+    # Resolve relative paths against the project root (parent of workers/analysis_worker)
+    if args.evidence_root and not Path(args.evidence_root).is_absolute():
+        args.evidence_root = str((Path(__file__).resolve().parent.parent.parent / args.evidence_root).resolve())
     if not args.redis_once and not args.evidence_root and not args.postgres_dsn:
         return process_contract_stdin()
     if not args.evidence_root:
