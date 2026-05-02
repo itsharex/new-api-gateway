@@ -137,31 +137,32 @@ func (r Repository) ListTraces(ctx context.Context, filter TraceFilter) ([]Trace
 		where = append(where, fmt.Sprintf(clause, len(args)))
 	}
 	if filter.TraceID != "" {
-		add("trace_id = $%d", filter.TraceID)
+		add("t.trace_id = $%d", filter.TraceID)
 	}
 	if filter.Username != "" {
-		add("username_snapshot = $%d", filter.Username)
+		add("t.username_snapshot = $%d", filter.Username)
 	}
 	if filter.TokenFingerprint != "" {
-		add("token_fingerprint = $%d", filter.TokenFingerprint)
+		add("t.token_fingerprint = $%d", filter.TokenFingerprint)
 	}
 	if filter.RoutePattern != "" {
-		add("route_pattern = $%d", filter.RoutePattern)
+		add("t.route_pattern = $%d", filter.RoutePattern)
 	}
 	if filter.Model != "" {
-		add("model_requested = $%d", filter.Model)
+		add("t.model_requested = $%d", filter.Model)
 	}
 	if filter.StatusCode != 0 {
-		add("status_code = $%d", filter.StatusCode)
+		add("t.status_code = $%d", filter.StatusCode)
 	}
 	args = append(args, limit)
 	query := fmt.Sprintf(`
-SELECT trace_id, method, path, route_pattern, protocol_family, status_code,
-       username_snapshot, fingerprint_display, model_requested, usage_total_tokens,
-       created_at::text
-FROM traces
+SELECT t.trace_id, t.method, t.path, t.route_pattern, t.protocol_family, t.status_code,
+       t.username_snapshot, t.fingerprint_display, t.model_requested, t.usage_total_tokens,
+       t.created_at::text,
+       EXISTS(SELECT 1 FROM analysis_results WHERE trace_id = t.trace_id AND severity = 'review') AS needs_review
+FROM traces t
 WHERE %s
-ORDER BY created_at DESC
+ORDER BY t.created_at DESC
 LIMIT $%d`, strings.Join(where, " AND "), len(args))
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -174,7 +175,7 @@ LIMIT $%d`, strings.Join(where, " AND "), len(args))
 		if err := rows.Scan(
 			&trace.TraceID, &trace.Method, &trace.Path, &trace.RoutePattern, &trace.ProtocolFamily,
 			&trace.StatusCode, &trace.Username, &trace.FingerprintDisplay, &trace.ModelRequested,
-			&trace.UsageTotalTokens, &trace.CreatedAt,
+			&trace.UsageTotalTokens, &trace.CreatedAt, &trace.NeedsReview,
 		); err != nil {
 			return nil, err
 		}
