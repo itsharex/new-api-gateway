@@ -1,0 +1,12 @@
+[project]
+name = "new-api-gateway-e2e"
+version = "0.1.0"
+description = "End-to-end tests for the new-api audit gateway"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31.0",
+    "psycopg[binary]>=3.2.0",
+]
+
+[tool.uv]
+package = false
