@@ -192,7 +192,7 @@ func (h Handler) requireCSRF(next http.Handler) http.Handler {
 func (h Handler) listTraces(w http.ResponseWriter, r *http.Request) {
 	filter := TraceFilter{
 		TraceID:          r.URL.Query().Get("trace_id"),
-		EmployeeNo:       r.URL.Query().Get("employee_no"),
+		Username:       r.URL.Query().Get("username"),
 		TokenFingerprint: r.URL.Query().Get("token_fingerprint"),
 		RoutePattern:     r.URL.Query().Get("route_pattern"),
 		Model:            r.URL.Query().Get("model"),
@@ -217,7 +217,7 @@ func (h Handler) overview(w http.ResponseWriter, r *http.Request) {
 
 func (h Handler) listUsage(w http.ResponseWriter, r *http.Request) {
 	filter := UsageFilter{
-		EmployeeNo:       r.URL.Query().Get("employee_no"),
+		Username:       r.URL.Query().Get("username"),
 		TokenFingerprint: r.URL.Query().Get("token_fingerprint"),
 		Model:            r.URL.Query().Get("model"),
 		RoutePattern:     r.URL.Query().Get("route_pattern"),
@@ -234,7 +234,7 @@ func (h Handler) listUsage(w http.ResponseWriter, r *http.Request) {
 
 func (h Handler) listTokenIdentities(w http.ResponseWriter, r *http.Request) {
 	items, err := h.repo.ListTokenIdentities(r.Context(), TokenIdentityFilter{
-		EmployeeNo:       r.URL.Query().Get("employee_no"),
+		Username:       r.URL.Query().Get("username"),
 		TokenFingerprint: r.URL.Query().Get("token_fingerprint"),
 		Limit:            100,
 	})
@@ -260,7 +260,7 @@ func (h Handler) listReviewDecisions(w http.ResponseWriter, r *http.Request) {
 
 func (h Handler) systemSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"settings": SystemSettingsSummary{
-		EmployeeNoPattern: "configured by EMPLOYEE_NO_PATTERN",
+		UsernamePattern: "configured by EMPLOYEE_NO_PATTERN",
 		MetricsEnabled:    true,
 		LookupLimit:       20,
 		RawAccessLimit:    120,

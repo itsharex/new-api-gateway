@@ -139,8 +139,8 @@ func (r Repository) ListTraces(ctx context.Context, filter TraceFilter) ([]Trace
 	if filter.TraceID != "" {
 		add("trace_id = $%d", filter.TraceID)
 	}
-	if filter.EmployeeNo != "" {
-		add("employee_no_snapshot = $%d", filter.EmployeeNo)
+	if filter.Username != "" {
+		add("employee_no_snapshot = $%d", filter.Username)
 	}
 	if filter.TokenFingerprint != "" {
 		add("token_fingerprint = $%d", filter.TokenFingerprint)
@@ -173,7 +173,7 @@ LIMIT $%d`, strings.Join(where, " AND "), len(args))
 		var trace TraceSummary
 		if err := rows.Scan(
 			&trace.TraceID, &trace.Method, &trace.Path, &trace.RoutePattern, &trace.ProtocolFamily,
-			&trace.StatusCode, &trace.EmployeeNo, &trace.FingerprintDisplay, &trace.ModelRequested,
+			&trace.StatusCode, &trace.Username, &trace.FingerprintDisplay, &trace.ModelRequested,
 			&trace.UsageTotalTokens, &trace.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -205,7 +205,7 @@ LIMIT $1`, limit)
 		var item AnomalySummary
 		if err := rows.Scan(
 			&item.AnomalyID, &item.AnomalyType, &item.Severity, &item.Status,
-			&item.EmployeeNo, &item.FingerprintDisplay, &item.ObservedValue,
+			&item.Username, &item.FingerprintDisplay, &item.ObservedValue,
 			&item.ThresholdValue, &item.Reason, &item.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -256,7 +256,7 @@ func (r Repository) LookupTokenSummary(ctx context.Context, tokenFingerprint, fi
 SELECT employee_no, new_api_token_id, token_name_raw, token_status
 FROM token_identity_cache
 WHERE token_fingerprint = $1
-LIMIT 1`, tokenFingerprint).Scan(&summary.EmployeeNo, &summary.NewAPITokenID, &summary.TokenName, &summary.TokenStatus)
+LIMIT 1`, tokenFingerprint).Scan(&summary.Username, &summary.NewAPITokenID, &summary.TokenName, &summary.TokenStatus)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return LookupSummary{}, err
 	}
@@ -344,8 +344,8 @@ func (r Repository) ListUsageAggregates(ctx context.Context, filter UsageFilter)
 		args = append(args, value)
 		where = append(where, fmt.Sprintf(clause, len(args)))
 	}
-	if filter.EmployeeNo != "" {
-		add("employee_no = $%d", filter.EmployeeNo)
+	if filter.Username != "" {
+		add("employee_no = $%d", filter.Username)
 	}
 	if filter.TokenFingerprint != "" {
 		add("token_fingerprint = $%d", filter.TokenFingerprint)
@@ -378,7 +378,7 @@ LIMIT $%d`, strings.Join(where, " AND "), len(args))
 		if err := rows.Scan(
 			&item.BucketStart,
 			&item.BucketSize,
-			&item.EmployeeNo,
+			&item.Username,
 			&item.FingerprintDisplay,
 			&item.Model,
 			&item.RoutePattern,
@@ -409,8 +409,8 @@ func (r Repository) ListTokenIdentities(ctx context.Context, filter TokenIdentit
 		args = append(args, value)
 		where = append(where, fmt.Sprintf(clause, len(args)))
 	}
-	if filter.EmployeeNo != "" {
-		add("c.employee_no = $%d", filter.EmployeeNo)
+	if filter.Username != "" {
+		add("c.employee_no = $%d", filter.Username)
 	}
 	if filter.TokenFingerprint != "" {
 		add("c.token_fingerprint = $%d", filter.TokenFingerprint)
@@ -439,7 +439,7 @@ LIMIT $%d`, strings.Join(where, " AND "), len(args))
 			&item.TokenFingerprint,
 			&item.NewAPITokenID,
 			&item.TokenNameRaw,
-			&item.EmployeeNo,
+			&item.Username,
 			&item.DisplayName,
 			&item.Department,
 			&item.TokenStatus,
@@ -561,7 +561,7 @@ LIMIT 1`, traceID).Scan(
 		&detail.RoutePattern,
 		&detail.ProtocolFamily,
 		&detail.StatusCode,
-		&detail.EmployeeNo,
+		&detail.Username,
 		&detail.FingerprintDisplay,
 		&detail.ModelRequested,
 		&detail.UsageTotalTokens,

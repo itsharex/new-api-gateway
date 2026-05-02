@@ -1163,7 +1163,7 @@ func (r memoryAdminRow) Scan(dest ...any) error {
 		*(dest[3].(*string)) = detail.RoutePattern
 		*(dest[4].(*string)) = detail.ProtocolFamily
 		*(dest[5].(*int)) = detail.StatusCode
-		*(dest[6].(*string)) = detail.EmployeeNo
+		*(dest[6].(*string)) = detail.Username
 		*(dest[7].(*string)) = detail.FingerprintDisplay
 		*(dest[8].(*string)) = detail.ModelRequested
 		*(dest[9].(*int)) = detail.UsageTotalTokens
@@ -1205,7 +1205,7 @@ func traceDetailWithRawRefs() TraceDetail {
 			RoutePattern:       "/v1/chat/completions",
 			ProtocolFamily:     "openai",
 			StatusCode:         http.StatusOK,
-			EmployeeNo:         "E10001",
+			Username:         "E10001",
 			FingerprintDisplay: "fp_1234",
 			ModelRequested:     "gpt-5",
 			UsageTotalTokens:   42,

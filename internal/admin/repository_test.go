@@ -96,7 +96,7 @@ func TestRepositoryListTracesBuildsBoundedQuery(t *testing.T) {
 	db.rows = &fakeRows{}
 
 	_, err := repo.ListTraces(context.Background(), TraceFilter{
-		EmployeeNo:   "E10001",
+		Username:   "E10001",
 		RoutePattern: "/v1/chat/completions",
 		Limit:        500,
 	})
@@ -164,7 +164,7 @@ func TestRepositoryLookupTokenSummaryToleratesMissingIdentityCacheRow(t *testing
 	if summary.TokenFingerprint != "fingerprint-value" || summary.FingerprintDisplay != "tkfp_example" {
 		t.Fatalf("summary fingerprint fields = %#v", summary)
 	}
-	if summary.EmployeeNo != "" || summary.NewAPITokenID != 0 || summary.TokenName != "" || summary.TokenStatus != 0 {
+	if summary.Username != "" || summary.NewAPITokenID != 0 || summary.TokenName != "" || summary.TokenStatus != 0 {
 		t.Fatalf("identity fields were populated for missing cache row: %#v", summary)
 	}
 	if summary.OpenAnomalyCount != 3 {
@@ -213,7 +213,7 @@ func TestRepositoryListUsageAggregatesCapsLimitAndBindsFilters(t *testing.T) {
 	repo := NewRepository(db)
 
 	_, err := repo.ListUsageAggregates(context.Background(), UsageFilter{
-		EmployeeNo:       "E10001",
+		Username:       "E10001",
 		TokenFingerprint: "fingerprint-value",
 		BucketSize:       "hour",
 		Limit:            500,
@@ -236,7 +236,7 @@ func TestRepositoryListUsageAggregatesCapsLimitAndBindsFilters(t *testing.T) {
 func TestListTokenIdentitiesQueryUsesCacheAndSubjects(t *testing.T) {
 	db := &recordingAdminDB{}
 	repo := NewRepository(db)
-	_, _ = repo.ListTokenIdentities(context.Background(), TokenIdentityFilter{EmployeeNo: "E10001", Limit: 500})
+	_, _ = repo.ListTokenIdentities(context.Background(), TokenIdentityFilter{Username: "E10001", Limit: 500})
 
 	if !strings.Contains(db.querySQL, "FROM token_identity_cache") {
 		t.Fatalf("query = %s", db.querySQL)
@@ -352,7 +352,7 @@ func TestRepositoryGetTraceDetailScansMessagesAndAnalysisResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTraceDetail error: %v", err)
 	}
-	if detail.TraceID != "trace-123" || detail.EmployeeNo != "E10001" || detail.RequestRawRef != "raw/request.json" {
+	if detail.TraceID != "trace-123" || detail.Username != "E10001" || detail.RequestRawRef != "raw/request.json" {
 		t.Fatalf("detail representative fields = %#v", detail)
 	}
 	if len(detail.NormalizedMessages) != 1 || detail.NormalizedMessages[0].ContentText != "hello" || detail.NormalizedMessages[0].TokenCountEstimate != 8 {
