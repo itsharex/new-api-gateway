@@ -378,6 +378,7 @@ function renderTraceDetail(body) {
     item.score,
     item.confidence,
     badge(item.severity),
+    item.created_at,
   ]);
   renderShell(
     page(
@@ -385,7 +386,7 @@ function renderTraceDetail(body) {
       `
         <section class="panel"><div class="meta-grid">${meta}</div></section>
         <section class="panel"><h2>归一化消息</h2>${table(["序号", "方向", "角色", "模态", "类型", "内容", "Token"], messages)}</section>
-        <section class="panel"><h2>分析结果</h2>${table(["分析器", "分类", "标签", "分数", "置信度", "Severity"], analysis)}</section>
+        <section class="panel"><h2>分析结果</h2>${table(["分析器", "分类", "标签", "分数", "置信度", "Severity", "时间"], analysis)}</section>
       `,
       `<button type="button" id="back-to-traces">返回</button>`,
     ),
