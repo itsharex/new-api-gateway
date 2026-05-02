@@ -33,7 +33,7 @@ ALTER TABLE token_identity_cache
     ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'unknown';
 
 CREATE TABLE IF NOT EXISTS audit_subjects (
-    employee_no TEXT PRIMARY KEY,
+    username TEXT PRIMARY KEY,
     display_name TEXT NOT NULL DEFAULT '',
     department TEXT NOT NULL DEFAULT '',
     email TEXT NOT NULL DEFAULT '',

@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS usage_aggregates (
     bucket_size TEXT NOT NULL,
     token_fingerprint TEXT NOT NULL DEFAULT '',
     new_api_token_id INTEGER NOT NULL DEFAULT 0,
-    employee_no TEXT NOT NULL DEFAULT '',
+    username TEXT NOT NULL DEFAULT '',
     token_name_snapshot TEXT NOT NULL DEFAULT '',
     model TEXT NOT NULL DEFAULT '',
     route_pattern TEXT NOT NULL DEFAULT '',
@@ -71,13 +71,13 @@ CREATE TABLE IF NOT EXISTS usage_aggregates (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (
-        bucket_start, bucket_size, token_fingerprint, employee_no,
+        bucket_start, bucket_size, token_fingerprint, username,
         model, route_pattern, protocol_family
     )
 );
 
-CREATE INDEX IF NOT EXISTS idx_usage_aggregates_employee_bucket
-    ON usage_aggregates(employee_no, bucket_size, bucket_start);
+CREATE INDEX IF NOT EXISTS idx_usage_aggregates_username_bucket
+    ON usage_aggregates(username, bucket_size, bucket_start);
 
 CREATE INDEX IF NOT EXISTS idx_usage_aggregates_token_bucket
     ON usage_aggregates(token_fingerprint, bucket_size, bucket_start);

@@ -280,7 +280,7 @@ class PostgresAnalysisRepository:
                     alert_id, alert_code, severity, method, route_pattern, raw_path,
                     content_type, protocol_family, payload_shape_hash, normalizer,
                     normalizer_version, occurrence_count, sample_trace_ids, message,
-                    affected_trace_count, affected_token_count, affected_employee_count
+                    affected_trace_count, affected_token_count, affected_user_count
                 ) VALUES (
                     %s,%s,%s,%s,%s,%s,
                     %s,%s,%s,%s,
@@ -302,7 +302,7 @@ class PostgresAnalysisRepository:
                         )
                     ),
                     affected_token_count = GREATEST(coverage_alerts.affected_token_count, EXCLUDED.affected_token_count),
-                    affected_employee_count = GREATEST(coverage_alerts.affected_employee_count, EXCLUDED.affected_employee_count),
+                    affected_user_count = GREATEST(coverage_alerts.affected_user_count, EXCLUDED.affected_user_count),
                     updated_at = now()
                 """,
                 (
@@ -321,7 +321,7 @@ class PostgresAnalysisRepository:
                     alert.message,
                     alert.affected_trace_count,
                     alert.affected_token_count,
-                    alert.affected_employee_count,
+                    alert.affected_user_count,
                 ),
             )
         self.connection.commit()

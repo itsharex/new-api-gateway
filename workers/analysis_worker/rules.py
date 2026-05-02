@@ -244,7 +244,7 @@ def detect_coverage_alerts(job: TraceCapturedJob, messages: list[NormalizedMessa
         message="route was marked raw_and_normalized but the worker extracted no normalized messages",
         affected_trace_count=1,
         affected_token_count=1 if job.token_fingerprint else 0,
-        affected_employee_count=1 if job.username else 0,
+        affected_user_count=1 if job.username else 0,
     )]
 
 

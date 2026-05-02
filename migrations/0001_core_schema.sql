@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS traces (
     fingerprint_display TEXT NOT NULL DEFAULT '',
     new_api_token_id_snapshot INTEGER NOT NULL DEFAULT 0,
     token_name_snapshot TEXT NOT NULL DEFAULT '',
-    employee_no_snapshot TEXT NOT NULL DEFAULT '',
+    username_snapshot TEXT NOT NULL DEFAULT '',
     identity_resolution_status TEXT NOT NULL DEFAULT '',
     identity_cache_status TEXT NOT NULL DEFAULT '',
     model_requested TEXT NOT NULL DEFAULT '',
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS traces (
 );
 
 CREATE INDEX IF NOT EXISTS idx_traces_created_at ON traces(created_at);
-CREATE INDEX IF NOT EXISTS idx_traces_employee_created ON traces(employee_no_snapshot, created_at);
+CREATE INDEX IF NOT EXISTS idx_traces_username_created ON traces(username_snapshot, created_at);
 CREATE INDEX IF NOT EXISTS idx_traces_token_created ON traces(token_fingerprint, created_at);
 CREATE INDEX IF NOT EXISTS idx_traces_route_created ON traces(route_pattern, created_at);
 
@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS token_identity_cache (
     fingerprint_display TEXT NOT NULL,
     new_api_token_id INTEGER NOT NULL DEFAULT 0,
     token_name_raw TEXT NOT NULL DEFAULT '',
-    employee_no TEXT NOT NULL DEFAULT '',
+    username TEXT NOT NULL DEFAULT '',
     token_status INTEGER NOT NULL DEFAULT 0,
     token_group TEXT NOT NULL DEFAULT '',
     token_expired_time BIGINT NOT NULL DEFAULT 0,
@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS token_identity_cache (
     resolution_error TEXT NOT NULL DEFAULT ''
 );
 
-CREATE INDEX IF NOT EXISTS idx_token_identity_employee ON token_identity_cache(employee_no);
+CREATE INDEX IF NOT EXISTS idx_token_identity_username ON token_identity_cache(username);
 
 CREATE TABLE IF NOT EXISTS coverage_alerts (
     id BIGSERIAL PRIMARY KEY,

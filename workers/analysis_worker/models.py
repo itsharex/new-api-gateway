@@ -153,7 +153,7 @@ class CoverageAlert:
     message: str
     affected_trace_count: int = 1
     affected_token_count: int = 0
-    affected_employee_count: int = 0
+    affected_user_count: int = 0
 
 
 @dataclass(frozen=True)

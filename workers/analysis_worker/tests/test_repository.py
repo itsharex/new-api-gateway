@@ -206,7 +206,7 @@ def test_repository_inserts_messages_results_aggregates_anomalies_and_coverage()
         message="no normalized messages",
         affected_trace_count=1,
         affected_token_count=1,
-        affected_employee_count=1,
+        affected_user_count=1,
     )
 
     repo.save_trace_analysis([message], [result, work_relevance_result], [aggregate], [anomaly], [coverage])
