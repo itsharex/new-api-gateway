@@ -4,9 +4,10 @@
 
 ## 先看这里
 
+- 项目概览与快速开始：`README.md`
 - 本地开发与运行：`docs/development.md`
+- 项目结构与模块说明：`ARCHITECTURE.md`
 - 需求与计划材料：`docs/superpowers/`（superpowers 产物，不是稳定的系统架构文档）
-- 架构说明：当前暂无独立架构文档；需要沉淀时新建 `docs/architecture.md` 或 `docs/architecture/`，并在本文件仅保留链接。
 - 当前未跟踪文件不要擅自覆盖；动手前先看 `git status --short`。
 - python的依赖使用uv进行管理
 
