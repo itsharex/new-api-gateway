@@ -3,3 +3,5 @@
 __pycache__/
 var/
 workers/analysis_worker/uv.lock
+.env
+.claude/
