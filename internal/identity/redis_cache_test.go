@@ -15,7 +15,7 @@ func TestSnapshotJSONRoundTrip(t *testing.T) {
 		FingerprintDisplay:  "tkfp_abc",
 		NewAPITokenID:       123,
 		TokenNameRaw:        " E12345 ",
-		EmployeeNo:          "E12345",
+		Username:            "E12345",
 		TokenStatus:         1,
 		TokenGroup:          "staff",
 		ExpiredTime:         1711111111,

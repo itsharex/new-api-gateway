@@ -88,7 +88,7 @@ func TestPostgresCacheGetReadsFreshSnapshot(t *testing.T) {
 	if !ok {
 		t.Fatal("expected cache hit")
 	}
-	if got.TokenFingerprint != "fp-read" || got.EmployeeNo != "E10001" || got.NewAPITokenID != 42 {
+	if got.TokenFingerprint != "fp-read" || got.Username != "E10001" || got.NewAPITokenID != 42 {
 		t.Fatalf("unexpected snapshot %#v", got)
 	}
 	if got.ResolutionStatus != ResolutionStatusResolved || got.IdentityCacheStatus != IdentityCacheStatusHit {
@@ -209,7 +209,7 @@ func TestPostgresCacheSetUpsertsSnapshot(t *testing.T) {
 		FingerprintDisplay: "tkfp_set",
 		NewAPITokenID:      42,
 		TokenNameRaw:       "E10001 token",
-		EmployeeNo:         "E10001",
+		Username:         "E10001",
 	})
 	if err != nil {
 		t.Fatalf("Set error: %v", err)
@@ -274,7 +274,7 @@ func TestChainCacheReadsSecondCacheAndBackfillsFirst(t *testing.T) {
 		ok: true,
 		value: Snapshot{
 			TokenFingerprint: "fp-chain",
-			EmployeeNo:       "E10001",
+			Username:       "E10001",
 		},
 	}
 	cache := ChainCache{Caches: []Cache{first, second}}
@@ -286,8 +286,8 @@ func TestChainCacheReadsSecondCacheAndBackfillsFirst(t *testing.T) {
 	if !ok {
 		t.Fatal("expected chain cache hit")
 	}
-	if got.EmployeeNo != "E10001" {
-		t.Fatalf("EmployeeNo = %q", got.EmployeeNo)
+	if got.Username != "E10001" {
+		t.Fatalf("Username = %q", got.Username)
 	}
 	if first.setCalls != 1 {
 		t.Fatalf("first cache Set called %d times", first.setCalls)
@@ -300,7 +300,7 @@ func TestChainCacheContinuesAfterFirstCacheErrorAndBackfills(t *testing.T) {
 		ok: true,
 		value: Snapshot{
 			TokenFingerprint: "fp-chain",
-			EmployeeNo:       "E10001",
+			Username:       "E10001",
 		},
 	}
 	cache := ChainCache{Caches: []Cache{first, second}}
@@ -312,8 +312,8 @@ func TestChainCacheContinuesAfterFirstCacheErrorAndBackfills(t *testing.T) {
 	if !ok {
 		t.Fatal("expected hit from second cache")
 	}
-	if got.EmployeeNo != "E10001" {
-		t.Fatalf("EmployeeNo = %q", got.EmployeeNo)
+	if got.Username != "E10001" {
+		t.Fatalf("Username = %q", got.Username)
 	}
 	if first.setCalls != 1 {
 		t.Fatalf("first cache Set called %d times", first.setCalls)
@@ -326,7 +326,7 @@ func TestChainCacheSkipsTypedNilCaches(t *testing.T) {
 		ok: true,
 		value: Snapshot{
 			TokenFingerprint: "fp-chain",
-			EmployeeNo:       "E10001",
+			Username:       "E10001",
 		},
 	}
 	cache := ChainCache{Caches: []Cache{first, second}}
@@ -335,7 +335,7 @@ func TestChainCacheSkipsTypedNilCaches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get error: %v", err)
 	}
-	if !ok || got.EmployeeNo != "E10001" {
+	if !ok || got.Username != "E10001" {
 		t.Fatalf("unexpected result ok=%v snapshot=%#v", ok, got)
 	}
 }
