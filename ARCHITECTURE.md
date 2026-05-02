@@ -161,6 +161,18 @@ RBAC 角色：`viewer` → `auditor` → `raw_access` → `admin`，权限逐级
 
 指标包括：服务状态、运行时间、依赖健康、Worker 数量/心跳、队列深度、请求/失败计数、异常/告警数量。
 
+## Go 与 Python 职责划分
+
+项目由两个独立进程组成，通过 Redis `analysis_jobs` 列表协作：
+
+| 维度 | Go 网关 (audit-gateway) | Python 分析 Worker (analysis_worker) |
+|------|------------------------|--------------------------------------|
+| 进程类型 | HTTP 长驻服务 | Redis 消费者长驻进程 |
+| 数据方向 | 写入 `traces`、`raw_evidence_objects`、`token_identity_cache`、`coverage_alerts` | 写入 `normalized_messages`、`analysis_results`、`usage_aggregates`、`usage_anomalies`、`worker_heartbeats` |
+| 核心能力 | 反向代理、请求/响应采集、身份解析、管理 API + UI | 协议归一化、用量聚合、异常检测、工作相关性分类 |
+| 通信方式 | RPUSH `trace_captured` 任务到 Redis | BLPOP 持续消费 Redis 任务 |
+| 不启动的影响 | 整个系统不可用 | 代理转发正常，但分析、聚合、告警全部不可用，Redis 队列堆积 |
+
 ## Python 分析 Worker
 
 位于 `workers/analysis_worker/`，使用 `uv` 管理依赖。
@@ -169,7 +181,7 @@ RBAC 角色：`viewer` → `auditor` → `raw_access` → `admin`，权限逐级
 
 | 文件 | 职责 |
 |------|------|
-| `main.py` | 入口：`--redis-once` 模式 / stdin JSON / 契约验证 |
+| `main.py` | 入口：默认持续 Redis BLPOP 消费；`--redis-once` 单次处理（测试用）；无环境变量时 stdin 合约验证 |
 | `models.py` | 数据类：`TraceCapturedJob`, `NormalizedMessage`, `AnalysisResult` 等 |
 | `normalizers.py` | 协议归一化器：OpenAI chat/responses, Claude, Gemini；SSE 流重组 |
 | `rules.py` | 12+ 异常检测规则（身份未解析、token 超限、短期飙升、重复提示词等） |
@@ -183,8 +195,10 @@ RBAC 角色：`viewer` → `auditor` → `raw_access` → `admin`，权限逐级
 ### 处理管线
 
 ```
-Redis BLPOP → 读取证据 → 协议归一化 → 工作相关性分类 → 异常检测 → 用量聚合 → 持久化 → 心跳
+Redis BLPOP (阻塞等待) → 读取证据 → 协议归一化 → 工作相关性分类 → 异常检测 → 用量聚合 → 持久化 → 心跳 → 继续等待
 ```
+
+默认启动即进入持续消费模式，收到 SIGTERM/SIGINT 时优雅退出。`--redis-once` 仅处理一个任务后退出，用于 e2e 测试。
 
 ## 数据库 Schema
 

@@ -47,7 +47,7 @@ new-api 项目的前端网关代理层，用于记录所有访问 new-api 的请
 
 ### 分析 Worker 流程
 
-1. 从 Redis `BLPOP analysis_jobs` 获取任务
+1. 持续从 Redis `BLPOP analysis_jobs` 阻塞等待任务
 2. 从文件系统读取证据
 3. 协议归一化（OpenAI / Claude / Gemini）
 4. 工作相关性分类
@@ -88,10 +88,10 @@ docker compose -f deploy/docker-compose.yml run --rm migrate
 # Go 网关
 make run
 
-# Python 分析 Worker
+# Python 分析 Worker（持续 Redis 消费）
 cd workers/analysis_worker
 uv sync
-uv run python main.py --redis-once
+uv run python main.py
 ```
 
 ### 测试

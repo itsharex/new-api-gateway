@@ -140,9 +140,9 @@ fi
 # ── 8. 启动 Python 分析 Worker ───────────────────────
 if command -v uv &>/dev/null; then
     info "启动 Python 分析 Worker..."
-    (cd workers/analysis_worker && uv sync --quiet 2>/dev/null && exec uv run python main.py --redis) &
+    (cd workers/analysis_worker && uv sync --quiet 2>/dev/null && exec uv run python main.py) &
     PY_PID=$!
-    info "Python 分析 Worker 已启动 (Redis 模式)"
+    info "Python 分析 Worker 已启动 (Redis 消费模式)"
 else
     warn "未找到 uv，跳过 Python 分析 Worker"
     warn "安装 uv: curl -LsSf https://astral.sh/uv/install.sh | sh"

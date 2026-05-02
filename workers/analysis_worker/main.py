@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import signal
 import socket
 import sys
 from pathlib import Path
@@ -219,6 +220,80 @@ def process_redis_once(
     return 0
 
 
+def process_redis_loop(
+    redis_url: str,
+    list_name: str,
+    evidence_root: str,
+    postgres_dsn: str,
+    timeout_seconds: int,
+) -> int:
+    client = redis.Redis.from_url(redis_url, decode_responses=True)
+    evidence_store = FileEvidenceStore(evidence_root)
+    wid = worker_id()
+    running = True
+
+    def _stop(signum, _frame):
+        nonlocal running
+        running = False
+
+    signal.signal(signal.SIGINT, _stop)
+    signal.signal(signal.SIGTERM, _stop)
+    print(json.dumps({"worker_status": "starting", "worker_id": wid, "list": list_name}), flush=True)
+
+    while running:
+        item = client.blpop(list_name, timeout=timeout_seconds)
+        if not running:
+            break
+        with psycopg.connect(postgres_dsn) as connection:
+            heartbeat = HeartbeatRepository(connection)
+            if item is None:
+                heartbeat.record(
+                    worker_id=wid,
+                    worker_kind="analysis",
+                    status="idle",
+                    queue_name=list_name,
+                    processed_count=0,
+                    error_count=0,
+                    metadata={"poll_result": "idle"},
+                )
+                continue
+            _, payload = item
+            try:
+                result = process_job_line(
+                    payload,
+                    evidence_store,
+                    PostgresAnalysisRepository(connection),
+                    PostgresContextRepository(connection),
+                )
+            except Exception as exc:
+                record_heartbeat_safely(
+                    heartbeat,
+                    connection,
+                    worker_id=wid,
+                    worker_kind="analysis",
+                    status="error",
+                    queue_name=list_name,
+                    processed_count=0,
+                    error_count=1,
+                    metadata={"error_type": exc.__class__.__name__},
+                )
+                print(json.dumps({"worker_status": "error", "error": str(exc)}), flush=True)
+                continue
+            heartbeat.record(
+                worker_id=wid,
+                worker_kind="analysis",
+                status="processed",
+                queue_name=list_name,
+                processed_count=1,
+                error_count=0,
+                metadata={"trace_id": result.get("accepted_trace_id", "")},
+            )
+            print(json.dumps(result, sort_keys=True), flush=True)
+
+    print(json.dumps({"worker_status": "stopped", "worker_id": wid}), flush=True)
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--redis-once", action="store_true")
@@ -242,7 +317,13 @@ def main() -> int:
             args.postgres_dsn,
             args.redis_timeout_seconds,
         )
-    return process_stdin(args.evidence_root, args.postgres_dsn)
+    return process_redis_loop(
+        args.redis_url,
+        args.redis_list,
+        args.evidence_root,
+        args.postgres_dsn,
+        args.redis_timeout_seconds,
+    )
 
 
 if __name__ == "__main__":

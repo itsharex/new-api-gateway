@@ -22,11 +22,23 @@ make test
 
 ## Python Worker
 
-The analysis worker uses uv for Python dependency management:
+The analysis worker uses uv for Python dependency management. When `EVIDENCE_STORAGE_DIR` and `POSTGRES_DSN` are set (normal deployment), the worker starts in continuous Redis consumption mode — it blocks on BLPOP, processes each job, records a heartbeat, and loops. It exits gracefully on SIGTERM/SIGINT.
 
 ```bash
 cd workers/analysis_worker
 uv sync
+uv run python main.py  # continuous Redis consumption (default)
+```
+
+Use `--redis-once` for testing or e2e scripts (process one job, then exit):
+
+```bash
+uv run python main.py --redis-once
+```
+
+Contract validation mode (no env vars, reads stdin):
+
+```bash
 uv run python main.py < contract_example.json
 ```
 
@@ -75,7 +87,7 @@ cd workers/analysis_worker
 EVIDENCE_STORAGE_DIR=/absolute/path/to/evidence \
 POSTGRES_DSN=postgres://audit:audit@localhost:5432/audit_gateway?sslmode=disable \
 REDIS_URL=redis://localhost:6379/0 \
-uv run python main.py --redis-once
+uv run python main.py --redis-once  # single job for testing
 ```
 
 ## Worker Anomalies and Coverage Alerts
@@ -122,11 +134,11 @@ export ADMIN_COOKIE_NAME=audit_admin_session
 export ADMIN_COOKIE_SECURE=false
 ```
 
-Create a local admin user for the password `change-me-admin-password`. Change or replace this seeded password before using any shared environment:
+Create a local admin user for the password `admin123`. Change or replace this seeded password before using any shared environment:
 
 ```sql
 INSERT INTO audit_users (username, password_hash, display_name, email, role, status)
-VALUES ('admin', '$2a$10$NJhAxMc8237jiQCEz483Oe2jF8UwU.AM22x2GQSMtro6ADmiHfs0u', 'Local Admin', 'admin@example.test', 'admin', 'active')
+VALUES ('admin', '$2a$10$WMdq6CBypgezqL/SCoFW7uyKHHx9DVkyWlaA7iEURl9z3AuyZWV.G', 'Local Admin', 'admin@example.test', 'admin', 'active')
 ON CONFLICT (username) DO NOTHING;
 ```
 
@@ -135,7 +147,7 @@ Smoke login:
 ```bash
 curl -i -c /tmp/audit.cookies \
   -H 'content-type: application/json' \
-  -d '{"username":"admin","password":"change-me-admin-password"}' \
+  -d '{"username":"admin","password":"admin123"}' \
   http://localhost:8080/admin/api/login
 
 curl -b /tmp/audit.cookies http://localhost:8080/admin/api/me
