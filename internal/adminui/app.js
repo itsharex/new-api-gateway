@@ -3,17 +3,17 @@ const app = document.querySelector("#app");
 const state = { user: null, view: "overview", error: "" };
 
 const views = [
-  { id: "overview", label: "Overview" },
-  { id: "usage", label: "Usage" },
-  { id: "traces", label: "Traces" },
-  { id: "identities", label: "Employee Directory" },
-  { id: "anomalies", label: "Anomalies" },
-  { id: "coverage", label: "Coverage" },
-  { id: "lookup", label: "API Key Lookup" },
-  { id: "context", label: "Context Catalog" },
-  { id: "reviews", label: "Review Decisions" },
-  { id: "settings", label: "System Settings" },
-  { id: "audit", label: "Audit Logs" },
+  { id: "overview", label: "概览" },
+  { id: "usage", label: "用量" },
+  { id: "traces", label: "Trace" },
+  { id: "identities", label: "员工目录" },
+  { id: "anomalies", label: "异常" },
+  { id: "coverage", label: "覆盖" },
+  { id: "lookup", label: "API Key 查询" },
+  { id: "context", label: "Context 目录" },
+  { id: "reviews", label: "审核记录" },
+  { id: "settings", label: "系统设置" },
+  { id: "audit", label: "审计日志" },
 ];
 
 function csrfToken() {
@@ -64,7 +64,7 @@ function table(headers, rows) {
     ? rows
         .map((row) => `<tr>${row.map((value) => `<td>${cell(value)}</td>`).join("")}</tr>`)
         .join("")
-    : `<tr><td colspan="${headers.length}" class="muted">No rows found.</td></tr>`;
+    : `<tr><td colspan="${headers.length}" class="muted">暂无数据。</td></tr>`;
   return `<table><thead><tr>${safeHeaders}</tr></thead><tbody>${bodyRows}</tbody></table>`;
 }
 
@@ -109,7 +109,7 @@ function page(title, content, action = "") {
     <div class="toolbar">
       <div>
         <h1>${escapeHTML(title)}</h1>
-        <div class="muted">Audit Gateway Admin</div>
+        <div class="muted">审计网关管理后台</div>
       </div>
       <div class="actions">${action}</div>
     </div>
@@ -121,19 +121,19 @@ function renderLogin() {
   app.innerHTML = `
     <section class="login">
       <form id="login-form">
-        <h1>Audit Gateway Admin</h1>
-        <p class="muted">Sign in to review gateway activity.</p>
+        <h1>审计网关管理后台</h1>
+        <p class="muted">登录以查看网关活动。</p>
         <div class="field">
-          <label for="username">Username</label>
+          <label for="username">用户名</label>
           <input id="username" name="username" autocomplete="username" required>
         </div>
         <div class="field">
-          <label for="password">Password</label>
+          <label for="password">密码</label>
           <input id="password" name="password" type="password" autocomplete="current-password" required>
         </div>
         ${state.error ? `<div class="error">${escapeHTML(state.error)}</div>` : ""}
         <div class="field">
-          <button class="primary" type="submit">Sign in</button>
+          <button class="primary" type="submit">登录</button>
         </div>
       </form>
     </section>
@@ -152,10 +152,10 @@ function renderLogin() {
         }),
       });
       state.user = body.user;
-      renderShell(`<section class="loading-panel">Loading ${escapeHTML(currentView().label)}...</section>`);
+      renderShell(`<section class="loading-panel">正在加载${escapeHTML(currentView().label)}...</section>`);
       await loadView();
     } catch (error) {
-      state.error = error.message || "Login failed.";
+      state.error = error.message || "登录失败。";
       renderLogin();
     }
   });
@@ -170,8 +170,8 @@ function renderShell(content) {
   app.innerHTML = `
     <div class="app-shell">
       <aside class="sidebar">
-        <div class="brand">Audit Gateway Admin</div>
-        <nav class="nav" aria-label="Admin views">
+        <div class="brand">审计网关管理后台</div>
+        <nav class="nav" aria-label="管理视图">
           ${views
             .map(
               (view) => `
@@ -187,7 +187,7 @@ function renderShell(content) {
             <strong>${escapeHTML(user.username || "admin")}</strong>
             <div class="muted">${escapeHTML(user.role || "unknown")}</div>
           </div>
-          <button type="button" id="logout-button">Logout</button>
+          <button type="button" id="logout-button">退出登录</button>
         </div>
       </aside>
       <section class="main">${content}</section>
@@ -198,7 +198,7 @@ function renderShell(content) {
     button.addEventListener("click", async () => {
       state.view = button.dataset.view;
       state.error = "";
-      renderShell(`<section class="loading-panel">Loading ${escapeHTML(currentView().label)}...</section>`);
+      renderShell(`<section class="loading-panel">正在加载${escapeHTML(currentView().label)}...</section>`);
       await loadView();
     });
   });
@@ -258,12 +258,12 @@ function renderOverview(body) {
   body = body || {};
   const overview = body.overview || {};
   const metrics = [
-    ["Requests 24h", overview.request_count_24h],
-    ["Tokens 24h", overview.total_tokens_24h],
-    ["Errors 24h", overview.error_count_24h],
-    ["Open Anomalies", overview.open_anomalies],
-    ["Open Coverage", overview.open_coverage_alerts],
-    ["Raw Only 24h", overview.raw_only_trace_count_24h],
+    ["24h 请求数", overview.request_count_24h],
+    ["24h Token 数", overview.total_tokens_24h],
+    ["24h 错误数", overview.error_count_24h],
+    ["未处理异常", overview.open_anomalies],
+    ["未处理覆盖", overview.open_coverage_alerts],
+    ["24h 仅原始数据", overview.raw_only_trace_count_24h],
   ];
   const cards = metrics
     .map(
@@ -275,7 +275,7 @@ function renderOverview(body) {
       `,
     )
     .join("");
-  renderShell(page("Overview", `<section class="cards">${cards}</section>`));
+  renderShell(page("概览", `<section class="cards">${cards}</section>`));
 }
 
 function renderUsage(body) {
@@ -289,7 +289,7 @@ function renderUsage(body) {
     formatNumber(item.total_tokens),
     money(item.estimated_cost),
   ]);
-  renderShell(page("Usage", `<section class="panel">${table(["Bucket", "Employee", "Model", "Route", "Requests", "Tokens", "Cost"], rows)}</section>`));
+  renderShell(page("用量", `<section class="panel">${table(["时间段", "员工", "Model", "Route", "请求数", "Token", "费用"], rows)}</section>`));
 }
 
 function renderTraces(body) {
@@ -302,14 +302,14 @@ function renderTraces(body) {
     trace.status_code,
     formatNumber(trace.usage_total_tokens),
   ]);
-  renderShell(page("Traces", `<section class="panel">${table(["Trace", "Employee", "Model", "Route", "Status", "Tokens"], rows)}</section>`));
+  renderShell(page("Trace", `<section class="panel">${table(["Trace", "员工", "Model", "Route", "Status", "Token"], rows)}</section>`));
   document.querySelectorAll("[data-trace-id]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
         const body = await api(`/traces/${encodeURIComponent(button.dataset.traceId)}`);
         renderTraceDetail(body);
       } catch (error) {
-        renderShell(page("Traces", `<section class="panel error">${escapeHTML(error.message)}</section>`));
+        renderShell(page("Trace", `<section class="panel error">${escapeHTML(error.message)}</section>`));
       }
     });
   });
@@ -329,8 +329,8 @@ function renderIdentities(body) {
   ]);
   renderShell(
     page(
-      "Employee Directory",
-      `<section class="panel">${table(["Employee", "Name", "Department", "Fingerprint", "Token ID", "Token Name", "Group", "Last Seen"], rows)}</section>`,
+      "员工目录",
+      `<section class="panel">${table(["员工", "名称", "部门", "Fingerprint", "Token ID", "Token Name", "分组", "最后活跃"], rows)}</section>`,
     ),
   );
 }
@@ -350,16 +350,16 @@ function renderTraceDetail(body) {
     .join(" ");
   const meta = [
     ["Trace", trace.trace_id],
-    ["Employee", trace.username || trace.fingerprint_display],
+    ["员工", trace.username || trace.fingerprint_display],
     ["Model", trace.model_requested],
     ["Route", trace.route_pattern || trace.path],
     ["Status", trace.status_code],
-    ["Tokens", formatNumber(trace.usage_total_tokens)],
-    ["Identity", trace.identity_resolution_status],
-    ["Analysis", trace.analysis_status],
-    ["Raw Evidence", evidenceLinks || "None"],
+    ["Token", formatNumber(trace.usage_total_tokens)],
+    ["身份", trace.identity_resolution_status],
+    ["分析", trace.analysis_status],
+    ["原始证据", evidenceLinks || "无"],
   ]
-    .map(([label, value]) => `<div class="meta-item"><span>${escapeHTML(label)}</span>${label === "Raw Evidence" ? value : escapeHTML(value)}</div>`)
+    .map(([label, value]) => `<div class="meta-item"><span>${escapeHTML(label)}</span>${label === "原始证据" ? value : escapeHTML(value)}</div>`)
     .join("");
   const messages = arrayValue(trace.normalized_messages).map((item) => [
     item.sequence_index,
@@ -380,13 +380,13 @@ function renderTraceDetail(body) {
   ]);
   renderShell(
     page(
-      "Trace Detail",
+      "Trace 详情",
       `
         <section class="panel"><div class="meta-grid">${meta}</div></section>
-        <section class="panel"><h2>Normalized Messages</h2>${table(["Index", "Direction", "Role", "Modality", "Type", "Content", "Tokens"], messages)}</section>
-        <section class="panel"><h2>Analysis</h2>${table(["Analyzer", "Category", "Label", "Score", "Confidence", "Severity"], analysis)}</section>
+        <section class="panel"><h2>归一化消息</h2>${table(["序号", "方向", "角色", "模态", "类型", "内容", "Token"], messages)}</section>
+        <section class="panel"><h2>分析结果</h2>${table(["分析器", "分类", "标签", "分数", "置信度", "Severity"], analysis)}</section>
       `,
-      `<button type="button" id="back-to-traces">Back</button>`,
+      `<button type="button" id="back-to-traces">返回</button>`,
     ),
   );
   document.querySelector("#back-to-traces").addEventListener("click", async () => {
@@ -405,7 +405,7 @@ function renderAnomalies(body) {
     item.observed_value,
     item.reason,
   ]);
-  renderShell(page("Anomalies", `<section class="panel">${table(["ID", "Severity", "Type", "Employee", "Observed", "Reason"], rows)}</section>`));
+  renderShell(page("异常", `<section class="panel">${table(["ID", "Severity", "类型", "员工", "观测值", "原因"], rows)}</section>`));
 }
 
 function renderCoverage(body) {
@@ -418,13 +418,13 @@ function renderCoverage(body) {
     item.route_pattern || item.raw_path,
     formatNumber(item.occurrence_count),
   ]);
-  renderShell(page("Coverage", `<section class="panel">${table(["ID", "Severity", "Code", "Method", "Route", "Count"], rows)}</section>`));
+  renderShell(page("覆盖", `<section class="panel">${table(["ID", "Severity", "Code", "Method", "Route", "数量"], rows)}</section>`));
 }
 
 function renderLookup(result = "") {
   renderShell(
     page(
-      "API Key Lookup",
+      "API Key 查询",
       `
         <section class="panel">
           <form id="lookup-form" class="filters">
@@ -432,7 +432,7 @@ function renderLookup(result = "") {
               <label for="api_key">API Key</label>
               <input id="api_key" name="api_key" type="password" autocomplete="off" required>
             </div>
-            <button class="primary" type="submit">Lookup</button>
+            <button class="primary" type="submit">查询</button>
           </form>
         </section>
         ${result}
@@ -452,11 +452,11 @@ function renderLookup(result = "") {
       const lookup = body.lookup || {};
       renderLookup(`
         <section class="panel">
-          <h2>Lookup Result</h2>
+          <h2>查询结果</h2>
           <div class="meta-grid">
             <div class="meta-item"><span>Fingerprint</span>${escapeHTML(lookup.fingerprint_display)}</div>
-            <div class="meta-item"><span>Employee</span>${escapeHTML(lookup.username || lookup.token_name)}</div>
-            <div class="meta-item"><span>Open Anomalies</span>${escapeHTML(formatNumber(lookup.open_anomaly_count))}</div>
+            <div class="meta-item"><span>员工</span>${escapeHTML(lookup.username || lookup.token_name)}</div>
+            <div class="meta-item"><span>未处理异常</span>${escapeHTML(formatNumber(lookup.open_anomaly_count))}</div>
           </div>
         </section>
       `);
@@ -478,15 +478,15 @@ function renderContext(body, message = "") {
   ]);
   renderShell(
     page(
-      "Context Catalog",
+      "Context 目录",
       `
-        <section class="panel">${table(["Type", "Name", "Owner", "Keywords", "Usage", "Status"], rows)}</section>
+        <section class="panel">${table(["类型", "名称", "负责人", "关键词", "使用级别", "状态"], rows)}</section>
         ${message}
         <section class="panel">
-          <h2>Create Context</h2>
+          <h2>创建 Context</h2>
           <form id="context-form" class="filters">
             <div class="field">
-              <label for="context_type">Type</label>
+              <label for="context_type">类型</label>
               <select id="context_type" name="context_type">
                 <option value="repo">repo</option>
                 <option value="service">service</option>
@@ -495,15 +495,15 @@ function renderContext(body, message = "") {
               </select>
             </div>
             <div class="field">
-              <label for="name">Name</label>
+              <label for="name">名称</label>
               <input id="name" name="name" required>
             </div>
             <div class="field">
-              <label for="owner">Owner</label>
+              <label for="owner">负责人</label>
               <input id="owner" name="owner">
             </div>
             <div class="field">
-              <label for="expected_usage_level">Usage Level</label>
+              <label for="expected_usage_level">使用级别</label>
               <select id="expected_usage_level" name="expected_usage_level">
                 <option value="low">low</option>
                 <option value="medium">medium</option>
@@ -511,14 +511,14 @@ function renderContext(body, message = "") {
               </select>
             </div>
             <div class="field">
-              <label for="keywords">Keywords</label>
+              <label for="keywords">关键词</label>
               <input id="keywords" name="keywords" placeholder="gateway, audit, admin">
             </div>
             <div class="field">
-              <label for="description">Description</label>
+              <label for="description">描述</label>
               <textarea id="description" name="description"></textarea>
             </div>
-            <button class="primary" type="submit">Create</button>
+            <button class="primary" type="submit">创建</button>
           </form>
         </section>
       `,
@@ -565,19 +565,19 @@ function renderReviews(body) {
     item.reviewer_username,
     item.note,
   ]);
-  renderShell(page("Review Decisions", `<section class="panel">${table(["Time", "Target Type", "Target", "Decision", "Reviewer", "Note"], rows)}</section>`));
+  renderShell(page("审核记录", `<section class="panel">${table(["时间", "目标类型", "目标", "决定", "审核人", "备注"], rows)}</section>`));
 }
 
 function renderSettings(body) {
   body = body || {};
   const settings = body.settings || {};
   const rows = [
-    ["Employee Pattern", settings.username_pattern],
-    ["Metrics Enabled", settings.metrics_enabled ? "true" : "false"],
-    ["API Key Lookup Limit", settings.lookup_limit],
-    ["Raw Evidence Limit", settings.raw_access_limit],
+    ["员工匹配规则", settings.username_pattern],
+    ["指标已启用", settings.metrics_enabled ? "true" : "false"],
+    ["API Key 查询限额", settings.lookup_limit],
+    ["原始证据访问限额", settings.raw_access_limit],
   ];
-  renderShell(page("System Settings", `<section class="panel settings-list">${table(["Setting", "Value"], rows)}</section>`));
+  renderShell(page("系统设置", `<section class="panel settings-list">${table(["设置项", "值"], rows)}</section>`));
 }
 
 function renderAudit(body) {
@@ -590,7 +590,7 @@ function renderAudit(body) {
     item.target_id,
     item.trace_id,
   ]);
-  renderShell(page("Audit Logs", `<section class="panel">${table(["Time", "Actor", "Action", "Target Type", "Target", "Trace"], rows)}</section>`));
+  renderShell(page("审计日志", `<section class="panel">${table(["时间", "操作人", "操作", "目标类型", "目标", "Trace"], rows)}</section>`));
 }
 
 async function boot() {
