@@ -29,7 +29,7 @@ func TestRedisListPublisherPushesTraceCapturedEnvelope(t *testing.T) {
 		RoutePattern:             "/v1/chat/completions",
 		ProtocolFamily:           "openai_chat",
 		CaptureMode:              "raw_and_normalized",
-		EmployeeNo:               "E12345",
+		Username:               "E12345",
 		TokenFingerprint:         "tkfp_raw_value",
 		FingerprintDisplay:       "tkfp_display",
 		NewAPITokenID:            42,
@@ -66,7 +66,7 @@ func TestRedisListPublisherPushesTraceCapturedEnvelope(t *testing.T) {
 	if err := json.Unmarshal([]byte(client.values[0].(string)), &decoded); err != nil {
 		t.Fatalf("job JSON error: %v", err)
 	}
-	if decoded.Type != "trace_captured" || decoded.TraceID != "trace_1" || decoded.EmployeeNo != "E12345" {
+	if decoded.Type != "trace_captured" || decoded.TraceID != "trace_1" || decoded.Username != "E12345" {
 		t.Fatalf("job = %+v", decoded)
 	}
 	if decoded.TokenFingerprint != "tkfp_raw_value" || decoded.FingerprintDisplay != "tkfp_display" {
@@ -104,7 +104,7 @@ func TestRedisListPublisherReturnsRedisError(t *testing.T) {
 		RoutePattern:   "/v1/chat/completions",
 		ProtocolFamily: "openai_chat",
 		CaptureMode:    "raw_and_normalized",
-		EmployeeNo:     "E12345",
+		Username:     "E12345",
 	}))
 	if !errors.Is(err, redisErr) {
 		t.Fatalf("error = %v, want %v", err, redisErr)

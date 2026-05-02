@@ -92,7 +92,7 @@ INSERT INTO traces (
 		trace.RequestBodySize, trace.ResponseBodySize, trace.RequestBodySHA256, trace.ResponseBodySHA256,
 		trace.RequestRawRef, trace.RequestHeadersRef, trace.ResponseRawRef, trace.ResponseHeadersRef,
 		trace.TokenFingerprint, trace.FingerprintDisplay,
-		trace.NewAPITokenIDSnapshot, trace.TokenNameSnapshot, trace.EmployeeNoSnapshot,
+		trace.NewAPITokenIDSnapshot, trace.TokenNameSnapshot, trace.UsernameSnapshot,
 		trace.AuditSubjectDisplayNameSnapshot, trace.DepartmentSnapshot,
 		trace.IdentityResolutionStatus, trace.IdentityCacheStatus, nullableTime(trace.IdentityResolvedAt),
 		trace.ModelRequested, trace.ModelUpstream,

@@ -381,7 +381,7 @@ func (h Handler) insertTrace(ctx context.Context, record traceRecord) error {
 		FingerprintDisplay:       record.snapshot.FingerprintDisplay,
 		NewAPITokenIDSnapshot:    record.snapshot.NewAPITokenID,
 		TokenNameSnapshot:        record.snapshot.TokenNameRaw,
-		EmployeeNoSnapshot:       record.snapshot.EmployeeNo,
+		UsernameSnapshot:         record.snapshot.Username,
 		IdentityResolutionStatus: record.snapshot.ResolutionStatus,
 		IdentityCacheStatus:      record.snapshot.IdentityCacheStatus,
 		RequestIDFromClient: firstNonEmpty(
@@ -480,7 +480,7 @@ func (h Handler) insertTrace(ctx context.Context, record traceRecord) error {
 			RoutePattern:             record.entry.PathPattern,
 			ProtocolFamily:           record.entry.ProtocolFamily,
 			CaptureMode:              string(record.entry.CaptureMode),
-			EmployeeNo:               record.snapshot.EmployeeNo,
+			Username:                 record.snapshot.Username,
 			TokenFingerprint:         record.snapshot.TokenFingerprint,
 			FingerprintDisplay:       record.snapshot.FingerprintDisplay,
 			NewAPITokenID:            record.snapshot.NewAPITokenID,

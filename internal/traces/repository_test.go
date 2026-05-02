@@ -142,7 +142,7 @@ func TestPostgresRepositoryNormalizesZeroResponseFinishedAtToNull(t *testing.T) 
 	assertArg(t, execer.args, 27, trace.ResponseHeadersRef)
 	assertArg(t, execer.args, 28, trace.TokenFingerprint)
 	assertArg(t, execer.args, 30, trace.NewAPITokenIDSnapshot)
-	assertArg(t, execer.args, 32, trace.EmployeeNoSnapshot)
+	assertArg(t, execer.args, 32, trace.UsernameSnapshot)
 	assertArg(t, execer.args, 38, trace.ModelRequested)
 	assertArg(t, execer.args, 39, trace.ModelUpstream)
 	assertArg(t, execer.args, 40, trace.UsagePromptTokens)
@@ -255,7 +255,7 @@ func validTrace() Trace {
 		FingerprintDisplay:       "sk-...123",
 		NewAPITokenIDSnapshot:    42,
 		TokenNameSnapshot:        "prod-token",
-		EmployeeNoSnapshot:       "E123",
+		UsernameSnapshot:         "E123",
 		IdentityResolutionStatus: "resolved",
 		IdentityCacheStatus:      "miss",
 		RequestIDFromClient:      "client-request-id",

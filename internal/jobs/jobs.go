@@ -18,7 +18,7 @@ type TraceCapturedJob struct {
 	RoutePattern             string `json:"route_pattern"`
 	ProtocolFamily           string `json:"protocol_family"`
 	CaptureMode              string `json:"capture_mode"`
-	EmployeeNo               string `json:"employee_no"`
+	Username                 string `json:"username"`
 	TokenFingerprint         string `json:"token_fingerprint"`
 	FingerprintDisplay       string `json:"fingerprint_display"`
 	NewAPITokenID            int    `json:"new_api_token_id"`
@@ -55,7 +55,7 @@ type TraceCapturedInput struct {
 	RoutePattern             string
 	ProtocolFamily           string
 	CaptureMode              string
-	EmployeeNo               string
+	Username                 string
 	TokenFingerprint         string
 	FingerprintDisplay       string
 	NewAPITokenID            int
@@ -90,7 +90,7 @@ func NewTraceCaptured(input TraceCapturedInput) TraceCapturedJob {
 		RoutePattern:             input.RoutePattern,
 		ProtocolFamily:           input.ProtocolFamily,
 		CaptureMode:              input.CaptureMode,
-		EmployeeNo:               input.EmployeeNo,
+		Username:                 input.Username,
 		TokenFingerprint:         input.TokenFingerprint,
 		FingerprintDisplay:       input.FingerprintDisplay,
 		NewAPITokenID:            input.NewAPITokenID,

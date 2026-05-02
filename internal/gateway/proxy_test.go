@@ -51,7 +51,7 @@ func (fixedResolver) Resolve(ctx context.Context, canonicalKey, fingerprintValue
 		FingerprintDisplay:  fingerprintDisplay,
 		NewAPITokenID:       7,
 		TokenNameRaw:        "E12345",
-		EmployeeNo:          "E12345",
+		Username:          "E12345",
 		ResolutionStatus:    "resolved",
 		IdentityCacheStatus: "test",
 	}, nil
@@ -158,8 +158,8 @@ func TestProxyForwardsAndRecordsTrace(t *testing.T) {
 	if len(repo.traces) != 1 {
 		t.Fatalf("expected 1 trace, got %d", len(repo.traces))
 	}
-	if repo.traces[0].EmployeeNoSnapshot != "E12345" {
-		t.Fatalf("EmployeeNoSnapshot = %q", repo.traces[0].EmployeeNoSnapshot)
+	if repo.traces[0].UsernameSnapshot != "E12345" {
+		t.Fatalf("UsernameSnapshot = %q", repo.traces[0].UsernameSnapshot)
 	}
 }
 
@@ -452,8 +452,8 @@ func TestProxyPublishesTraceCapturedJobAfterTracePersistence(t *testing.T) {
 	if job.CaptureMode != string(routes.CaptureRawAndNormalized) {
 		t.Fatalf("job CaptureMode = %q", job.CaptureMode)
 	}
-	if job.EmployeeNo != "E12345" {
-		t.Fatalf("job EmployeeNo = %q", job.EmployeeNo)
+	if job.Username != "E12345" {
+		t.Fatalf("job Username = %q", job.Username)
 	}
 	if job.IdentityResolutionStatus != "resolved" {
 		t.Fatalf("job IdentityResolutionStatus = %q", job.IdentityResolutionStatus)

@@ -35,7 +35,7 @@ type Trace struct {
 	FingerprintDisplay              string
 	NewAPITokenIDSnapshot           int
 	TokenNameSnapshot               string
-	EmployeeNoSnapshot              string
+	UsernameSnapshot                string
 	AuditSubjectDisplayNameSnapshot string
 	DepartmentSnapshot              string
 	IdentityResolutionStatus        string
