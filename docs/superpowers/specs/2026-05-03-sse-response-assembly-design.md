@@ -126,7 +126,7 @@ type usageExtractor interface {
 | 修改 | `internal/gateway/usage_claude.go`（扩展 `processSSE` 累积 delta + `assembleSSE()` 实现） |
 | 修改 | `internal/gateway/usage_generic.go`（新增返回 `nil` 的 `assembleSSE()`） |
 | 修改 | `internal/gateway/usage_openai_images.go`（新增返回 `nil` 的 `assembleSSE()`） |
-| 修改 | `internal/gateway/usage_gemini.go`（新增返回 `nil` 的 `assembleSSE()`，或实现 Gemini SSE 拼装） |
+| 修改 | `internal/gateway/usage_gemini.go`（新增返回 `nil` 的 `assembleSSE()`，Gemini SSE 拼装后续按需补充） |
 | 修改 | `internal/gateway/stream.go`（流结束后调用 `assembleSSE()`，传回拼装结果） |
 | 修改 | `internal/gateway/proxy.go`（流式路径 evidence 存储改为流结束后一次性写入） |
 | 修改 | `internal/gateway/usage_openai_responses_test.go`（新增 assemble 测试） |
