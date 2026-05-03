@@ -1,6 +1,9 @@
 package gateway
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestClaudeExtractRequest(t *testing.T) {
 	e := newClaudeExtractor()
@@ -66,5 +69,62 @@ func TestClaudeProcessSSEExtractsModel(t *testing.T) {
 	_, m := e.sseResult()
 	if m != "claude-sonnet-4-20250514" {
 		t.Fatalf("model=%q, want claude-sonnet-4-20250514", m)
+	}
+}
+
+func TestClaudeAssembleSSE(t *testing.T) {
+	e := newClaudeExtractor()
+	e.processSSE([]byte(`{"type":"message_start","message":{"id":"msg_1","model":"claude-sonnet-4-20250514","usage":{"input_tokens":50,"output_tokens":0}}}`))
+	e.processSSE([]byte(`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`))
+	e.processSSE([]byte(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}`))
+	e.processSSE([]byte(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}}`))
+	e.processSSE([]byte(`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":10}}`))
+	assembled := e.assembleSSE()
+	if assembled == nil {
+		t.Fatal("assembleSSE returned nil")
+	}
+	var v struct {
+		ID         string `json:"id"`
+		Model      string `json:"model"`
+		StopReason string `json:"stop_reason"`
+		Content    []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+		Usage struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(assembled, &v); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if v.ID != "msg_1" {
+		t.Fatalf("id=%q, want msg_1", v.ID)
+	}
+	if v.Model != "claude-sonnet-4-20250514" {
+		t.Fatalf("model=%q", v.Model)
+	}
+	if v.StopReason != "end_turn" {
+		t.Fatalf("stop_reason=%q", v.StopReason)
+	}
+	if len(v.Content) != 1 {
+		t.Fatalf("content len=%d", len(v.Content))
+	}
+	if v.Content[0].Text != "Hello world" {
+		t.Fatalf("text=%q", v.Content[0].Text)
+	}
+	if v.Usage.InputTokens != 50 {
+		t.Fatalf("input_tokens=%d", v.Usage.InputTokens)
+	}
+	if v.Usage.OutputTokens != 10 {
+		t.Fatalf("output_tokens=%d", v.Usage.OutputTokens)
+	}
+}
+
+func TestClaudeAssembleSSEEmptyStream(t *testing.T) {
+	e := newClaudeExtractor()
+	if assembled := e.assembleSSE(); assembled != nil {
+		t.Fatalf("expected nil, got %q", string(assembled))
 	}
 }
