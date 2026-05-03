@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"testing"
@@ -183,5 +184,89 @@ func TestSSEUsageExtractorResponsesAPI(t *testing.T) {
 	}
 	if m != "gpt-5.2" {
 		t.Fatalf("expected model=gpt-5.2, got %q", m)
+	}
+}
+
+func TestSSEUsageExtractorResponsesAPIAssembled(t *testing.T) {
+	var buf bytes.Buffer
+	ex := newSSEUsageExtractor(&buf, extractorFor("openai_responses"))
+	sse := "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-5.2\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\"}]}],\"usage\":{\"input_tokens\":100,\"output_tokens\":10,\"total_tokens\":110}}}\n\n"
+	if _, err := ex.Write([]byte(sse)); err != nil {
+		t.Fatalf("Write error: %v", err)
+	}
+	assembled := ex.assembledResult()
+	if assembled == nil {
+		t.Fatal("assembledResult returned nil")
+	}
+	var v struct {
+		ID     string `json:"id"`
+		Model  string `json:"model"`
+		Output []struct {
+			Type    string `json:"type"`
+			Role    string `json:"role"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"output"`
+		Usage struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+			TotalTokens  int `json:"total_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(assembled, &v); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if v.ID != "resp_1" {
+		t.Fatalf("id=%q", v.ID)
+	}
+	if v.Usage.TotalTokens != 110 {
+		t.Fatalf("total_tokens=%d", v.Usage.TotalTokens)
+	}
+	if v.Output[0].Content[0].Text != "hi" {
+		t.Fatalf("text=%q", v.Output[0].Content[0].Text)
+	}
+	if buf.String() != sse {
+		t.Fatalf("passthrough mismatch")
+	}
+}
+
+func TestSSEUsageExtractorChatCompletionsAssembled(t *testing.T) {
+	var buf bytes.Buffer
+	ex := newSSEUsageExtractor(&buf, extractorFor("openai_chat"))
+	sse := "data: {\"id\":\"chatcmpl-1\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-1\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-1\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":1,\"total_tokens\":6}}\n\ndata: [DONE]\n\n"
+	if _, err := ex.Write([]byte(sse)); err != nil {
+		t.Fatalf("Write error: %v", err)
+	}
+	assembled := ex.assembledResult()
+	if assembled == nil {
+		t.Fatal("assembledResult returned nil")
+	}
+	var v struct {
+		ID      string `json:"id"`
+		Model   string `json:"model"`
+		Choices []struct {
+			Message struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
+		Usage struct {
+			TotalTokens int `json:"total_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(assembled, &v); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if v.ID != "chatcmpl-1" {
+		t.Fatalf("id=%q", v.ID)
+	}
+	if v.Choices[0].Message.Content != "hi" {
+		t.Fatalf("content=%q", v.Choices[0].Message.Content)
+	}
+	if v.Usage.TotalTokens != 6 {
+		t.Fatalf("total_tokens=%d", v.Usage.TotalTokens)
 	}
 }
