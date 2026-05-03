@@ -15,7 +15,7 @@
 ```
 e2e/
   helpers.py                        # 共享基础设施（新增）
-  test_gateway_capture.py           # OpenAI Chat/Responses（现有，不变）
+  test_gateway_openai.py            # OpenAI Chat/Responses（现有，重命名自 test_gateway_capture.py）
   test_gateway_claude.py            # Claude /v1/messages（新增）
   test_gateway_worker_pipeline.py   # Worker 分析闭环（新增）
 ```
@@ -107,7 +107,7 @@ e2e/
 
 ## 不做的事情
 
-- **不重构现有 `test_gateway_capture.py`**：保持原样，避免一次性大改的风险。helpers.py 是新脚本使用，现有脚本不动。
+- **仅重命名现有 `test_gateway_capture.py` → `test_gateway_openai.py`**：逻辑不变，仅改文件名使命名风格一致。
 - **不引入 pytest 框架**：保持 `python xxx.py` 直接运行的风格。
 - **不覆盖 WebSocket realtime**：需要特殊的基础设施支持，复杂度高，暂不在本次范围。
 - **不覆盖错误与边界场景**（4xx/5xx、超时等）：属于单独的测试设计范畴。
@@ -123,7 +123,7 @@ uv run e2e/test_gateway_claude.py
 uv run e2e/test_gateway_worker_pipeline.py
 
 # 全部 e2e
-uv run e2e/test_gateway_capture.py && \
+uv run e2e/test_gateway_openai.py && \
 uv run e2e/test_gateway_claude.py && \
 uv run e2e/test_gateway_worker_pipeline.py
 ```
