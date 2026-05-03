@@ -79,6 +79,36 @@ def send_openai_request() -> TraceResult:
     return {"trace_id": trace_id, "endpoint": "/v1/chat/completions", "turn": 1, "status_code": resp.status_code}
 
 
+def stop_background_workers() -> None:
+    """Stop any running analysis worker processes to avoid race conditions."""
+    import signal
+    result = subprocess.run(
+        ["pgrep", "-f", "analysis_worker.*main.py"],
+        capture_output=True, text=True,
+    )
+    pids = [p for p in result.stdout.strip().splitlines() if p.strip()]
+    if pids:
+        for pid in pids:
+            pid = pid.strip()
+            print(f"  Stopping background worker PID {pid}")
+            try:
+                os.kill(int(pid), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        import time
+        time.sleep(1)
+        # Verify they stopped
+        for pid in pids:
+            try:
+                os.kill(int(pid.strip()), 0)
+                os.kill(int(pid.strip()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        print(f"  Stopped {len(pids)} background worker(s)")
+    else:
+        print("  No background workers found")
+
+
 def push_job_to_redis(trace: dict) -> None:
     """Push a trace_captured job to Redis analysis_jobs list."""
     print("\n=== Phase 3: Push job to Redis ===")
@@ -175,6 +205,10 @@ def main() -> None:
 
     # Wait for trace in DB
     wait_for_traces([trace_id])
+
+    # Stop background workers before pushing to Redis
+    print("\n=== Phase 2.5: Stop background workers ===")
+    stop_background_workers()
 
     # Read trace and push job
     with psycopg.connect(PG_DSN) as conn:

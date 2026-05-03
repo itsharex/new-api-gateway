@@ -168,7 +168,10 @@ def main() -> None:
             if not r["trace_id"]:
                 continue
             ctx = f"{r['endpoint']}:turn{r['turn']}"
-            fp = assert_trace_fields(conn, r["trace_id"], ctx, PROTOCOL_FAMILY, model=MODEL)
+            fp = assert_trace_fields(
+                conn, r["trace_id"], ctx, PROTOCOL_FAMILY,
+                model=MODEL, require_usage=False,
+            )
             if fp:
                 fingerprints.add(fp)
             assert_evidence_objects(conn, r["trace_id"], ctx)

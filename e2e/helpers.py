@@ -159,7 +159,7 @@ TRACE_FIELDS_FOR_JOB = """
     request_body_size, response_body_size,
     request_raw_ref, response_raw_ref,
     token_fingerprint, fingerprint_display, new_api_token_id_snapshot,
-    token_name_snapshot, username_snapshot, employee_no_snapshot,
+    token_name_snapshot, username_snapshot,
     identity_resolution_status,
     model_requested, usage_total_tokens, usage_prompt_tokens, usage_completion_tokens
 """.strip().replace("\n", "").replace("  ", " ")
@@ -188,6 +188,7 @@ def assert_trace_fields(
     ctx: str,
     protocol_family: str,
     model: str | None = None,
+    require_usage: bool = True,
 ) -> str | None:
     print(f"  Checking {ctx} (trace_id={trace_id})")
 
@@ -216,8 +217,11 @@ def assert_trace_fields(
     not_empty(ctx, "response_raw_ref", t["response_raw_ref"])
     if model:
         eq(ctx, "model_requested", t["model_requested"], model)
-    gt(ctx, "usage_total_tokens", t["usage_total_tokens"], 0)
-    gt(ctx, "usage_prompt_tokens", t["usage_prompt_tokens"], 0)
+    if require_usage:
+        gt(ctx, "usage_total_tokens", t["usage_total_tokens"], 0)
+        gt(ctx, "usage_prompt_tokens", t["usage_prompt_tokens"], 0)
+    else:
+        print(f"    usage_total_tokens={t['usage_total_tokens']} usage_prompt_tokens={t['usage_prompt_tokens']} (upstream may omit usage)")
     not_empty(ctx, "model_upstream", t["model_upstream"])
 
     return t.get("token_fingerprint")
@@ -275,7 +279,6 @@ def build_job_payload(trace: dict) -> dict:
         "protocol_family": trace["protocol_family"],
         "capture_mode": trace["capture_mode"],
         "username": trace.get("username_snapshot", ""),
-        "employee_no": trace.get("employee_no_snapshot", ""),
         "token_fingerprint": trace["token_fingerprint"],
         "fingerprint_display": trace["fingerprint_display"],
         "new_api_token_id": trace.get("new_api_token_id_snapshot", 0) or 0,

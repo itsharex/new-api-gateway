@@ -156,7 +156,7 @@ def send_chat_completions() -> list[TraceResult]:
         results.append({"trace_id": "", "endpoint": "/v1/chat/completions", "turn": 1, "status_code": 0})
         return results
     trace1 = resp1.headers.get("x-audit-trace-id", "")
-    assistant_reply_1 = resp1.json()["choices"][0]["message"]["content"]
+    assistant_reply_1 = resp1.json()["choices"][0]["message"].get("content", "") or ""
     print(f"  Turn 1: status={resp1.status_code} trace_id={trace1}")
     print(f"          assistant: {assistant_reply_1[:60]}")
     results.append({

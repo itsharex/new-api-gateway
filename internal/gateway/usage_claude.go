@@ -22,6 +22,7 @@ func (e *claudeExtractor) processSSE(payload []byte) {
 		Type   string `json:"type"`
 		Index  int    `json:"index"`
 		Usage  struct {
+			InputTokens       int `json:"input_tokens"`
 			OutputTokens      int `json:"output_tokens"`
 			CacheReadTokens   int `json:"cache_read_input_tokens"`
 			CacheCreateTokens int `json:"cache_creation_input_tokens"`
@@ -60,6 +61,10 @@ func (e *claudeExtractor) processSSE(payload []byte) {
 	}
 	if v.Message.ID != "" {
 		e.sseID = v.Message.ID
+	}
+	// new-api may include input_tokens in message_delta's top-level usage
+	if v.Usage.InputTokens > 0 && e.acc.PromptTokens == 0 {
+		e.acc.PromptTokens = v.Usage.InputTokens
 	}
 	if v.Usage.OutputTokens > 0 {
 		e.acc.CompletionTokens = v.Usage.OutputTokens
