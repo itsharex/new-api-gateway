@@ -11,7 +11,7 @@ Prerequisites:
 
 Usage:
   export NEW_API_KEY=sk-...
-  uv run e2e/test_gateway_capture.py
+  uv run e2e/test_gateway_openai.py
 """
 
 from __future__ import annotations
