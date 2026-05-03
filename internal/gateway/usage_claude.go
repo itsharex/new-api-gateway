@@ -77,6 +77,10 @@ func (e *claudeExtractor) extractRequest(_ string, body []byte) string {
 	return extractModelFromBody(body)
 }
 
+func (e *claudeExtractor) assembleSSE() []byte {
+	return nil
+}
+
 func init() {
 	registerExtractor([]string{"claude_messages"}, func() usageExtractor {
 		return newClaudeExtractor()

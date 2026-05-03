@@ -3,8 +3,9 @@ package gateway
 import "encoding/json"
 
 type openaiResponsesExtractor struct {
-	acc minimalUsage
-	mdl string
+	acc          minimalUsage
+	mdl          string
+	rawCompleted json.RawMessage
 }
 
 func newOpenAIResponsesExtractor() *openaiResponsesExtractor {
@@ -12,6 +13,19 @@ func newOpenAIResponsesExtractor() *openaiResponsesExtractor {
 }
 
 func (e *openaiResponsesExtractor) processSSE(payload []byte) {
+	// Capture raw response from response.completed
+	var header struct {
+		Type     string          `json:"type"`
+		Response json.RawMessage `json:"response"`
+	}
+	if json.Unmarshal(payload, &header) != nil {
+		return
+	}
+	if header.Type == "response.completed" && len(header.Response) > 0 {
+		e.rawCompleted = header.Response
+	}
+
+	// Existing usage extraction
 	var v struct {
 		Response struct {
 			Model string `json:"model"`
@@ -48,6 +62,13 @@ func (e *openaiResponsesExtractor) processSSE(payload []byte) {
 
 func (e *openaiResponsesExtractor) sseResult() (minimalUsage, string) {
 	return e.acc, e.mdl
+}
+
+func (e *openaiResponsesExtractor) assembleSSE() []byte {
+	if len(e.rawCompleted) == 0 {
+		return nil
+	}
+	return e.rawCompleted
 }
 
 func (e *openaiResponsesExtractor) extractResponse(body []byte) (minimalUsage, string) {

@@ -78,6 +78,10 @@ func (e *openaiChatExtractor) extractRequest(_ string, body []byte) string {
 	return extractModelFromBody(body)
 }
 
+func (e *openaiChatExtractor) assembleSSE() []byte {
+	return nil
+}
+
 func init() {
 	registerExtractor([]string{"openai_chat", "openai_completions"}, func() usageExtractor {
 		return newOpenAIChatExtractor()

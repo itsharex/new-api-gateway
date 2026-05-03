@@ -1,6 +1,9 @@
 package gateway
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestOpenAIResponsesExtractRequest(t *testing.T) {
 	e := newOpenAIResponsesExtractor()
@@ -50,5 +53,62 @@ func TestOpenAIResponsesExtractResponse(t *testing.T) {
 	}
 	if m != "gpt-5.2" {
 		t.Fatalf("model=%q", m)
+	}
+}
+
+func TestOpenAIResponsesAssembleSSE(t *testing.T) {
+	e := newOpenAIResponsesExtractor()
+	e.processSSE([]byte(`{"type":"response.created","response":{"id":"resp_1","object":"response"}}`))
+	e.processSSE([]byte(`{"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.2","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello world"}]}],"usage":{"input_tokens":100,"output_tokens":50,"total_tokens":150}}}`))
+	assembled := e.assembleSSE()
+	if assembled == nil {
+		t.Fatal("assembleSSE returned nil")
+	}
+	var v struct {
+		ID     string `json:"id"`
+		Model  string `json:"model"`
+		Status string `json:"status"`
+		Output []struct {
+			Type    string `json:"type"`
+			Role    string `json:"role"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"output"`
+		Usage struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+			TotalTokens  int `json:"total_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(assembled, &v); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if v.ID != "resp_1" {
+		t.Fatalf("id=%q, want resp_1", v.ID)
+	}
+	if v.Model != "gpt-5.2" {
+		t.Fatalf("model=%q, want gpt-5.2", v.Model)
+	}
+	if v.Status != "completed" {
+		t.Fatalf("status=%q, want completed", v.Status)
+	}
+	if len(v.Output) != 1 || len(v.Output[0].Content) != 1 {
+		t.Fatalf("output=%+v", v.Output)
+	}
+	if v.Output[0].Content[0].Text != "hello world" {
+		t.Fatalf("text=%q", v.Output[0].Content[0].Text)
+	}
+	if v.Usage.TotalTokens != 150 {
+		t.Fatalf("total_tokens=%d, want 150", v.Usage.TotalTokens)
+	}
+}
+
+func TestOpenAIResponsesAssembleSSEEmptyStream(t *testing.T) {
+	e := newOpenAIResponsesExtractor()
+	assembled := e.assembleSSE()
+	if assembled != nil {
+		t.Fatalf("expected nil for empty stream, got %q", string(assembled))
 	}
 }
