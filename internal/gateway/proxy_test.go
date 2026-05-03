@@ -1807,44 +1807,20 @@ func TestProxyStreamingAuditTimeoutStartsAfterStreamEnds(t *testing.T) {
 }
 
 func TestProxyStreamingResponseEvidenceFailureDoesNotMaskClientResponse(t *testing.T) {
-	t.Run("store failure suppresses downstream work", func(t *testing.T) {
-		storeErr := errors.New("stream evidence failed")
-		store := &selectiveEvidenceStore{
-			objects: map[string]evidence.Object{
-				"request_body": {
-					ObjectRef:      "request.bin",
-					StorageBackend: "test",
-					SizeBytes:      2,
-					SHA256:         "request-sha",
-					CreatedAt:      time.Unix(1000, 0).UTC(),
-				},
+	storeErr := errors.New("stream evidence failed")
+	store := &selectiveEvidenceStore{
+		objects: map[string]evidence.Object{
+			"request_body": {
+				ObjectRef:      "request.bin",
+				StorageBackend: "test",
+				SizeBytes:      2,
+				SHA256:         "request-sha",
+				CreatedAt:      time.Unix(1000, 0).UTC(),
 			},
-			errs: map[string]error{"response_body": storeErr},
-		}
-		assertStreamingEvidenceFailureDoesNotMaskClientResponse(t, store, storeErr, "")
-	})
-
-	t.Run("capture failure suppresses downstream work", func(t *testing.T) {
-		store := &selectiveEvidenceStore{
-			objects: map[string]evidence.Object{
-				"request_body": {
-					ObjectRef:      "request.bin",
-					StorageBackend: "test",
-					SizeBytes:      2,
-					SHA256:         "request-sha",
-					CreatedAt:      time.Unix(1000, 0).UTC(),
-				},
-				"response_body": {
-					ObjectRef:      "response.bin",
-					StorageBackend: "test",
-					SizeBytes:      int64(len("data: one\n\n")),
-					SHA256:         "response-sha",
-					CreatedAt:      time.Unix(1000, 0).UTC(),
-				},
-			},
-		}
-		assertStreamingEvidenceFailureDoesNotMaskClientResponse(t, store, io.ErrClosedPipe, "response.bin")
-	})
+		},
+		errs: map[string]error{"response_body": storeErr},
+	}
+	assertStreamingEvidenceFailureDoesNotMaskClientResponse(t, store, storeErr, "")
 }
 
 func assertStreamingEvidenceFailureDoesNotMaskClientResponse(t *testing.T, store evidence.Store, wantAuditErr error, wantResponseRawRef string) {

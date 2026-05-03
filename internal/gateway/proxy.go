@@ -739,36 +739,28 @@ func (h Handler) serveStreamingResponse(w http.ResponseWriter, req *http.Request
 	if h.EvidenceStore == nil {
 		written, responseErr, captureErr = copyStreamToClientAndCapture(upstreamResp.Body, usageExtractor, nil)
 	} else {
-		captureCtx, cancelCapture := context.WithCancel(context.WithoutCancel(req.Context()))
-		defer cancelCapture()
-		pr, pw := io.Pipe()
-		storeDone := make(chan struct {
-			object evidence.Object
-			err    error
-		}, 1)
-		go func() {
-			defer pr.Close()
-			object, err := h.EvidenceStore.Put(captureCtx, evidence.PutRequest{
-				TraceID:     record.traceID,
-				ObjectType:  "response_body",
-				ContentType: upstreamResp.Header.Get("Content-Type"),
-				Reader:      pr,
-			})
-			storeDone <- struct {
-				object evidence.Object
-				err    error
-			}{object: object, err: err}
-		}()
-
-		written, responseErr, captureErr = copyStreamToClientAndCapture(upstreamResp.Body, usageExtractor, pw)
-			if responseErr != nil {
-			_ = pw.CloseWithError(responseErr)
-		} else {
-			_ = pw.Close()
+		var captureBuf bytes.Buffer
+		written, responseErr, captureErr = copyStreamToClientAndCapture(upstreamResp.Body, usageExtractor, &captureBuf)
+		assembled := usageExtractor.assembledResult()
+		evidenceReader := io.Reader(&captureBuf)
+		contentType := upstreamResp.Header.Get("Content-Type")
+		if assembled != nil {
+			evidenceReader = bytes.NewReader(assembled)
+			contentType = "application/json"
 		}
-		result := <-storeDone
-		responseObject = result.object
-		storeErr = result.err
+		storeCtx, cancelStore := context.WithCancel(context.WithoutCancel(req.Context()))
+		defer cancelStore()
+		object, err := h.EvidenceStore.Put(storeCtx, evidence.PutRequest{
+			TraceID:     record.traceID,
+			ObjectType:  "response_body",
+			ContentType: contentType,
+			Reader:      evidenceReader,
+		})
+		if err != nil {
+			storeErr = err
+		} else {
+			responseObject = object
+		}
 	}
 	auditCtx, cancelAudit := h.auditContext(req.Context())
 	defer cancelAudit()

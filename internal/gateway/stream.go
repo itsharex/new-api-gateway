@@ -115,3 +115,7 @@ func (e *sseUsageExtractor) Write(p []byte) (int, error) {
 func (e *sseUsageExtractor) result() (minimalUsage, string) {
 	return e.ext.sseResult()
 }
+
+func (e *sseUsageExtractor) assembledResult() []byte {
+	return e.ext.assembleSSE()
+}
