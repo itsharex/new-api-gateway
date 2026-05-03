@@ -2,11 +2,11 @@
 
 ## 背景
 
-现有 e2e 测试只覆盖 OpenAI Chat/Responses 的 4 种场景（非流式 + SSE 流式），缺少 Claude、Gemini 等协议家族的全链路验证，也没有覆盖"网关采集 → Worker 分析"的完整闭环。
+现有 e2e 测试只覆盖 OpenAI Chat/Responses 的 4 种场景（非流式 + SSE 流式），缺少 Claude `/v1/messages` 的全链路验证，也没有覆盖"网关采集 → Worker 分析"的完整闭环。当前可用测试模型为 `gpt-5.2`（OpenAI）和 `claude-sonnet-4-6`（Claude），Gemini 暂无可用模型，不参与本次测试。
 
 ## 目标
 
-- 覆盖 Claude `/v1/messages` 和 Gemini `/v1beta/models/*` 的非流式与 SSE 流式场景
+- 覆盖 Claude `/v1/messages` 的非流式与 SSE 流式场景（模型：`claude-sonnet-4-6`）
 - 验证网关采集的 trace 能被 Worker 正确消费并产出分析结果
 - 保持现有脚本的独立运行风格，不引入 pytest 框架依赖
 
@@ -17,7 +17,6 @@ e2e/
   helpers.py                        # 共享基础设施（新增）
   test_gateway_capture.py           # OpenAI Chat/Responses（现有，不变）
   test_gateway_claude.py            # Claude /v1/messages（新增）
-  test_gateway_gemini.py            # Gemini /v1beta/models/*（新增）
   test_gateway_worker_pipeline.py   # Worker 分析闭环（新增）
 ```
 
@@ -48,7 +47,7 @@ e2e/
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `CLAUDE_MODEL` | `claude-sonnet-4-20250514` | 使用的 Claude 模型 |
+| `CLAUDE_MODEL` | `claude-sonnet-4-6` | 使用的 Claude 模型 |
 | `AUDIT_GATEWAY_URL` | `http://localhost:8080` | 网关地址 |
 | `NEW_API_BASE_URL` | `http://localhost:3000` | 上游地址 |
 | `POSTGRES_DSN` | `postgres://audit:audit@localhost:5432/audit_gateway?sslmode=disable` | 数据库连接 |
@@ -75,39 +74,6 @@ e2e/
 - `request_body_size > 0`、`response_body_size > 0`
 - evidence 有 `request_body` + `response_body`
 - token_identity_cache 有对应条目
-
-## test_gateway_gemini.py
-
-### 前置条件
-
-同 Claude 测试，但要求 new-api 支持路由 Gemini 请求。
-
-### 环境变量
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `GEMINI_MODEL` | `gemini-2.0-flash` | 使用的 Gemini 模型 |
-| 其余 | 同 Claude 测试 | — |
-
-### 测试场景
-
-| # | 场景 | 端点 | 流式 | 说明 |
-|---|------|------|------|------|
-| 1 | 非流式 | `/v1beta/models/{model}:generateContent` | No | 标准 Gemini 请求 |
-| 2 | SSE 流式 | `/v1beta/models/{model}:streamGenerateContent` | Yes | 流式生成 |
-| 3 | v1 路径变体 | `/v1/models/{model}:generateContent` | No | 验证 v1 路径也能正确采集 |
-
-请求体格式：
-```json
-{"contents": [{"role": "user", "parts": [{"text": "hello"}]}]}
-```
-
-### DB 断言
-
-与 Claude 测试类似，差异点：
-- `protocol_family = "gemini"`
-- `model_upstream` 可能为空（Gemini 响应不返回 model），不做强制断言
-- 其余字段断言与 Claude 一致
 
 ## test_gateway_worker_pipeline.py
 
@@ -151,10 +117,7 @@ e2e/
 
 ```bash
 # Claude 测试
-CLAUDE_MODEL=claude-sonnet-4-20250514 uv run e2e/test_gateway_claude.py
-
-# Gemini 测试
-GEMINI_MODEL=gemini-2.0-flash uv run e2e/test_gateway_gemini.py
+uv run e2e/test_gateway_claude.py
 
 # Worker 闭环测试
 uv run e2e/test_gateway_worker_pipeline.py
@@ -162,6 +125,5 @@ uv run e2e/test_gateway_worker_pipeline.py
 # 全部 e2e
 uv run e2e/test_gateway_capture.py && \
 uv run e2e/test_gateway_claude.py && \
-uv run e2e/test_gateway_gemini.py && \
 uv run e2e/test_gateway_worker_pipeline.py
 ```
