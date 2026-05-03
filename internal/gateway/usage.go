@@ -10,6 +10,7 @@ type usageExtractor interface {
 	sseResult() (minimalUsage, string)
 	extractResponse(body []byte) (minimalUsage, string)
 	extractRequest(path string, body []byte) string
+	assembleSSE() []byte
 }
 
 type extractorFactory func() usageExtractor

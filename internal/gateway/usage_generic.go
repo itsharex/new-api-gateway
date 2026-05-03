@@ -43,6 +43,8 @@ func (e *genericExtractor) extractRequest(_ string, body []byte) string {
 	return extractModelFromBody(body)
 }
 
+func (e *genericExtractor) assembleSSE() []byte { return nil }
+
 func init() {
 	registerExtractor([]string{"_generic"}, func() usageExtractor {
 		return newGenericExtractor()

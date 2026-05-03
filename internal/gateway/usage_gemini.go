@@ -63,6 +63,8 @@ func (e *geminiExtractor) extractRequest(path string, body []byte) string {
 	return extractModelFromBody(body)
 }
 
+func (e *geminiExtractor) assembleSSE() []byte { return nil }
+
 func modelFromGeminiPath(path string) string {
 	idx := strings.Index(path, "/models/")
 	if idx < 0 {

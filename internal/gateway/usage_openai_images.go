@@ -57,6 +57,8 @@ func (e *openaiImagesExtractor) extractRequest(_ string, body []byte) string {
 	return extractModelFromBody(body)
 }
 
+func (e *openaiImagesExtractor) assembleSSE() []byte { return nil }
+
 func init() {
 	registerExtractor([]string{"openai_images"}, func() usageExtractor {
 		return newOpenAIImagesExtractor()
