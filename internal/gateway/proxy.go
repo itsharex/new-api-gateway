@@ -136,7 +136,11 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 	requestBodyCaptureDegraded := requestCaptureErr != nil
 
-	modelRequested := extractRequestModel(req.URL.Path, capturedReq.BodyBytes)
+	reqExt := extractorFor(entry.ProtocolFamily)
+	modelRequested := reqExt.extractRequest(req.URL.Path, capturedReq.BodyBytes)
+	if modelRequested == "" {
+		modelRequested = extractRequestModel(req.URL.Path, capturedReq.BodyBytes)
+	}
 
 	if entry.BodyKind == "websocket" && isWebSocketUpgrade(req) {
 		h.serveWebSocketTunnel(w, req, traceRecord{
@@ -278,8 +282,8 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		h.reportAuditError(auditCtx, headerErr)
 		skipPostPersistence = true
 	}
-	usage := extractResponseUsage(responseBody)
-	modelUpstream := extractResponseModel(responseBody)
+	ext := extractorFor(entry.ProtocolFamily)
+	usage, modelUpstream := ext.extractResponse(responseBody)
 
 	_ = h.insertTrace(auditCtx, traceRecord{
 		traceID:               traceID,
@@ -729,7 +733,7 @@ func (h Handler) serveStreamingResponse(w http.ResponseWriter, req *http.Request
 	if flusher, ok := w.(http.Flusher); ok {
 		clientWriter.flusher = flusher
 	}
-	usageExtractor := newSSEUsageExtractor(clientWriter)
+	usageExtractor := newSSEUsageExtractor(clientWriter, extractorFor(record.entry.ProtocolFamily))
 
 	var written int64
 	if h.EvidenceStore == nil {
@@ -783,9 +787,10 @@ func (h Handler) serveStreamingResponse(w http.ResponseWriter, req *http.Request
 	record.finishedAt = h.now()
 	record.responseObject = responseObject
 	record.responseSize = written
-	record.usage = usageExtractor.usage
+	u, m := usageExtractor.result()
+	record.usage = u
 	if record.modelUpstream == "" {
-		record.modelUpstream = usageExtractor.model
+		record.modelUpstream = m
 	}
 	_ = h.insertTrace(auditCtx, record)
 }

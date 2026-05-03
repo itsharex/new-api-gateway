@@ -246,6 +246,70 @@ def send_responses() -> list[TraceResult]:
     return results
 
 
+def send_chat_completions_stream() -> list[TraceResult]:
+    """Stream request via /v1/chat/completions with stream=true."""
+    print("\n=== Phase 2c: /v1/chat/completions (stream) ===")
+    results: list[TraceResult] = []
+    body = {
+        "model": MODEL,
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 10,
+        "stream": True,
+    }
+    url = f"{GATEWAY_URL}/v1/chat/completions"
+    try:
+        resp = _http.post(url, headers=HEADERS, json=body, stream=True, timeout=60)
+    except requests.RequestException as exc:
+        check("/v1/chat/completions:stream", False, f"connection error: {exc}")
+        return results
+    if resp.status_code >= 300:
+        check("/v1/chat/completions:stream", False, f"status={resp.status_code}")
+        return results
+    for _ in resp.iter_lines():
+        pass
+    trace_id = resp.headers.get("x-audit-trace-id", "")
+    print(f"  Stream: status={resp.status_code} trace_id={trace_id}")
+    results.append({
+        "trace_id": trace_id,
+        "endpoint": "/v1/chat/completions",
+        "turn": 0,
+        "status_code": resp.status_code,
+    })
+    return results
+
+
+def send_responses_stream() -> list[TraceResult]:
+    """Stream request via /v1/responses with stream=true."""
+    print("\n=== Phase 2d: /v1/responses (stream) ===")
+    results: list[TraceResult] = []
+    body = {
+        "model": MODEL,
+        "input": "hello",
+        "max_output_tokens": 10,
+        "stream": True,
+    }
+    url = f"{GATEWAY_URL}/v1/responses"
+    try:
+        resp = _http.post(url, headers=HEADERS, json=body, stream=True, timeout=60)
+    except requests.RequestException as exc:
+        check("/v1/responses:stream", False, f"connection error: {exc}")
+        return results
+    if resp.status_code >= 300:
+        check("/v1/responses:stream", False, f"status={resp.status_code}")
+        return results
+    for _ in resp.iter_lines():
+        pass
+    trace_id = resp.headers.get("x-audit-trace-id", "")
+    print(f"  Stream: status={resp.status_code} trace_id={trace_id}")
+    results.append({
+        "trace_id": trace_id,
+        "endpoint": "/v1/responses",
+        "turn": 0,
+        "status_code": resp.status_code,
+    })
+    return results
+
+
 # ---------------------------------------------------------------------------
 # Phase 3: Database assertions
 # ---------------------------------------------------------------------------
@@ -261,7 +325,8 @@ TRACE_FIELDS = """
     protocol_family, capture_mode, status_code,
     request_body_size, response_body_size,
     request_raw_ref, response_raw_ref,
-    model_requested
+    model_requested, model_upstream,
+    usage_total_tokens, usage_prompt_tokens, usage_completion_tokens
 """.strip().replace("\n", "").replace("  ", " ")
 
 
@@ -310,6 +375,11 @@ def assert_traces(conn: psycopg.Connection, results: list[TraceResult]) -> None:
         not_empty(ctx, "request_raw_ref", t["request_raw_ref"])
         not_empty(ctx, "response_raw_ref", t["response_raw_ref"])
         eq(ctx, "model_requested", t["model_requested"], MODEL)
+
+        # Usage assertions
+        gt(ctx, "usage_total_tokens", t["usage_total_tokens"], 0)
+        gt(ctx, "usage_prompt_tokens", t["usage_prompt_tokens"], 0)
+        not_empty(ctx, "model_upstream", t["model_upstream"])
 
         if t["token_fingerprint"]:
             fingerprint_values.add(t["token_fingerprint"])
@@ -363,6 +433,8 @@ def main() -> None:
     all_results: list[TraceResult] = []
     all_results.extend(send_chat_completions())
     all_results.extend(send_responses())
+    all_results.extend(send_chat_completions_stream())
+    all_results.extend(send_responses_stream())
 
     # Wait for async trace insertion with retry
     trace_ids = [r["trace_id"] for r in all_results if r["trace_id"]]

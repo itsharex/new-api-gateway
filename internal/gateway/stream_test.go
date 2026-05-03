@@ -86,22 +86,23 @@ func (shortWriter) Write(p []byte) (int, error) { return len(p) - 1, nil }
 
 func TestSSEUsageExtractorExtractsUsageFromLastChunk(t *testing.T) {
 	var buf bytes.Buffer
-	ex := newSSEUsageExtractor(&buf)
+	ex := newSSEUsageExtractor(&buf, extractorFor("openai_chat"))
 	sse := "data: {\"id\":\"1\",\"model\":\"gpt-4o\"}\n\ndata: {\"id\":\"2\",\"model\":\"gpt-4o\",\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":20,\"total_tokens\":30}}\n\ndata: [DONE]\n\n"
 	if _, err := ex.Write([]byte(sse)); err != nil {
 		t.Fatalf("Write error: %v", err)
 	}
-	if ex.usage.TotalTokens != 30 {
-		t.Fatalf("expected total_tokens=30, got %d", ex.usage.TotalTokens)
+	u, m := ex.result()
+	if u.TotalTokens != 30 {
+		t.Fatalf("expected total_tokens=30, got %d", u.TotalTokens)
 	}
-	if ex.usage.PromptTokens != 10 {
-		t.Fatalf("expected prompt_tokens=10, got %d", ex.usage.PromptTokens)
+	if u.PromptTokens != 10 {
+		t.Fatalf("expected prompt_tokens=10, got %d", u.PromptTokens)
 	}
-	if ex.usage.CompletionTokens != 20 {
-		t.Fatalf("expected completion_tokens=20, got %d", ex.usage.CompletionTokens)
+	if u.CompletionTokens != 20 {
+		t.Fatalf("expected completion_tokens=20, got %d", u.CompletionTokens)
 	}
-	if ex.model != "gpt-4o" {
-		t.Fatalf("expected model=gpt-4o, got %q", ex.model)
+	if m != "gpt-4o" {
+		t.Fatalf("expected model=gpt-4o, got %q", m)
 	}
 	if buf.String() != sse {
 		t.Fatalf("passthrough mismatch: got %q", buf.String())
@@ -110,60 +111,77 @@ func TestSSEUsageExtractorExtractsUsageFromLastChunk(t *testing.T) {
 
 func TestSSEUsageExtractorHandlesSplitChunks(t *testing.T) {
 	var buf bytes.Buffer
-	ex := newSSEUsageExtractor(&buf)
+	ex := newSSEUsageExtractor(&buf, extractorFor("openai_chat"))
 	chunk1 := "data: {\"id\":\"1\",\"model\":\"gpt-4"
 	chunk2 := "o\",\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8,\"total_tokens\":13}}\n\n"
 	if _, err := ex.Write([]byte(chunk1)); err != nil {
 		t.Fatalf("Write chunk1 error: %v", err)
 	}
-	if ex.usage.TotalTokens != 0 {
-		t.Fatalf("expected 0 before complete line, got %d", ex.usage.TotalTokens)
+	u, _ := ex.result()
+	if u.TotalTokens != 0 {
+		t.Fatalf("expected 0 before complete line, got %d", u.TotalTokens)
 	}
 	if _, err := ex.Write([]byte(chunk2)); err != nil {
 		t.Fatalf("Write chunk2 error: %v", err)
 	}
-	if ex.usage.TotalTokens != 13 {
-		t.Fatalf("expected total_tokens=13, got %d", ex.usage.TotalTokens)
+	u, _ = ex.result()
+	if u.TotalTokens != 13 {
+		t.Fatalf("expected total_tokens=13, got %d", u.TotalTokens)
 	}
 }
 
 func TestSSEUsageExtractorAnthropicFields(t *testing.T) {
 	var buf bytes.Buffer
-	ex := newSSEUsageExtractor(&buf)
+	ex := newSSEUsageExtractor(&buf, extractorFor("claude_messages"))
 	sse := "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":15}}\n\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":100,\"output_tokens\":0}}}\n\n"
 	if _, err := ex.Write([]byte(sse)); err != nil {
 		t.Fatalf("Write error: %v", err)
 	}
-	if ex.usage.PromptTokens != 100 {
-		t.Fatalf("expected prompt_tokens=100, got %d", ex.usage.PromptTokens)
+	u, _ := ex.result()
+	if u.PromptTokens != 100 {
+		t.Fatalf("expected prompt_tokens=100, got %d", u.PromptTokens)
+	}
+	if u.CompletionTokens != 15 {
+		t.Fatalf("expected completion_tokens=15, got %d", u.CompletionTokens)
 	}
 }
 
 func TestSSEUsageExtractorEmptyStream(t *testing.T) {
 	var buf bytes.Buffer
-	ex := newSSEUsageExtractor(&buf)
+	ex := newSSEUsageExtractor(&buf, extractorFor("openai_chat"))
 	if _, err := ex.Write([]byte("")); err != nil {
 		t.Fatalf("Write error: %v", err)
 	}
-	if ex.usage.TotalTokens != 0 {
-		t.Fatalf("expected 0, got %d", ex.usage.TotalTokens)
+	u, _ := ex.result()
+	if u.TotalTokens != 0 {
+		t.Fatalf("expected 0, got %d", u.TotalTokens)
 	}
 }
 
-func TestSSEUsageExtractorFallbackTotalTokens(t *testing.T) {
+func TestSSEUsageExtractorResponsesAPI(t *testing.T) {
 	var buf bytes.Buffer
-	ex := newSSEUsageExtractor(&buf)
-	sse := "data: {\"usage\":{\"input_tokens\":7,\"output_tokens\":3}}\n\n"
+	ex := newSSEUsageExtractor(&buf, extractorFor("openai_responses"))
+	sse := "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"object\":\"response\"}}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-5.2\",\"usage\":{\"input_tokens\":21903,\"output_tokens\":105,\"total_tokens\":22008,\"input_tokens_details\":{\"cached_tokens\":21760},\"output_tokens_details\":{\"reasoning_tokens\":74}}}}\n\n"
 	if _, err := ex.Write([]byte(sse)); err != nil {
 		t.Fatalf("Write error: %v", err)
 	}
-	if ex.usage.PromptTokens != 7 {
-		t.Fatalf("expected prompt_tokens=7, got %d", ex.usage.PromptTokens)
+	u, m := ex.result()
+	if u.PromptTokens != 21903 {
+		t.Fatalf("expected prompt_tokens=21903, got %d", u.PromptTokens)
 	}
-	if ex.usage.CompletionTokens != 3 {
-		t.Fatalf("expected completion_tokens=3, got %d", ex.usage.CompletionTokens)
+	if u.CompletionTokens != 105 {
+		t.Fatalf("expected completion_tokens=105, got %d", u.CompletionTokens)
 	}
-	if ex.usage.TotalTokens != 10 {
-		t.Fatalf("expected total_tokens=10, got %d", ex.usage.TotalTokens)
+	if u.TotalTokens != 22008 {
+		t.Fatalf("expected total_tokens=22008, got %d", u.TotalTokens)
+	}
+	if u.CachedTokens != 21760 {
+		t.Fatalf("expected cached_tokens=21760, got %d", u.CachedTokens)
+	}
+	if u.ReasoningTokens != 74 {
+		t.Fatalf("expected reasoning_tokens=74, got %d", u.ReasoningTokens)
+	}
+	if m != "gpt-5.2" {
+		t.Fatalf("expected model=gpt-5.2, got %q", m)
 	}
 }
