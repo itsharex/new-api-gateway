@@ -97,6 +97,11 @@ function safeHTML(value) {
   return { safeHTML: true, html: value };
 }
 
+function truncate(value) {
+  const text = String(value ?? "");
+  return safeHTML(`<div class="cell-truncate">${escapeHTML(text)}</div>`);
+}
+
 function traceButton(traceID) {
   return safeHTML(`<button type="button" data-trace-id="${escapeHTML(traceID)}">${escapeHTML(traceID)}</button>`);
 }
@@ -216,6 +221,31 @@ function renderShell(content) {
       renderLogin();
     }
   });
+
+  let tooltip = null;
+  const main = document.querySelector(".main");
+  main.addEventListener("pointerenter", (e) => {
+    const el = e.target.closest(".cell-truncate");
+    if (!el) return;
+    if (el.scrollWidth <= el.clientWidth) return;
+    tooltip = document.createElement("div");
+    tooltip.className = "cell-tooltip";
+    tooltip.textContent = el.textContent;
+    document.body.appendChild(tooltip);
+    const rect = el.getBoundingClientRect();
+    const tipRect = tooltip.getBoundingClientRect();
+    let top = rect.bottom + 6;
+    let left = rect.left;
+    if (top + tipRect.height > window.innerHeight - 8) top = rect.top - tipRect.height - 6;
+    if (left + tipRect.width > window.innerWidth - 8) left = window.innerWidth - tipRect.width - 8;
+    if (left < 8) left = 8;
+    tooltip.style.top = top + "px";
+    tooltip.style.left = left + "px";
+  }, true);
+  main.addEventListener("pointerleave", (e) => {
+    if (!e.target.closest(".cell-truncate")) return;
+    if (tooltip) { tooltip.remove(); tooltip = null; }
+  }, true);
 }
 
 async function loadView() {
@@ -372,7 +402,7 @@ function renderTraceDetail(body) {
     item.role,
     item.modality,
     item.protocol_item_type,
-    item.content_text || item.media_url,
+    truncate(item.content_text || item.media_url),
     formatNumber(item.token_count_estimate),
   ]);
   const analysis = arrayValue(trace.analysis_results).map((item) => [
