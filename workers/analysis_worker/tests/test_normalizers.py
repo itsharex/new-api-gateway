@@ -560,3 +560,65 @@ def test_extracts_gemini_inline_data_base64(tmp_path: Path):
     image_msg = [m for m in messages if m.modality == "image"][0]
     assert image_msg.protocol_item_type == "base64_media_extracted"
     assert ctx.assets[0].media_type == "image/png"
+
+
+def test_extracts_claude_source_base64_image(tmp_path: Path):
+    store = FilesystemEvidenceStore(tmp_path)
+    evidence_dir = "raw/2026/05/05/trace_1"
+    trace_job = job(protocol_family="claude_messages", route_pattern="/v1/messages")
+    png_data = b"\x89PNG\r\n\x1a\n"
+    raw_b64 = base64.b64encode(png_data).decode()
+    request = {
+        "model": "claude-3-5-sonnet",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is in this image?"},
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": raw_b64,
+                        },
+                    },
+                ],
+            }
+        ],
+    }
+    request_body = json.dumps(request)
+    store.write_text(f"{evidence_dir}/request_body.bin", request_body)
+    ctx = MediaExtractionContext(store, evidence_dir, "trace_1")
+
+    messages, _ = normalize_json_trace(trace_job, request_body, '{"content":[{"type":"text","text":"A diagram."}]}', extraction_context=ctx)
+
+    image_msg = [m for m in messages if m.modality == "image"][0]
+    assert image_msg.protocol_item_type == "base64_media_extracted"
+    assert len(ctx.assets) == 1
+    assert ctx.assets[0].media_type == "image/png"
+    assert store.read_bytes(f"{evidence_dir}/media_asset_000001.bin") == png_data
+    assert len(ctx.replacements) == 1
+    assert ctx.replacements[0] == (raw_b64, "audit-media:media_asset_000001")
+
+
+def test_claude_source_base64_without_extraction_context_returns_base64_media():
+    trace_job = job(protocol_family="claude_messages", route_pattern="/v1/messages")
+    raw_b64 = base64.b64encode(b"img").decode()
+    request = {
+        "model": "claude-3-5-sonnet",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "inspect"},
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": raw_b64}},
+                ],
+            }
+        ],
+    }
+
+    messages, _ = normalize_json_trace(trace_job, json.dumps(request), '{"content":[{"type":"text","text":"ok"}]}')
+
+    image_msg = [m for m in messages if m.modality == "image"][0]
+    assert image_msg.protocol_item_type == "base64_media"

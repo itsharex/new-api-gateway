@@ -139,12 +139,32 @@ def _normalize_claude_messages(
     for index, item in enumerate(request_json.get("messages", [])):
         if not isinstance(item, dict):
             continue
-        text = _content_to_text(item.get("content"))
-        if text:
-            messages.append(_message(job, "request", len(messages), str(item.get("role", "")), text, f"request.messages[{index}]", "claude_message"))
-    response_text = _content_to_text(response_json.get("content"))
-    if response_text:
-        messages.append(_message(job, "response", len(messages), "assistant", response_text, "response.content", "claude_message"))
+        messages.extend(_part_messages(
+            job,
+            "request",
+            str(item.get("role", "")),
+            item.get("content"),
+            f"request.messages[{index}]",
+            "claude_message",
+            extraction_context,
+        ))
+    response_content = response_json.get("content")
+    if isinstance(response_content, list):
+        messages.extend(_part_messages(
+            job,
+            "response",
+            "assistant",
+            response_content,
+            "response.content",
+            "claude_message",
+            extraction_context,
+        ))
+    else:
+        response_text = _content_to_text(response_content)
+        if response_text:
+            messages.append(_message(job, "response", len(messages), "assistant", response_text, "response.content", "claude_message"))
+    for sequence_index, message in enumerate(messages):
+        messages[sequence_index] = _with_sequence_index(message, sequence_index)
     return messages
 
 
@@ -251,7 +271,18 @@ def _media_message(
         return _url_media_message(job, direction, role, media_url, source_path, "image", extraction_context)
     if item_type in {"input_image", "image"}:
         media_url = value.get("image_url") or value.get("url")
-        return _url_media_message(job, direction, role, media_url, source_path, "image", extraction_context)
+        if media_url:
+            return _url_media_message(job, direction, role, media_url, source_path, "image", extraction_context)
+        source = value.get("source")
+        if isinstance(source, dict) and source.get("type") == "base64" and isinstance(source.get("data"), str):
+            mime_type = source.get("media_type", "image/png")
+            raw_b64 = source["data"]
+            if extraction_context:
+                asset = extraction_context.extract_raw_base64(raw_b64, mime_type, "image")
+                if asset:
+                    return _message(job, direction, 0, role, "", source_path, "base64_media_extracted", modality="image")
+            return _message(job, direction, 0, role, "", source_path, "base64_media", modality="image")
+        return None
     if item_type == "input_audio" and isinstance(value.get("input_audio"), dict):
         audio = value["input_audio"]
         if isinstance(audio.get("data"), str):
