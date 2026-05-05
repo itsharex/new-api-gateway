@@ -100,14 +100,32 @@ uv run python main.py
 # Go 单元测试
 make test
 
-# Python 单元测试
+# Python 单元测试（分析 Worker）
 cd workers/analysis_worker && uv run pytest -q
 
-# Smoke / E2E
+# Smoke / E2E（需先启动依赖服务）
 make smoke
 ./scripts/smoke_ops_health.sh
 ./scripts/e2e_worker_anomaly_coverage.sh
 ./scripts/e2e_worker_work_relevance.sh
+```
+
+### E2E 测试
+
+端到端测试位于 `e2e/` 目录，验证网关代理 → Redis 队列 → Worker 分析 → 数据库写入的完整链路。运行前需确保 postgres、redis、new-api、audit-gateway 均已启动，且数据库迁移已应用。
+
+```bash
+# OpenAI 协议（/v1/chat/completions、/v1/responses，含流式）
+uv run e2e/test_gateway_openai.py
+
+# Claude 协议（/v1/messages，含 SSE 流式）
+uv run e2e/test_gateway_claude.py
+
+# 完整 Worker 管线（网关采集 → Redis → Worker 分析 → DB 验证）
+uv run e2e/test_gateway_worker_pipeline.py
+
+# 媒体 base64 提取（发送 base64 图片 → Worker 提取 → 证据改写验证）
+uv run e2e/test_media_extraction.py
 ```
 
 ## 安全设计
