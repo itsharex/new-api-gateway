@@ -141,8 +141,6 @@ uv run e2e/test_media_extraction.py
 
 详细目录结构和模块说明见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
-开发与运维细节见 [docs/development.md](docs/development.md)。
-
 ## 许可
 
 内部项目，未公开授权。

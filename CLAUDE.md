@@ -5,7 +5,6 @@
 ## 先看这里
 
 - 项目概览与快速开始：`README.md`
-- 本地开发与运行：`docs/development.md`
 - 项目结构与模块说明：`ARCHITECTURE.md`
 - 需求与计划材料：`docs/superpowers/`（superpowers 产物，不是稳定的系统架构文档）
 - 当前未跟踪文件不要擅自覆盖；动手前先看 `git status --short`。
@@ -62,7 +61,7 @@ uv run pytest -q
 
 - 默认用中文沟通；代码、标识符、错误文本沿用项目现有语言。
 - Go 改动优先覆盖 `go test ./...` 或 `make test`；worker 改动同时跑 `cd workers/analysis_worker && uv run pytest -q`。
-- 涉及网关与 worker 契约时，同步检查 Go 发布端、Python 消费端、迁移、测试与 `docs/development.md`。
+- 涉及网关与 worker 契约时，同步检查 Go 发布端、Python 消费端、迁移与测试。
 - 不记录、不持久化 plaintext API key；相关逻辑应使用 HMAC 指纹、元数据和脱敏证据。
 - 修改 schema 时新增迁移文件，不改写已发布迁移；注意本地 e2e 脚本会按 `migrations/*.sql` 顺序执行。
 - 管理端 raw evidence 访问、API key lookup、RBAC 相关改动必须保留审计日志语义。
