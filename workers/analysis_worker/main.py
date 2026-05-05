@@ -4,6 +4,7 @@ import os
 import signal
 import socket
 import sys
+from hashlib import sha256
 from pathlib import Path
 
 import psycopg
@@ -11,6 +12,7 @@ import redis
 
 from context_repository import PostgresContextRepository
 from evidence import FilesystemEvidenceStore
+from media_extraction import MediaExtractionContext
 from heartbeat import HeartbeatRepository
 from models import (
     AnalysisContext,
@@ -71,7 +73,7 @@ def process_job_line(line: str, evidence_store: FilesystemEvidenceStore, reposit
     request_body = evidence_store.read_text(job.request_raw_ref) if job.request_raw_ref else ""
     response_body = evidence_store.read_text(job.response_raw_ref) if job.response_raw_ref else ""
     contexts = context_repository.list_active_contexts() if context_repository else []
-    return process_trace(job, request_body, response_body, repository, contexts)
+    return process_trace(job, request_body, response_body, repository, contexts, evidence_store)
 
 
 def process_contract_validation_line(line: str) -> dict:
@@ -85,8 +87,13 @@ def process_trace(
     response_body: str,
     repository,
     contexts: list[ContextCatalogEntry] | None = None,
+    evidence_store: FilesystemEvidenceStore | None = None,
 ) -> dict:
-    messages, results = normalize_json_trace(job, request_body, response_body)
+    extraction_context: MediaExtractionContext | None = None
+    if evidence_store and job.request_raw_ref:
+        evidence_dir = str(Path(job.request_raw_ref).parent)
+        extraction_context = MediaExtractionContext(evidence_store, evidence_dir, job.trace_id)
+    messages, results = normalize_json_trace(job, request_body, response_body, extraction_context)
     work_relevance = classify_work_relevance(job, messages, list(contexts or []))
     results.append(work_relevance.to_analysis_result())
     aggregates = aggregate_deltas(job)
@@ -98,6 +105,14 @@ def process_trace(
     ]
     coverage_alerts = detect_coverage_alerts(job, messages)
     repository.save_trace_analysis(messages, results, aggregates, anomalies, coverage_alerts)
+    if extraction_context and extraction_context.replacements:
+        extraction_context.apply_replacements(job.request_raw_ref)
+        if hasattr(repository, "save_media_assets"):
+            repository.save_media_assets(job.trace_id, extraction_context.assets)
+        if hasattr(repository, "update_request_body_sha256"):
+            modified = evidence_store.read_text(job.request_raw_ref)
+            new_sha = sha256(modified.encode("utf-8")).hexdigest()
+            repository.update_request_body_sha256(job.trace_id, new_sha)
     return {
         "accepted_trace_id": job.trace_id,
         "worker_status": "processed",
@@ -108,6 +123,7 @@ def process_trace(
         "anomaly_count": len(anomalies),
         "coverage_alert_count": len(coverage_alerts),
         "usage_total_tokens": job.usage_total_tokens,
+        "media_assets_extracted": len(extraction_context.assets) if extraction_context else 0,
     }
 
 
