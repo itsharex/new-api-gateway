@@ -165,8 +165,8 @@ def run_test(spec: TestSpec, index: int, total: int) -> bool:
 
     # Rate-limit cooldown: upstream allows 15 req/min
     if spec.needs_gateway:
-        print("      (cooldown 5s)")
-        time.sleep(5)
+        print("      (cooldown 8s)")
+        time.sleep(8)
 
     return passed
 

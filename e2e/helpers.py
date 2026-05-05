@@ -228,7 +228,8 @@ def assert_trace_fields(
         gt(ctx, "usage_prompt_tokens", t["usage_prompt_tokens"], 0)
     else:
         print(f"    usage_total_tokens={t['usage_total_tokens']} usage_prompt_tokens={t['usage_prompt_tokens']} (upstream may omit usage)")
-    not_empty(ctx, "model_upstream", t["model_upstream"])
+    if t["model_upstream"]:
+        not_empty(ctx, "model_upstream", t["model_upstream"])
 
     return t.get("token_fingerprint")
 

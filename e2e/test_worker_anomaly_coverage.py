@@ -94,7 +94,7 @@ def setup(dsn: str) -> None:
         "route_pattern": "/v1/chat/completions",
         "protocol_family": "openai_chat",
         "capture_mode": "raw_and_normalized",
-        "employee_no": "",
+        "username": "",
         "request_raw_ref": "raw/e2e/trace_gap/request_body.bin",
         "response_raw_ref": "raw/e2e/trace_gap/response_body.bin",
         "request_content_type": "application/json",

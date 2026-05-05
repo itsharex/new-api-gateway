@@ -116,6 +116,7 @@ def setup(dsn: str) -> None:
         "protocol_family": "openai_chat",
         "capture_mode": "raw_and_normalized",
         "employee_no": "E10001",
+        "username": "E10001",
         "request_raw_ref": "raw/e2e/trace_work/request_body.bin",
         "response_raw_ref": "raw/e2e/trace_work/response_body.bin",
         "request_content_type": "application/json",
