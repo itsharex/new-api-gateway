@@ -451,7 +451,7 @@ def test_process_redis_once_records_idle_heartbeat(monkeypatch):
     exit_code = process_redis_once(
         "redis://user:secret@localhost:6379/0",
         "analysis_jobs",
-        "/tmp/evidence-unused",
+        FilesystemEvidenceStore("/tmp/evidence-unused"),
         "postgres://unused",
         1,
         connection_factory=lambda dsn: FakeConnection(),
@@ -504,7 +504,7 @@ def test_process_redis_once_records_error_heartbeat_without_exception_message(mo
         process_redis_once(
             "redis://localhost:6379/0",
             "analysis_jobs",
-            "/tmp/evidence-unused",
+            FilesystemEvidenceStore("/tmp/evidence-unused"),
             "postgres://unused",
             1,
             connection_factory=lambda dsn: FakeConnection(),
@@ -567,7 +567,7 @@ def test_process_redis_once_preserves_job_error_when_error_heartbeat_fails(monke
         process_redis_once(
             "redis://localhost:6379/0",
             "analysis_jobs",
-            "/tmp/evidence-unused",
+            FilesystemEvidenceStore("/tmp/evidence-unused"),
             "postgres://unused",
             1,
             connection_factory=lambda dsn: connection,

@@ -11,7 +11,7 @@ import psycopg
 import redis
 
 from context_repository import PostgresContextRepository
-from evidence import FilesystemEvidenceStore
+from evidence import EvidenceStore, FilesystemEvidenceStore
 from media_extraction import MediaExtractionContext
 from heartbeat import HeartbeatRepository
 from models import (
@@ -37,6 +37,33 @@ class NoopAnalysisRepository:
 class NoopContextRepository:
     def list_active_contexts(self) -> list[ContextCatalogEntry]:
         return []
+
+
+def create_evidence_store() -> EvidenceStore:
+    backend = os.environ.get("EVIDENCE_STORAGE_BACKEND", "").strip()
+    if backend == "oss":
+        from oss_evidence import OSSEvidenceStore
+        endpoint = os.environ.get("OSS_ENDPOINT", "").strip()
+        bucket = os.environ.get("OSS_BUCKET", "").strip()
+        access_key_id = os.environ.get("OSS_ACCESS_KEY_ID", "").strip()
+        access_key_secret = os.environ.get("OSS_ACCESS_KEY_SECRET", "").strip()
+        missing = [k for k, v in [
+            ("OSS_ENDPOINT", endpoint),
+            ("OSS_BUCKET", bucket),
+            ("OSS_ACCESS_KEY_ID", access_key_id),
+            ("OSS_ACCESS_KEY_SECRET", access_key_secret),
+        ] if not v]
+        if missing:
+            raise SystemExit(f"EVIDENCE_STORAGE_BACKEND=oss requires {', '.join(missing)}")
+        return OSSEvidenceStore.from_env(endpoint, bucket, access_key_id, access_key_secret)
+    if backend == "filesystem":
+        evidence_dir = os.environ.get("EVIDENCE_STORAGE_DIR", "").strip()
+        if not evidence_dir:
+            raise SystemExit("EVIDENCE_STORAGE_DIR is required when EVIDENCE_STORAGE_BACKEND=filesystem")
+        if not Path(evidence_dir).is_absolute():
+            evidence_dir = str((Path(__file__).resolve().parent.parent.parent / evidence_dir).resolve())
+        return FilesystemEvidenceStore(evidence_dir)
+    raise SystemExit(f"EVIDENCE_STORAGE_BACKEND must be 'filesystem' or 'oss', got {backend!r}")
 
 
 def aggregate_deltas(job: TraceCapturedJob) -> list[UsageAggregateDelta]:
@@ -68,12 +95,12 @@ def aggregate_deltas(job: TraceCapturedJob) -> list[UsageAggregateDelta]:
     ]
 
 
-def process_job_line(line: str, evidence_store: FilesystemEvidenceStore, repository, context_repository=None) -> dict:
+def process_job_line(line: str, evidence_store: EvidenceStore, repository, context_repository=None, storage_backend: str = "filesystem") -> dict:
     job = parse_job(line)
     request_body = evidence_store.read_text(job.request_raw_ref) if job.request_raw_ref else ""
     response_body = evidence_store.read_text(job.response_raw_ref) if job.response_raw_ref else ""
     contexts = context_repository.list_active_contexts() if context_repository else []
-    return process_trace(job, request_body, response_body, repository, contexts, evidence_store)
+    return process_trace(job, request_body, response_body, repository, contexts, evidence_store, storage_backend=storage_backend)
 
 
 def process_contract_validation_line(line: str) -> dict:
@@ -87,7 +114,8 @@ def process_trace(
     response_body: str,
     repository,
     contexts: list[ContextCatalogEntry] | None = None,
-    evidence_store: FilesystemEvidenceStore | None = None,
+    evidence_store: EvidenceStore | None = None,
+    storage_backend: str = "filesystem",
 ) -> dict:
     extraction_context: MediaExtractionContext | None = None
     if evidence_store and job.request_raw_ref:
@@ -108,7 +136,7 @@ def process_trace(
     if extraction_context and extraction_context.replacements:
         extraction_context.apply_replacements(job.request_raw_ref)
         if hasattr(repository, "save_media_assets"):
-            repository.save_media_assets(job.trace_id, extraction_context.assets)
+            repository.save_media_assets(job.trace_id, extraction_context.assets, storage_backend=storage_backend)
         if hasattr(repository, "update_request_body_sha256"):
             modified = evidence_store.read_text(job.request_raw_ref)
             new_sha = sha256(modified.encode("utf-8")).hexdigest()
@@ -127,14 +155,14 @@ def process_trace(
     }
 
 
-def process_stdin(evidence_root: str, postgres_dsn: str) -> int:
+def process_stdin(evidence_store: EvidenceStore, postgres_dsn: str) -> int:
     payload = sys.stdin.read().strip()
     if not payload:
         return 0
     with psycopg.connect(postgres_dsn) as connection:
         result = process_job_line(
             payload,
-            FilesystemEvidenceStore(evidence_root),
+            evidence_store,
             PostgresAnalysisRepository(connection),
             PostgresContextRepository(connection),
         )
@@ -181,10 +209,11 @@ def record_heartbeat_safely(heartbeat, connection, **kwargs) -> None:
 def process_redis_once(
     redis_url: str,
     list_name: str,
-    evidence_root: str,
+    evidence_store: EvidenceStore,
     postgres_dsn: str,
     timeout_seconds: int,
     connection_factory=psycopg.connect,
+    storage_backend: str = "filesystem",
 ) -> int:
     client = redis.Redis.from_url(redis_url, decode_responses=True)
     item = client.blpop(list_name, timeout=timeout_seconds)
@@ -206,9 +235,10 @@ def process_redis_once(
         try:
             result = process_job_line(
                 payload,
-                FilesystemEvidenceStore(evidence_root),
+                evidence_store,
                 PostgresAnalysisRepository(connection),
                 PostgresContextRepository(connection),
+                storage_backend=storage_backend,
             )
         except Exception as exc:
             record_heartbeat_safely(
@@ -239,12 +269,12 @@ def process_redis_once(
 def process_redis_loop(
     redis_url: str,
     list_name: str,
-    evidence_root: str,
+    evidence_store: EvidenceStore,
     postgres_dsn: str,
     timeout_seconds: int,
+    storage_backend: str = "filesystem",
 ) -> int:
     client = redis.Redis.from_url(redis_url, decode_responses=True)
-    evidence_store = FilesystemEvidenceStore(evidence_root)
     wid = worker_id()
     running = True
 
@@ -280,6 +310,7 @@ def process_redis_loop(
                     evidence_store,
                     PostgresAnalysisRepository(connection),
                     PostgresContextRepository(connection),
+                    storage_backend=storage_backend,
                 )
             except Exception as exc:
                 record_heartbeat_safely(
@@ -316,32 +347,33 @@ def main() -> int:
     parser.add_argument("--redis-url", default=os.environ.get("REDIS_URL", "redis://localhost:6379/0"))
     parser.add_argument("--redis-list", default=os.environ.get("ANALYSIS_REDIS_LIST", "analysis_jobs"))
     parser.add_argument("--redis-timeout-seconds", type=int, default=5)
-    parser.add_argument("--evidence-root", default=os.environ.get("EVIDENCE_STORAGE_DIR", ""))
     parser.add_argument("--postgres-dsn", default=os.environ.get("POSTGRES_DSN", ""))
     args = parser.parse_args()
-    # Resolve relative paths against the project root (parent of workers/analysis_worker)
-    if args.evidence_root and not Path(args.evidence_root).is_absolute():
-        args.evidence_root = str((Path(__file__).resolve().parent.parent.parent / args.evidence_root).resolve())
-    if not args.redis_once and not args.evidence_root and not args.postgres_dsn:
+
+    if not args.redis_once and "EVIDENCE_STORAGE_BACKEND" not in os.environ and not args.postgres_dsn:
         return process_contract_stdin()
-    if not args.evidence_root:
-        raise SystemExit("EVIDENCE_STORAGE_DIR or --evidence-root is required")
+
+    evidence_store = create_evidence_store()
+    storage_backend = os.environ.get("EVIDENCE_STORAGE_BACKEND", "")
+
     if not args.postgres_dsn:
-        raise SystemExit("POSTGRES_DSN or --postgres-dsn is required")
+        raise SystemExit("POSTGRES_DSN is required")
     if args.redis_once:
         return process_redis_once(
             args.redis_url,
             args.redis_list,
-            args.evidence_root,
+            evidence_store,
             args.postgres_dsn,
             args.redis_timeout_seconds,
+            storage_backend=storage_backend,
         )
     return process_redis_loop(
         args.redis_url,
         args.redis_list,
-        args.evidence_root,
+        evidence_store,
         args.postgres_dsn,
         args.redis_timeout_seconds,
+        storage_backend=storage_backend,
     )
 
 
