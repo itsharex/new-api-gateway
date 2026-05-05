@@ -476,7 +476,7 @@ def test_extracts_base64_data_url_to_media_asset(tmp_path: Path):
         ]
     }
     request_body = json.dumps(request)
-    store.write_text(f"{evidence_dir}/request_body.bin", request_body)
+    store.write_text(f"file:///{evidence_dir}/request_body.bin", request_body)
     ctx = MediaExtractionContext(store, evidence_dir, "trace_1")
 
     messages, _ = normalize_json_trace(trace_job, request_body, "{}", extraction_context=ctx)
@@ -485,7 +485,7 @@ def test_extracts_base64_data_url_to_media_asset(tmp_path: Path):
     assert image_msg.protocol_item_type == "base64_media_extracted"
     assert len(ctx.assets) == 1
     assert ctx.assets[0].media_type == "image/png"
-    assert store.read_bytes(f"{evidence_dir}/media_asset_000001.bin") == png_data
+    assert store.read_bytes(f"file:///{evidence_dir}/media_asset_000001.bin") == png_data
     assert len(ctx.replacements) == 1
     assert ctx.replacements[0] == (data_url, "audit-media:media_asset_000001")
 
@@ -588,7 +588,7 @@ def test_extracts_claude_source_base64_image(tmp_path: Path):
         ],
     }
     request_body = json.dumps(request)
-    store.write_text(f"{evidence_dir}/request_body.bin", request_body)
+    store.write_text(f"file:///{evidence_dir}/request_body.bin", request_body)
     ctx = MediaExtractionContext(store, evidence_dir, "trace_1")
 
     messages, _ = normalize_json_trace(trace_job, request_body, '{"content":[{"type":"text","text":"A diagram."}]}', extraction_context=ctx)
@@ -597,7 +597,7 @@ def test_extracts_claude_source_base64_image(tmp_path: Path):
     assert image_msg.protocol_item_type == "base64_media_extracted"
     assert len(ctx.assets) == 1
     assert ctx.assets[0].media_type == "image/png"
-    assert store.read_bytes(f"{evidence_dir}/media_asset_000001.bin") == png_data
+    assert store.read_bytes(f"file:///{evidence_dir}/media_asset_000001.bin") == png_data
     assert len(ctx.replacements) == 1
     assert ctx.replacements[0] == (raw_b64, "audit-media:media_asset_000001")
 
