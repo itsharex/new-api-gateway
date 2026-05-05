@@ -45,8 +45,8 @@ func TestFilesystemStoreWritesObjectWithHash(t *testing.T) {
 	if obj.CreatedAt.Location() != time.UTC {
 		t.Fatalf("CreatedAt location = %v, want UTC", obj.CreatedAt.Location())
 	}
-	if !strings.HasPrefix(obj.ObjectRef, "raw/") || !strings.HasSuffix(obj.ObjectRef, "/trace_123/request_body.bin") {
-		t.Fatalf("ObjectRef = %q, want raw date prefix and trace/object suffix", obj.ObjectRef)
+	if !strings.HasPrefix(obj.ObjectRef, "file:///raw/") || !strings.HasSuffix(obj.ObjectRef, "/trace_123/request_body.bin") {
+		t.Fatalf("ObjectRef = %q, want file:///raw date prefix and trace/object suffix", obj.ObjectRef)
 	}
 	if filepath.IsAbs(obj.ObjectRef) || strings.Contains(obj.ObjectRef, "..") || strings.Contains(obj.ObjectRef, "\\") {
 		t.Fatalf("ObjectRef is not a safe slash-relative ref: %q", obj.ObjectRef)
@@ -105,14 +105,15 @@ func TestFilesystemStoreRejectsMaliciousObjectRefs(t *testing.T) {
 	store := NewFilesystemStore(t.TempDir())
 	tests := []string{
 		"",
-		"/raw/2026/01/01/trace/request.bin",
-		"../outside",
-		"raw/../../outside",
-		"raw/2026/01/01/trace/../../outside",
-		".",
-		"..",
-		"raw//2026/object.bin",
-		`raw\2026\01\01\trace\request.bin`,
+		"file:///raw/2026/01/01/trace/request.bin",
+		"file:///../outside",
+		"file:///raw/../../outside",
+		"file:///raw/2026/01/01/trace/../../outside",
+		"file:///.",
+		"file:///..",
+		"file:///raw//2026/object.bin",
+		"file:///" + `raw\2026\01\01\trace\request.bin`,
+		"oss://bucket/raw/key.bin",
 	}
 
 	for _, ref := range tests {
@@ -166,7 +167,7 @@ func TestFilesystemStoreRejectsEmptyRoot(t *testing.T) {
 	if err == nil {
 		t.Fatal("Put error = nil, want empty root error")
 	}
-	reader, err := store.Get(context.Background(), "raw/2026/01/01/trace_123/request_body.bin")
+	reader, err := store.Get(context.Background(), "file:///raw/2026/01/01/trace_123/request_body.bin")
 	if err == nil {
 		reader.Close()
 		t.Fatal("Get error = nil, want empty root error")
@@ -197,7 +198,7 @@ func TestFilesystemStoreChecksContextBeforePutAndGet(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Put error = %v, want context.Canceled", err)
 	}
-	reader, err := store.Get(ctx, "raw/2026/01/01/trace_123/request_body.bin")
+	reader, err := store.Get(ctx, "file:///raw/2026/01/01/trace_123/request_body.bin")
 	if err == nil {
 		reader.Close()
 		t.Fatal("Get error = nil, want context.Canceled")

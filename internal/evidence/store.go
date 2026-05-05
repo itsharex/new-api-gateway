@@ -106,7 +106,7 @@ func (s FilesystemStore) Put(ctx context.Context, req PutRequest) (Object, error
 		return Object{}, err
 	}
 	return Object{
-		ObjectRef:      filepath.ToSlash(ref),
+		ObjectRef:      "file:///" + filepath.ToSlash(ref),
 		StorageBackend: "filesystem",
 		ContentType:    req.ContentType,
 		SizeBytes:      written,
@@ -123,7 +123,10 @@ func (s FilesystemStore) Get(ctx context.Context, objectRef string) (io.ReadClos
 	if err != nil {
 		return nil, err
 	}
-	refPath, err := validateObjectRef(objectRef)
+	if !strings.HasPrefix(objectRef, "file:///") {
+		return nil, fmt.Errorf("invalid object ref %q: must start with file:///", objectRef)
+	}
+	refPath, err := validateObjectRef(strings.TrimPrefix(objectRef, "file:///"))
 	if err != nil {
 		return nil, err
 	}
