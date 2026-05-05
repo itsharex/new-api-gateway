@@ -12,6 +12,7 @@ func TestLoadFromEnvRequiresCoreValues(t *testing.T) {
 	t.Setenv("AUDIT_GATEWAY_LISTEN_ADDR", ":18080")
 	t.Setenv("NEW_API_BASE_URL", "http://127.0.0.1:3000")
 	t.Setenv("AUDIT_HMAC_SECRET", "0123456789abcdef0123456789abcdef")
+	t.Setenv("EVIDENCE_STORAGE_BACKEND", "filesystem")
 	t.Setenv("EVIDENCE_STORAGE_DIR", t.TempDir())
 	t.Setenv("POSTGRES_DSN", "postgres://audit:pass@localhost:5432/audit?sslmode=disable")
 	t.Setenv("REDIS_ADDR", "localhost:6379")
@@ -35,6 +36,7 @@ func TestLoadFromEnvRequiresCoreValues(t *testing.T) {
 func TestLoadFromEnvRejectsMissingSecret(t *testing.T) {
 	t.Setenv("AUDIT_GATEWAY_LISTEN_ADDR", ":18080")
 	t.Setenv("NEW_API_BASE_URL", "http://127.0.0.1:3000")
+	t.Setenv("EVIDENCE_STORAGE_BACKEND", "filesystem")
 	t.Setenv("EVIDENCE_STORAGE_DIR", t.TempDir())
 	t.Setenv("POSTGRES_DSN", "postgres://audit:pass@localhost:5432/audit?sslmode=disable")
 	t.Setenv("REDIS_ADDR", "localhost:6379")
@@ -302,6 +304,7 @@ func setValidEnv(t *testing.T) {
 	t.Setenv("AUDIT_GATEWAY_LISTEN_ADDR", ":18080")
 	t.Setenv("NEW_API_BASE_URL", "http://127.0.0.1:3000")
 	t.Setenv("AUDIT_HMAC_SECRET", "0123456789abcdef0123456789abcdef")
+	t.Setenv("EVIDENCE_STORAGE_BACKEND", "filesystem")
 	t.Setenv("EVIDENCE_STORAGE_DIR", t.TempDir())
 	t.Setenv("POSTGRES_DSN", "postgres://audit:pass@localhost:5432/audit?sslmode=disable")
 	t.Setenv("REDIS_ADDR", "localhost:6379")

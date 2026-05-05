@@ -20,6 +20,11 @@ type Config struct {
 	NewAPIBaseURL            string
 	AuditHMACSecret          string
 	EvidenceStorageDir       string
+	EvidenceStorageBackend   string
+	OSSEndpoint              string
+	OSSBucket                string
+	OSSAccessKeyID           string
+	OSSAccessKeySecret       string
 	DegradedSpoolDir         string
 	PostgresDSN              string
 	NewAPIPostgresDSN        string
@@ -104,9 +109,39 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, fmt.Errorf("invalid OPS_METRICS_ENABLED: must be true or false")
 	}
 
-	evidenceStorageDir, err := requiredEnv("EVIDENCE_STORAGE_DIR")
+	evidenceStorageBackend, err := requiredEnv("EVIDENCE_STORAGE_BACKEND")
 	if err != nil {
 		return Config{}, err
+	}
+	if evidenceStorageBackend != "filesystem" && evidenceStorageBackend != "oss" {
+		return Config{}, fmt.Errorf("EVIDENCE_STORAGE_BACKEND must be filesystem or oss, got %q", evidenceStorageBackend)
+	}
+
+	var evidenceStorageDir string
+	var ossEndpoint, ossBucket, ossAccessKeyID, ossAccessKeySecret string
+	switch evidenceStorageBackend {
+	case "filesystem":
+		evidenceStorageDir, err = requiredEnv("EVIDENCE_STORAGE_DIR")
+		if err != nil {
+			return Config{}, err
+		}
+	case "oss":
+		ossEndpoint, err = requiredEnv("OSS_ENDPOINT")
+		if err != nil {
+			return Config{}, err
+		}
+		ossBucket, err = requiredEnv("OSS_BUCKET")
+		if err != nil {
+			return Config{}, err
+		}
+		ossAccessKeyID, err = requiredEnv("OSS_ACCESS_KEY_ID")
+		if err != nil {
+			return Config{}, err
+		}
+		ossAccessKeySecret, err = requiredEnv("OSS_ACCESS_KEY_SECRET")
+		if err != nil {
+			return Config{}, err
+		}
 	}
 
 	degradedSpoolDir, err := getenvDefault("DEGRADED_SPOOL_DIR", filepath.Join(os.TempDir(), "new-api-gateway-spool"))
@@ -143,6 +178,11 @@ func LoadFromEnv() (Config, error) {
 		NewAPIBaseURL:            newAPIBaseURL,
 		AuditHMACSecret:          auditHMACSecret,
 		EvidenceStorageDir:       evidenceStorageDir,
+		EvidenceStorageBackend:   evidenceStorageBackend,
+		OSSEndpoint:              ossEndpoint,
+		OSSBucket:                ossBucket,
+		OSSAccessKeyID:           ossAccessKeyID,
+		OSSAccessKeySecret:       ossAccessKeySecret,
 		DegradedSpoolDir:         degradedSpoolDir,
 		PostgresDSN:              postgresDSN,
 		NewAPIPostgresDSN:        newAPIPostgresDSN,
