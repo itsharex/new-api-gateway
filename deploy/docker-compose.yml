@@ -56,6 +56,7 @@ services:
         condition: service_healthy
     working_dir: /workspace/workers/analysis_worker
     environment:
+      EVIDENCE_STORAGE_BACKEND: filesystem
       EVIDENCE_STORAGE_DIR: /evidence
       POSTGRES_DSN: ${ANALYSIS_WORKER_POSTGRES_DSN:-postgres://audit:audit@postgres:5432/audit_gateway?sslmode=disable}
       REDIS_URL: redis://redis:6379/0
