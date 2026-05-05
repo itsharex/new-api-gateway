@@ -222,7 +222,7 @@ def assert_evidence_rewritten(trace: dict) -> None:
     print("\n=== Phase 8: Evidence file assertions ===")
     request_ref = trace.get("request_raw_ref", "")
     if not request_ref:
-        check("evidence", "request_raw_ref", False, "empty request_raw_ref")
+        check("evidence.request_raw_ref", False, "empty request_raw_ref")
         return
 
     evidence_root = EVIDENCE_DIR
@@ -230,28 +230,31 @@ def assert_evidence_rewritten(trace: dict) -> None:
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         evidence_root = os.path.join(project_root, evidence_root)
 
+    # Strip file:/// prefix from ref for local filesystem access
+    if request_ref.startswith("file:///"):
+        request_ref = request_ref[len("file:///"):]
     evidence_path = os.path.join(evidence_root, request_ref)
     if not os.path.exists(evidence_path):
-        check("evidence", "file_exists", False, f"file not found: {evidence_path}")
+        check("evidence.file_exists", False, f"file not found: {evidence_path}")
         return
 
     with open(evidence_path, "r", encoding="utf-8") as f:
         body = f.read()
 
-    check("evidence", "contains_audit_media_ref", "audit-media:media_asset_000001" in body,
+    check("evidence.contains_audit_media_ref", "audit-media:media_asset_000001" in body,
           "expected 'audit-media:media_asset_000001' in evidence JSON")
-    check("evidence", "base64_removed", SMALL_PNG_B64 not in body,
+    check("evidence.base64_removed", SMALL_PNG_B64 not in body,
           "base64 data should be replaced by reference")
 
     # Verify the binary asset file exists and matches
     asset_dir = os.path.dirname(evidence_path)
     asset_path = os.path.join(asset_dir, "media_asset_000001.bin")
-    check("evidence", "asset_file_exists", os.path.exists(asset_path),
+    check("evidence.asset_file_exists", os.path.exists(asset_path),
           f"binary asset not found: {asset_path}")
     if os.path.exists(asset_path):
         with open(asset_path, "rb") as f:
             binary = f.read()
-        check("evidence", "asset_content_matches", binary == SMALL_PNG,
+        check("evidence.asset_content_matches", binary == SMALL_PNG,
               f"asset size={len(binary)} expected={len(SMALL_PNG)}")
 
 

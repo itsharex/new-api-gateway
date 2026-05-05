@@ -80,7 +80,7 @@ def setup(dsn: str) -> None:
                 TRACE_ID, "POST", "/v1/chat/completions", "/v1/chat/completions",
                 "openai_chat", "raw_and_normalized", 200, 200, False,
                 "2026-04-28T13:45:22Z", 2, 2,
-                "raw/e2e/trace_gap/request_body.bin", "raw/e2e/trace_gap/response_body.bin",
+                "file:///raw/e2e/trace_gap/request_body.bin", "file:///raw/e2e/trace_gap/response_body.bin",
                 "tkfp_raw", "tkfp_display", 42, "", "", "unresolved",
                 "gpt-4.1", 25001,
             ),
@@ -95,8 +95,8 @@ def setup(dsn: str) -> None:
         "protocol_family": "openai_chat",
         "capture_mode": "raw_and_normalized",
         "username": "",
-        "request_raw_ref": "raw/e2e/trace_gap/request_body.bin",
-        "response_raw_ref": "raw/e2e/trace_gap/response_body.bin",
+        "request_raw_ref": "file:///raw/e2e/trace_gap/request_body.bin",
+        "response_raw_ref": "file:///raw/e2e/trace_gap/response_body.bin",
         "request_content_type": "application/json",
         "response_content_type": "application/json",
         "model_requested": "gpt-4.1",
@@ -126,7 +126,7 @@ def setup(dsn: str) -> None:
 def assert_worker_output(worker_json: dict) -> None:
     print("\n=== Worker output assertions ===")
     eq("worker", "worker_status", worker_json.get("worker_status"), "processed")
-    eq("worker", "anomaly_count", worker_json.get("anomaly_count"), 2)
+    eq("worker", "anomaly_count", worker_json.get("anomaly_count"), 4)
     eq("worker", "coverage_alert_count", worker_json.get("coverage_alert_count"), 1)
 
 
@@ -137,7 +137,7 @@ def assert_db_records(dsn: str) -> None:
             "SELECT count(*) FROM usage_anomalies WHERE %s = ANY(sample_trace_ids)",
             (TRACE_ID,),
         ).fetchone()[0]
-        eq("db", "usage_anomalies_count", anomaly_count, 2)
+        eq("db", "usage_anomalies_count", anomaly_count, 4)
 
         coverage_count = conn.execute(
             "SELECT count(*) FROM coverage_alerts WHERE %s = ANY(sample_trace_ids)",
