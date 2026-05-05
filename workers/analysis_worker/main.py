@@ -10,7 +10,7 @@ import psycopg
 import redis
 
 from context_repository import PostgresContextRepository
-from evidence import FileEvidenceStore
+from evidence import FilesystemEvidenceStore
 from heartbeat import HeartbeatRepository
 from models import (
     AnalysisContext,
@@ -66,7 +66,7 @@ def aggregate_deltas(job: TraceCapturedJob) -> list[UsageAggregateDelta]:
     ]
 
 
-def process_job_line(line: str, evidence_store: FileEvidenceStore, repository, context_repository=None) -> dict:
+def process_job_line(line: str, evidence_store: FilesystemEvidenceStore, repository, context_repository=None) -> dict:
     job = parse_job(line)
     request_body = evidence_store.read_text(job.request_raw_ref) if job.request_raw_ref else ""
     response_body = evidence_store.read_text(job.response_raw_ref) if job.response_raw_ref else ""
@@ -118,7 +118,7 @@ def process_stdin(evidence_root: str, postgres_dsn: str) -> int:
     with psycopg.connect(postgres_dsn) as connection:
         result = process_job_line(
             payload,
-            FileEvidenceStore(evidence_root),
+            FilesystemEvidenceStore(evidence_root),
             PostgresAnalysisRepository(connection),
             PostgresContextRepository(connection),
         )
@@ -190,7 +190,7 @@ def process_redis_once(
         try:
             result = process_job_line(
                 payload,
-                FileEvidenceStore(evidence_root),
+                FilesystemEvidenceStore(evidence_root),
                 PostgresAnalysisRepository(connection),
                 PostgresContextRepository(connection),
             )
@@ -228,7 +228,7 @@ def process_redis_loop(
     timeout_seconds: int,
 ) -> int:
     client = redis.Redis.from_url(redis_url, decode_responses=True)
-    evidence_store = FileEvidenceStore(evidence_root)
+    evidence_store = FilesystemEvidenceStore(evidence_root)
     wid = worker_id()
     running = True
 

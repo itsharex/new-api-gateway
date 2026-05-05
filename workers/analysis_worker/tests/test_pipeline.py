@@ -3,7 +3,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from evidence import FileEvidenceStore
+from evidence import FilesystemEvidenceStore
 from main import process_job_line
 from models import AnalysisContext, ContextCatalogEntry
 
@@ -77,7 +77,7 @@ def test_process_job_line_reads_evidence_normalizes_and_persists(tmp_path: Path)
         "response_body_size": 256
     })
 
-    response = process_job_line(line, FileEvidenceStore(tmp_path), repo)
+    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo)
 
     assert response["accepted_trace_id"] == "trace_1"
     assert response["normalized_message_count"] == 2
@@ -122,7 +122,7 @@ def test_process_job_line_reconstructs_sse_response(tmp_path: Path):
         "request_started_at": "2026-04-28T13:45:22Z",
     })
 
-    response = process_job_line(line, FileEvidenceStore(tmp_path), repo)
+    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo)
 
     assert response["normalized_message_count"] == 2
     assert any(message.direction == "response" and message.content_text == "hello world" for message in repo.messages)
@@ -169,7 +169,7 @@ def test_process_job_line_persists_work_relevance_result(tmp_path: Path):
         "request_started_at": "2026-04-28T13:45:22Z",
     })
 
-    response = process_job_line(line, FileEvidenceStore(tmp_path), repo, contexts)
+    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo, contexts)
 
     assert response["work_relevance_count"] == 1
     work_results = [result for result in repo.results if result.category == "work_relevance"]
@@ -209,7 +209,7 @@ def test_process_job_line_persists_anomaly_and_coverage_alert(tmp_path: Path):
         "response_body_size": 2
     })
 
-    response = process_job_line(line, FileEvidenceStore(tmp_path), repo)
+    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo)
 
     assert response["worker_status"] == "processed"
     assert response["work_relevance_count"] == 1
@@ -254,7 +254,7 @@ def test_process_job_line_uses_repository_analysis_context(tmp_path: Path):
         "request_started_at": "2026-04-28T13:45:22Z",
     })
 
-    response = process_job_line(line, FileEvidenceStore(tmp_path), repo)
+    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo)
 
     assert repo.context_requests == ["trace_context"]
     assert response["anomaly_count"] == 2
@@ -289,7 +289,7 @@ def test_process_job_line_handles_malformed_timestamp_with_fallback_anomaly_wind
         "request_started_at": "not-a-timestamp",
     })
 
-    response = process_job_line(line, FileEvidenceStore(tmp_path), repo)
+    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo)
 
     assert response["worker_status"] == "processed"
     assert [aggregate.bucket_start for aggregate in repo.aggregates] == [
@@ -333,7 +333,7 @@ def test_process_job_line_detects_low_work_relevance_high_cost(tmp_path: Path):
         "request_started_at": "2026-04-28T13:45:22Z",
     })
 
-    response = process_job_line(line, FileEvidenceStore(tmp_path), repo, RecordingContextRepository())
+    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo, RecordingContextRepository())
 
     assert response["anomaly_count"] == 4
     assert [alert.anomaly_type for alert in repo.anomalies] == [
