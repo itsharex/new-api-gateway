@@ -49,7 +49,7 @@ new-api 项目的前端网关代理层，用于记录所有访问 new-api 的请
 
 1. 持续从 Redis `BLPOP analysis_jobs` 阻塞等待任务
 2. 从文件系统读取证据
-3. 协议归一化（OpenAI / Claude / Gemini）
+3. 协议归一化（OpenAI / Claude / Gemini）+ base64 媒体提取
 4. 工作相关性分类
 5. 运行 12+ 异常检测规则
 6. 用量聚合（小时 + 天级别 upsert）

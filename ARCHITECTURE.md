@@ -57,7 +57,6 @@ new-api-gateway/
 | `stream.go` | SSE 流式响应处理，并发写入客户端与证据存储 |
 | `multipart.go` | multipart 请求解析，每个 part 单独存为证据 |
 | `minimal.go` | 从请求/响应提取模型名称和 token 用量（支持 OpenAI/Anthropic/Gemini 格式） |
-| `media.go` | 递归提取 JSON 中的媒体引用（URL、base64、data URI） |
 | `websocket_log.go` | WebSocket 双向日志（1MB 上限），正则脱敏 API Key |
 | `spool.go` | 证据存储失败时的降级文件落盘 |
 
@@ -168,7 +167,7 @@ RBAC 角色：`viewer` → `auditor` → `raw_access` → `admin`，权限逐级
 | 维度 | Go 网关 (audit-gateway) | Python 分析 Worker (analysis_worker) |
 |------|------------------------|--------------------------------------|
 | 进程类型 | HTTP 长驻服务 | Redis 消费者长驻进程 |
-| 数据方向 | 写入 `traces`、`raw_evidence_objects`、`token_identity_cache`、`coverage_alerts` | 写入 `normalized_messages`、`analysis_results`、`usage_aggregates`、`usage_anomalies`、`worker_heartbeats` |
+| 数据方向 | 写入 `traces`、`raw_evidence_objects`、`token_identity_cache`、`coverage_alerts` | 写入 `normalized_messages`、`analysis_results`、`usage_aggregates`、`usage_anomalies`、`worker_heartbeats`、`raw_evidence_objects`（媒体资产）、更新 `traces.request_body_sha256` |
 | 核心能力 | 反向代理、请求/响应采集、身份解析、管理 API + UI | 协议归一化、用量聚合、异常检测、工作相关性分类 |
 | 通信方式 | RPUSH `trace_captured` 任务到 Redis | BLPOP 持续消费 Redis 任务 |
 | 不启动的影响 | 整个系统不可用 | 代理转发正常，但分析、聚合、告警全部不可用，Redis 队列堆积 |
@@ -187,7 +186,8 @@ RBAC 角色：`viewer` → `auditor` → `raw_access` → `admin`，权限逐级
 | `rules.py` | 12+ 异常检测规则（身份未解析、token 超限、短期飙升、重复提示词等） |
 | `work_relevance.py` | 关键词匹配的工作相关性分类器 |
 | `repository.py` | PostgreSQL 持久化：归一化消息、分析结果、用量聚合、异常告警 |
-| `evidence.py` | 文件系统证据读取（与 Go 端写入路径一致） |
+| `evidence.py` | 证据存储抽象（`EvidenceStore` Protocol）与文件系统实现；支持读写文本和二进制证据 |
+| `media_extraction.py` | Base64 媒体提取：解码 data URL / raw base64，存储为独立二进制证据，替换 JSON 中的原始字符串为 `audit-media:` 引用 |
 | `heartbeat.py` | Worker 心跳写入 |
 | `media_snapshot.py` | SSRF 安全的媒体 URL 验证与下载 |
 | `context_repository.py` | 从 PostgreSQL 加载上下文目录 |
@@ -195,7 +195,7 @@ RBAC 角色：`viewer` → `auditor` → `raw_access` → `admin`，权限逐级
 ### 处理管线
 
 ```
-Redis BLPOP (阻塞等待) → 读取证据 → 协议归一化 → 工作相关性分类 → 异常检测 → 用量聚合 → 持久化 → 心跳 → 继续等待
+Redis BLPOP (阻塞等待) → 读取证据 → 协议归一化 + 媒体提取 → 工作相关性分类 → 异常检测 → 用量聚合 → 持久化 → 心跳 → 继续等待
 ```
 
 默认启动即进入持续消费模式，收到 SIGTERM/SIGINT 时优雅退出。`--redis-once` 仅处理一个任务后退出，用于 e2e 测试。
