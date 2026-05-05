@@ -4,7 +4,7 @@ Date: 2026-05-05
 
 ## 概述
 
-为证据存储增加阿里云 OSS 后端支持。Go 和 Python 两端通过 `EVIDENCE_STORAGE_BACKEND` 环境变量切换后端，默认 filesystem。接口定义不变，新增 OSS 实现类和工厂函数。
+为证据存储增加阿里云 OSS 后端支持。Go 和 Python 两端通过必填的 `EVIDENCE_STORAGE_BACKEND` 环境变量切换后端（`filesystem` 或 `oss`）。接口定义不变，新增 OSS 实现类和工厂函数。
 
 ## 决策记录
 
@@ -130,6 +130,7 @@ Date: 2026-05-05
 
 ### 修改 `workers/analysis_worker/evidence.py`
 
+- `EvidenceStore` Protocol 的 `write_text`/`write_bytes` 返回类型从 `None` 改为 `str`（返回带 scheme 前缀的 object_ref）
 - `FilesystemEvidenceStore` ref 格式改为 `file:///<relative-path>`
 - 读取时解析 `file:///` 前缀提取相对路径
 
@@ -153,7 +154,7 @@ Date: 2026-05-05
 
 ## 第 5 节：数据库迁移
 
-### 新增迁移文件 `migrations/XXXX_object_ref_scheme_prefix.sql`
+### 新增迁移文件 `migrations/0013_object_ref_scheme_prefix.sql`
 
 ```sql
 UPDATE raw_evidence_objects
@@ -204,7 +205,7 @@ WHERE storage_backend = 'filesystem'
 - `internal/evidence/oss_integration_test.go`
 - `workers/analysis_worker/oss_evidence.py`
 - `workers/analysis_worker/test_oss_evidence.py`
-- `migrations/XXXX_object_ref_scheme_prefix.sql`
+- `migrations/0013_object_ref_scheme_prefix.sql`
 
 ### 修改文件
 
