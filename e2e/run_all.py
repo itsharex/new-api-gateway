@@ -59,6 +59,11 @@ TESTS = [
         needs_gateway=True,
     ),
     TestSpec(
+        "test_gateway_claude.py",
+        "Claude 协议网关代理与 trace 持久化",
+        needs_gateway=True,
+    ),
+    TestSpec(
         "test_gateway_worker_pipeline.py",
         "网关采集 → Worker 分析全链路",
         needs_gateway=True,
@@ -142,11 +147,16 @@ def run_test(spec: TestSpec, index: int, total: int) -> bool:
     print(f"\n{prefix} {spec.file} — {spec.description}")
 
     start = time.time()
-    result = subprocess.run(
-        ["uv", "run", spec.file],
-        cwd=str(Path(__file__).parent),
-        timeout=300,
-    )
+    try:
+        result = subprocess.run(
+            ["uv", "run", spec.file],
+            cwd=str(Path(__file__).parent),
+            timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        elapsed = time.time() - start
+        print(f"      ✗ TIMEOUT ({elapsed:.1f}s)")
+        return False
     elapsed = time.time() - start
 
     passed = result.returncode == 0

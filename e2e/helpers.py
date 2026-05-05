@@ -400,10 +400,14 @@ class GatewayManager:
 
     def __init__(self) -> None:
         self._process: subprocess.Popen | None = None
+        self._log_file = None
         self._log_path = "/tmp/e2e-gateway.log"
 
     def start(self, mode: str) -> None:
         """Start gateway with the given storage backend mode (filesystem/oss)."""
+        if mode not in ("filesystem", "oss"):
+            bail(f"Unknown gateway mode: {mode!r}")
+
         self._kill_existing()
 
         env = dict(os.environ)
@@ -418,13 +422,13 @@ class GatewayManager:
                     bail(f"{var} is required for OSS mode")
             env["EVIDENCE_STORAGE_BACKEND"] = "oss"
 
-        log = open(self._log_path, "w")
+        self._log_file = open(self._log_path, "w")
         self._process = subprocess.Popen(
             ["go", "run", "./cmd/audit-gateway"],
             cwd=REPO_ROOT,
             env=env,
-            stdout=log,
-            stderr=log,
+            stdout=self._log_file,
+            stderr=self._log_file,
         )
         print(f"  Gateway starting (mode={mode}, pid={self._process.pid})")
 
@@ -451,6 +455,9 @@ class GatewayManager:
         except subprocess.TimeoutExpired:
             self._process.kill()
             self._process.wait()
+        if self._log_file:
+            self._log_file.close()
+            self._log_file = None
         print("  Gateway stopped")
         self._process = None
 
