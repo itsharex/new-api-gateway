@@ -66,15 +66,19 @@ func NewOSSStore(endpoint, bucketName, accessKeyID, accessKeySecret string) (OSS
 
 func (s OSSStore) Put(ctx context.Context, req PutRequest) (Object, error) {
 	if err := ctx.Err(); err != nil {
+		storeOpsTotal.WithLabelValues("oss", "put", "error").Inc()
 		return Object{}, fmt.Errorf("oss put: %w", err)
 	}
 	if err := validatePathPart("trace id", req.TraceID); err != nil {
+		storeOpsTotal.WithLabelValues("oss", "put", "error").Inc()
 		return Object{}, err
 	}
 	if err := validatePathPart("object type", req.ObjectType); err != nil {
+		storeOpsTotal.WithLabelValues("oss", "put", "error").Inc()
 		return Object{}, err
 	}
 	if req.Reader == nil {
+		storeOpsTotal.WithLabelValues("oss", "put", "error").Inc()
 		return Object{}, errEvidenceReaderRequired
 	}
 
@@ -87,13 +91,16 @@ func (s OSSStore) Put(ctx context.Context, req PutRequest) (Object, error) {
 	hash := sha256.New()
 	written, err := io.Copy(io.MultiWriter(&buf, hash), req.Reader)
 	if err != nil {
+		storeOpsTotal.WithLabelValues("oss", "put", "error").Inc()
 		return Object{}, fmt.Errorf("oss put %s: read failed: %w", key, err)
 	}
 
 	if err := s.client.put(key, buf.Bytes()); err != nil {
+		storeOpsTotal.WithLabelValues("oss", "put", "error").Inc()
 		return Object{}, fmt.Errorf("oss put %s: %w", key, err)
 	}
 
+	storeOpsTotal.WithLabelValues("oss", "put", "success").Inc()
 	return Object{
 		ObjectRef:      "oss://" + s.bucketName + "/" + key,
 		StorageBackend: "oss",
@@ -106,20 +113,25 @@ func (s OSSStore) Put(ctx context.Context, req PutRequest) (Object, error) {
 
 func (s OSSStore) Get(ctx context.Context, objectRef string) (io.ReadCloser, error) {
 	if err := ctx.Err(); err != nil {
+		storeOpsTotal.WithLabelValues("oss", "get", "error").Inc()
 		return nil, fmt.Errorf("oss get: %w", err)
 	}
 	prefix := "oss://" + s.bucketName + "/"
 	if !strings.HasPrefix(objectRef, prefix) {
+		storeOpsTotal.WithLabelValues("oss", "get", "error").Inc()
 		return nil, fmt.Errorf("invalid object ref %q: must start with %s", objectRef, prefix)
 	}
 	key := strings.TrimPrefix(objectRef, prefix)
 	if key == "" {
+		storeOpsTotal.WithLabelValues("oss", "get", "error").Inc()
 		return nil, fmt.Errorf("invalid object ref %q: empty key", objectRef)
 	}
 
 	data, err := s.client.get(key)
 	if err != nil {
+		storeOpsTotal.WithLabelValues("oss", "get", "error").Inc()
 		return nil, fmt.Errorf("oss get %s: %w", key, err)
 	}
+	storeOpsTotal.WithLabelValues("oss", "get", "success").Inc()
 	return io.NopCloser(bytes.NewReader(data)), nil
 }

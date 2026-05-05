@@ -49,34 +49,42 @@ func NewFilesystemStore(root string) FilesystemStore {
 
 func (s FilesystemStore) Put(ctx context.Context, req PutRequest) (Object, error) {
 	if err := ctx.Err(); err != nil {
+		storeOpsTotal.WithLabelValues("filesystem", "put", "error").Inc()
 		return Object{}, err
 	}
 	root, err := absoluteRoot(s.root)
 	if err != nil {
+		storeOpsTotal.WithLabelValues("filesystem", "put", "error").Inc()
 		return Object{}, err
 	}
 	if err := validatePathPart("trace id", req.TraceID); err != nil {
+		storeOpsTotal.WithLabelValues("filesystem", "put", "error").Inc()
 		return Object{}, err
 	}
 	if err := validatePathPart("object type", req.ObjectType); err != nil {
+		storeOpsTotal.WithLabelValues("filesystem", "put", "error").Inc()
 		return Object{}, err
 	}
 	if req.Reader == nil {
+		storeOpsTotal.WithLabelValues("filesystem", "put", "error").Inc()
 		return Object{}, errEvidenceReaderRequired
 	}
 
 	now := time.Now().UTC()
 	dir := filepath.Join(root, "raw", now.Format("2006"), now.Format("01"), now.Format("02"), req.TraceID)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
+		storeOpsTotal.WithLabelValues("filesystem", "put", "error").Inc()
 		return Object{}, err
 	}
 	name := fmt.Sprintf("%s.bin", req.ObjectType)
 	path := filepath.Join(dir, name)
 	if err := ensureWithinRoot(root, path); err != nil {
+		storeOpsTotal.WithLabelValues("filesystem", "put", "error").Inc()
 		return Object{}, err
 	}
 	file, err := os.CreateTemp(dir, "."+name+".tmp-*")
 	if err != nil {
+		storeOpsTotal.WithLabelValues("filesystem", "put", "error").Inc()
 		return Object{}, err
 	}
 	tempPath := file.Name()
@@ -91,20 +99,25 @@ func (s FilesystemStore) Put(ctx context.Context, req PutRequest) (Object, error
 	written, err := io.Copy(io.MultiWriter(file, hash), req.Reader)
 	if err != nil {
 		_ = file.Close()
+		storeOpsTotal.WithLabelValues("filesystem", "put", "error").Inc()
 		return Object{}, err
 	}
 	if err := file.Close(); err != nil {
+		storeOpsTotal.WithLabelValues("filesystem", "put", "error").Inc()
 		return Object{}, err
 	}
 	if err := os.Rename(tempPath, path); err != nil {
+		storeOpsTotal.WithLabelValues("filesystem", "put", "error").Inc()
 		return Object{}, err
 	}
 	removeTemp = false
 
 	ref, err := filepath.Rel(root, path)
 	if err != nil {
+		storeOpsTotal.WithLabelValues("filesystem", "put", "error").Inc()
 		return Object{}, err
 	}
+	storeOpsTotal.WithLabelValues("filesystem", "put", "success").Inc()
 	return Object{
 		ObjectRef:      "file:///" + filepath.ToSlash(ref),
 		StorageBackend: "filesystem",
@@ -117,24 +130,35 @@ func (s FilesystemStore) Put(ctx context.Context, req PutRequest) (Object, error
 
 func (s FilesystemStore) Get(ctx context.Context, objectRef string) (io.ReadCloser, error) {
 	if err := ctx.Err(); err != nil {
+		storeOpsTotal.WithLabelValues("filesystem", "get", "error").Inc()
 		return nil, err
 	}
 	root, err := absoluteRoot(s.root)
 	if err != nil {
+		storeOpsTotal.WithLabelValues("filesystem", "get", "error").Inc()
 		return nil, err
 	}
 	if !strings.HasPrefix(objectRef, "file:///") {
+		storeOpsTotal.WithLabelValues("filesystem", "get", "error").Inc()
 		return nil, fmt.Errorf("invalid object ref %q: must start with file:///", objectRef)
 	}
 	refPath, err := validateObjectRef(strings.TrimPrefix(objectRef, "file:///"))
 	if err != nil {
+		storeOpsTotal.WithLabelValues("filesystem", "get", "error").Inc()
 		return nil, err
 	}
 	path := filepath.Join(root, refPath)
 	if err := ensureWithinRoot(root, path); err != nil {
+		storeOpsTotal.WithLabelValues("filesystem", "get", "error").Inc()
 		return nil, err
 	}
-	return os.Open(path)
+	f, err := os.Open(path)
+	if err != nil {
+		storeOpsTotal.WithLabelValues("filesystem", "get", "error").Inc()
+		return nil, err
+	}
+	storeOpsTotal.WithLabelValues("filesystem", "get", "success").Inc()
+	return f, nil
 }
 
 func absoluteRoot(root string) (string, error) {
