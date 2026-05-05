@@ -29,7 +29,8 @@
 - `workers/analysis_worker/`：Python 分析 worker，负责归一化、用量聚合、异常/覆盖告警、工作相关性分类。
 - `migrations/`：PostgreSQL schema 迁移，按文件编号顺序应用。
 - `deploy/`：本地 Docker Compose 依赖与工具服务。
-- `scripts/`：smoke 与 e2e 检查脚本。
+- `e2e/`：端到端测试（`run_all.py` 统一入口），依赖本地 postgres/redis。
+- `scripts/`：smoke 与运维脚本。
 
 ## 常用命令
 
@@ -53,8 +54,11 @@ uv run pytest -q
 
 ```bash
 ./scripts/smoke_ops_health.sh
-./scripts/e2e_worker_anomaly_coverage.sh
-./scripts/e2e_worker_work_relevance.sh
+```
+
+```bash
+# e2e 测试（需要 postgres/redis/new-api 运行中 + OSS 凭据）
+cd e2e && uv run run_all.py
 ```
 
 ## 工作约定
