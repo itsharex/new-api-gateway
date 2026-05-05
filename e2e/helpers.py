@@ -3,11 +3,17 @@
 
 from __future__ import annotations
 
+import glob
+import json
 import os
+import signal
+import subprocess
 import sys
 import time
+from urllib.parse import urlparse, urlunparse
 
 import psycopg
+import redis
 import requests
 
 # ---------------------------------------------------------------------------
@@ -312,3 +318,178 @@ def report_results(total_count: int) -> None:
         sys.exit(1)
     else:
         print(f"PASSED: all {total_count} trace(s) verified.")
+
+
+# ---------------------------------------------------------------------------
+# Test database helpers
+# ---------------------------------------------------------------------------
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+WORKER_DIR = os.path.join(REPO_ROOT, "workers", "analysis_worker")
+MIGRATIONS_DIR = os.path.join(REPO_ROOT, "migrations")
+
+
+def make_dsn(db_name: str) -> str:
+    """Return PG_DSN with the database name replaced."""
+    parsed = urlparse(PG_DSN)
+    return urlunparse(parsed._replace(path=f"/{db_name}"))
+
+
+def create_test_database(db_name: str) -> str:
+    """Drop and recreate a test database. Returns the new DSN."""
+    admin_dsn = make_dsn("postgres")
+    with psycopg.connect(admin_dsn, autocommit=True) as conn:
+        conn.execute(f"DROP DATABASE IF EXISTS {db_name} WITH (FORCE)")
+        conn.execute(f"CREATE DATABASE {db_name}")
+    print(f"  Created test database: {db_name}")
+    return make_dsn(db_name)
+
+
+def apply_migrations(dsn: str) -> None:
+    """Apply all migration SQL files to the given database."""
+    sql_files = sorted(glob.glob(os.path.join(MIGRATIONS_DIR, "*.sql")))
+    with psycopg.connect(dsn) as conn:
+        for path in sql_files:
+            with open(path) as f:
+                conn.execute(f.read())
+    print(f"  Applied {len(sql_files)} migration(s)")
+
+
+def flush_redis() -> None:
+    """Flush the current Redis database."""
+    r = redis.Redis.from_url(REDIS_URL)
+    r.flushdb()
+    print("  Flushed Redis DB")
+
+
+def run_worker_once(*, postgres_dsn: str, evidence_dir: str) -> dict:
+    """Run the analysis worker once (--redis-once), return parsed JSON output."""
+    env = {
+        **os.environ,
+        "POSTGRES_DSN": postgres_dsn,
+        "EVIDENCE_STORAGE_DIR": evidence_dir,
+        "REDIS_URL": REDIS_URL,
+    }
+    result = subprocess.run(
+        ["uv", "run", "python", "main.py", "--redis-once"],
+        cwd=WORKER_DIR,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=env,
+    )
+    print(f"  Worker exit code: {result.returncode}")
+    if result.stdout.strip():
+        print(f"  Worker stdout: {result.stdout.strip()}")
+    if result.returncode != 0:
+        print(f"  Worker stderr: {result.stderr.strip()}", file=sys.stderr)
+    lines = [ln.strip() for ln in result.stdout.strip().splitlines() if ln.strip()]
+    if not lines:
+        bail(f"Worker produced no stdout. stderr: {result.stderr[:500]}")
+    worker_json = json.loads(lines[-1])
+    print(f"  Worker result: {json.dumps(worker_json, indent=2)}")
+    return worker_json
+
+
+# ---------------------------------------------------------------------------
+# Gateway process management
+# ---------------------------------------------------------------------------
+
+class GatewayManager:
+    """Manages the audit-gateway process lifecycle for e2e tests."""
+
+    def __init__(self) -> None:
+        self._process: subprocess.Popen | None = None
+        self._log_path = "/tmp/e2e-gateway.log"
+
+    def start(self, mode: str) -> None:
+        """Start gateway with the given storage backend mode (filesystem/oss)."""
+        self._kill_existing()
+
+        env = dict(os.environ)
+        if mode == "oss":
+            for var in (
+                "OSS_ENDPOINT",
+                "OSS_BUCKET",
+                "OSS_ACCESS_KEY_ID",
+                "OSS_ACCESS_KEY_SECRET",
+            ):
+                if not os.environ.get(var):
+                    bail(f"{var} is required for OSS mode")
+            env["EVIDENCE_STORAGE_BACKEND"] = "oss"
+
+        log = open(self._log_path, "w")
+        self._process = subprocess.Popen(
+            ["go", "run", "./cmd/audit-gateway"],
+            cwd=REPO_ROOT,
+            env=env,
+            stdout=log,
+            stderr=log,
+        )
+        print(f"  Gateway starting (mode={mode}, pid={self._process.pid})")
+
+        for attempt in range(1, 31):
+            try:
+                resp = requests.get(f"{GATEWAY_URL}/healthz", timeout=1)
+                if resp.status_code == 200:
+                    print(f"  Gateway ready ({mode} mode, attempt {attempt})")
+                    return
+            except requests.RequestException:
+                pass
+            time.sleep(1)
+
+        self._print_log_tail()
+        bail(f"Gateway did not become ready after 30s (mode={mode})")
+
+    def stop(self) -> None:
+        """Stop the gateway process."""
+        if self._process is None:
+            return
+        self._process.terminate()
+        try:
+            self._process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            self._process.wait()
+        print("  Gateway stopped")
+        self._process = None
+
+    def restart(self, mode: str) -> None:
+        """Stop then start with a new mode."""
+        self.stop()
+        self.start(mode)
+
+    def _kill_existing(self) -> None:
+        """Kill any running audit-gateway processes."""
+        result = subprocess.run(
+            ["pgrep", "-f", "audit-gateway"],
+            capture_output=True,
+            text=True,
+        )
+        pids = [p.strip() for p in result.stdout.splitlines() if p.strip()]
+        if not pids:
+            return
+        print(f"  Killing existing gateway PIDs: {' '.join(pids)}")
+        for pid in pids:
+            try:
+                os.kill(int(pid), signal.SIGTERM)
+            except (ProcessLookupError, ValueError):
+                pass
+        time.sleep(2)
+        for pid in pids:
+            try:
+                os.kill(int(pid), signal.SIGKILL)
+            except (ProcessLookupError, ValueError):
+                pass
+
+    def _print_log_tail(self) -> None:
+        """Print last 20 lines of gateway log for debugging."""
+        try:
+            with open(self._log_path) as f:
+                lines = f.readlines()
+            if lines:
+                print("  Last gateway log lines:")
+                for line in lines[-20:]:
+                    print(f"    {line.rstrip()}")
+        except FileNotFoundError:
+            pass
