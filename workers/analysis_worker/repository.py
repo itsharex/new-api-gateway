@@ -332,6 +332,36 @@ class PostgresAnalysisRepository:
             )
         self.connection.commit()
 
+    def save_media_assets(self, trace_id: str, assets: list) -> None:
+        if not assets:
+            return
+        cursor = self.connection.cursor()
+        for asset in assets:
+            cursor.execute(
+                """
+                INSERT INTO raw_evidence_objects (
+                    trace_id, object_type, object_ref, storage_backend,
+                    content_type, size_bytes
+                ) VALUES (%s, %s, %s, 'filesystem', %s, %s)
+                """,
+                (
+                    trace_id,
+                    asset.object_type,
+                    asset.object_ref,
+                    asset.media_type,
+                    asset.size_bytes,
+                ),
+            )
+        self.connection.commit()
+
+    def update_request_body_sha256(self, trace_id: str, sha256: str) -> None:
+        cursor = self.connection.cursor()
+        cursor.execute(
+            "UPDATE traces SET request_body_sha256 = %s, updated_at = now() WHERE trace_id = %s",
+            (sha256, trace_id),
+        )
+        self.connection.commit()
+
 
 def _is_snapshot_queue_candidate(media_url: str) -> bool:
     if not media_url:

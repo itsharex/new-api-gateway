@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from media_extraction import MediaAsset
 from models import (
     AnalysisResult,
     AnomalyAlert,
@@ -487,3 +488,68 @@ def test_media_snapshot_upgrade_migration_defines_idempotent_job_key():
     assert "ROW_NUMBER() OVER" in upgrade_migration
     assert "CREATE UNIQUE INDEX IF NOT EXISTS idx_media_snapshot_jobs_unique_source" in upgrade_migration
     assert "trace_id, source_url, source_context, policy_reason" in upgrade_migration
+
+
+def test_repository_inserts_media_asset_records():
+    conn = FakeConnection()
+    repo = PostgresAnalysisRepository(conn)
+    assets = [
+        MediaAsset(
+            object_type="media_asset_000001",
+            object_ref="raw/2026/05/05/trace_1/media_asset_000001.bin",
+            media_type="image/png",
+            size_bytes=12345,
+        ),
+        MediaAsset(
+            object_type="media_asset_000002",
+            object_ref="raw/2026/05/05/trace_1/media_asset_000002.bin",
+            media_type="audio/wav",
+            size_bytes=2048,
+        ),
+    ]
+
+    repo.save_media_assets("trace_1", assets)
+
+    media_queries = [
+        (query, params)
+        for query, params in conn.cursor_obj.executed
+        if "INSERT INTO raw_evidence_objects" in query
+    ]
+    assert len(media_queries) == 2
+    assert media_queries[0][1][:3] == (
+        "trace_1",
+        "media_asset_000001",
+        "raw/2026/05/05/trace_1/media_asset_000001.bin",
+    )
+    assert media_queries[1][1][:3] == (
+        "trace_1",
+        "media_asset_000002",
+        "raw/2026/05/05/trace_1/media_asset_000002.bin",
+    )
+
+
+def test_repository_skips_media_assets_when_empty():
+    conn = FakeConnection()
+    repo = PostgresAnalysisRepository(conn)
+
+    repo.save_media_assets("trace_1", [])
+
+    media_queries = [
+        query for query, _ in conn.cursor_obj.executed
+        if "INSERT INTO raw_evidence_objects" in query
+    ]
+    assert media_queries == []
+
+
+def test_repository_updates_request_body_sha256():
+    conn = FakeConnection()
+    repo = PostgresAnalysisRepository(conn)
+
+    repo.update_request_body_sha256("trace_1", "abc123sha256")
+
+    sha_queries = [
+        (query, params) for query, params in conn.cursor_obj.executed
+        if "UPDATE traces" in query and "request_body_sha256" in query
+    ]
+    assert len(sha_queries) == 1
+    assert sha_queries[0][1] == ("abc123sha256", "trace_1")
