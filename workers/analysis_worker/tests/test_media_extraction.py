@@ -12,6 +12,10 @@ def _data_url(media_type: str, payload: bytes) -> str:
     return f"data:{media_type};base64,{encoded}"
 
 
+def _ref(path: str) -> str:
+    return f"file:///{path}"
+
+
 def test_extract_data_url_writes_binary_asset(tmp_path: Path):
     store = FilesystemEvidenceStore(tmp_path)
     ctx = MediaExtractionContext(store, "raw/2026/05/05/trace_1", "trace_1")
@@ -24,7 +28,7 @@ def test_extract_data_url_writes_binary_asset(tmp_path: Path):
     assert asset.object_type == "media_asset_000001"
     assert asset.media_type == "image/png"
     assert asset.size_bytes == len(png_data)
-    written = store.read_bytes("raw/2026/05/05/trace_1/media_asset_000001.bin")
+    written = store.read_bytes(_ref("raw/2026/05/05/trace_1/media_asset_000001.bin"))
     assert written == png_data
 
 
@@ -96,7 +100,7 @@ def test_apply_replacements_modifies_json(tmp_path: Path):
     ctx.extract_data_url(data_url, "image")
 
     original_json = '{"url":"' + data_url + '"}'
-    ref = f"{evidence_dir}/request_body.bin"
+    ref = _ref(f"{evidence_dir}/request_body.bin")
     store.write_text(ref, original_json)
     ctx.apply_replacements(ref)
 
@@ -108,7 +112,7 @@ def test_apply_replacements_modifies_json(tmp_path: Path):
 def test_apply_replacements_noop_when_empty(tmp_path: Path):
     store = FilesystemEvidenceStore(tmp_path)
     ctx = MediaExtractionContext(store, "raw/2026/05/05/trace_1", "trace_1")
-    ref = "raw/2026/05/05/trace_1/request_body.bin"
+    ref = _ref("raw/2026/05/05/trace_1/request_body.bin")
     original = '{"model":"gpt-4.1"}'
     store.write_text(ref, original)
 

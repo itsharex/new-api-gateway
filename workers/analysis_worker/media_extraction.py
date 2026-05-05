@@ -66,7 +66,7 @@ class MediaExtractionContext:
         if len(binary) > self.max_bytes:
             return None
         object_type = self._next_object_type()
-        object_ref = f"{self.evidence_dir}/{object_type}.bin"
+        object_ref = f"file:///{self.evidence_dir}/{object_type}.bin"
         self.evidence_store.write_bytes(object_ref, binary)
         asset = MediaAsset(
             object_type=object_type,
