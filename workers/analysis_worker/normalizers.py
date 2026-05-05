@@ -1,6 +1,7 @@
 import json
 from typing import Any
 
+from media_extraction import MediaExtractionContext
 from models import AnalysisResult, NormalizedMessage, TraceCapturedJob, text_hash
 
 
@@ -11,6 +12,7 @@ def normalize_json_trace(
     job: TraceCapturedJob,
     request_body: str,
     response_body: str,
+    extraction_context: MediaExtractionContext | None = None,
 ) -> tuple[list[NormalizedMessage], list[AnalysisResult]]:
     request_json = _load_json_object(request_body)
     response_json = _load_json_object(response_body)
@@ -19,13 +21,13 @@ def normalize_json_trace(
         response_json = _response_json_from_sse_events(response_events)
     messages: list[NormalizedMessage]
     if job.protocol_family == "openai_chat":
-        messages = _normalize_openai_chat(job, request_json, response_json)
+        messages = _normalize_openai_chat(job, request_json, response_json, extraction_context)
     elif job.protocol_family == "openai_responses":
-        messages = _normalize_openai_responses(job, request_json, response_json)
+        messages = _normalize_openai_responses(job, request_json, response_json, extraction_context)
     elif job.protocol_family == "claude_messages":
-        messages = _normalize_claude_messages(job, request_json, response_json)
+        messages = _normalize_claude_messages(job, request_json, response_json, extraction_context)
     elif job.protocol_family == "gemini":
-        messages = _normalize_gemini(job, request_json, response_json)
+        messages = _normalize_gemini(job, request_json, response_json, extraction_context)
     else:
         messages = _normalize_generic_prompt(job, request_json)
     return messages, [_usage_result(job)]
@@ -45,6 +47,7 @@ def _normalize_openai_chat(
     job: TraceCapturedJob,
     request_json: dict[str, Any],
     response_json: dict[str, Any],
+    extraction_context: MediaExtractionContext | None = None,
 ) -> list[NormalizedMessage]:
     messages: list[NormalizedMessage] = []
     for index, item in enumerate(request_json.get("messages", [])):
@@ -57,6 +60,7 @@ def _normalize_openai_chat(
             item.get("content"),
             f"request.messages[{index}]",
             "openai_chat_message",
+            extraction_context,
         ))
     for index, choice in enumerate(response_json.get("choices", [])):
         if not isinstance(choice, dict):
@@ -71,6 +75,7 @@ def _normalize_openai_chat(
             message.get("content"),
             f"response.choices[{index}].message",
             "openai_chat_message",
+            extraction_context,
         ))
     for sequence_index, message in enumerate(messages):
         messages[sequence_index] = _with_sequence_index(message, sequence_index)
@@ -81,6 +86,7 @@ def _normalize_openai_responses(
     job: TraceCapturedJob,
     request_json: dict[str, Any],
     response_json: dict[str, Any],
+    extraction_context: MediaExtractionContext | None = None,
 ) -> list[NormalizedMessage]:
     messages: list[NormalizedMessage] = []
     request_input = request_json.get("input")
@@ -95,6 +101,7 @@ def _normalize_openai_responses(
                 content,
                 f"request.input[{index}]",
                 "openai_responses_input",
+                extraction_context,
             ))
     else:
         request_text = _content_to_text(request_input)
@@ -112,6 +119,7 @@ def _normalize_openai_responses(
                 content,
                 f"response.output[{index}]",
                 "openai_responses_output",
+                extraction_context,
             ))
     for sequence_index, message in enumerate(messages):
         messages[sequence_index] = _with_sequence_index(message, sequence_index)
@@ -122,6 +130,7 @@ def _normalize_claude_messages(
     job: TraceCapturedJob,
     request_json: dict[str, Any],
     response_json: dict[str, Any],
+    extraction_context: MediaExtractionContext | None = None,
 ) -> list[NormalizedMessage]:
     messages: list[NormalizedMessage] = []
     system_text = _content_to_text(request_json.get("system"))
@@ -151,6 +160,7 @@ def _normalize_gemini(
     job: TraceCapturedJob,
     request_json: dict[str, Any],
     response_json: dict[str, Any],
+    extraction_context: MediaExtractionContext | None = None,
 ) -> list[NormalizedMessage]:
     messages: list[NormalizedMessage] = []
     for index, content in enumerate(request_json.get("contents", [])):
@@ -163,6 +173,7 @@ def _normalize_gemini(
             content.get("parts"),
             f"request.contents[{index}]",
             "gemini_content_part",
+            extraction_context,
         ))
     for index, candidate in enumerate(response_json.get("candidates", [])):
         if not isinstance(candidate, dict):
@@ -177,6 +188,7 @@ def _normalize_gemini(
             content.get("parts"),
             f"response.candidates[{index}].content",
             "gemini_content_part",
+            extraction_context,
         ))
     for sequence_index, message in enumerate(messages):
         messages[sequence_index] = _with_sequence_index(message, sequence_index)
@@ -190,12 +202,13 @@ def _part_messages(
     content: Any,
     source_path: str,
     protocol_item_type: str,
+    extraction_context: MediaExtractionContext | None = None,
 ) -> list[NormalizedMessage]:
     messages: list[NormalizedMessage] = []
     if isinstance(content, list):
         for index, item in enumerate(content):
             item_path = _part_source_path(source_path, protocol_item_type, index)
-            media = _media_message(job, direction, role, item, item_path)
+            media = _media_message(job, direction, role, item, item_path, extraction_context)
             if media:
                 messages.append(media)
                 continue
@@ -203,7 +216,7 @@ def _part_messages(
             if text:
                 messages.append(_message(job, direction, 0, role, text, item_path, protocol_item_type))
     elif isinstance(content, dict):
-        media = _media_message(job, direction, role, content, source_path)
+        media = _media_message(job, direction, role, content, source_path, extraction_context)
         if media:
             messages.append(media)
         else:
@@ -228,19 +241,25 @@ def _media_message(
     role: str,
     value: Any,
     source_path: str,
+    extraction_context: MediaExtractionContext | None = None,
 ) -> NormalizedMessage | None:
     if not isinstance(value, dict):
         return None
     item_type = value.get("type")
     if item_type == "image_url" and isinstance(value.get("image_url"), dict):
         media_url = value["image_url"].get("url")
-        return _url_media_message(job, direction, role, media_url, source_path, "image")
+        return _url_media_message(job, direction, role, media_url, source_path, "image", extraction_context)
     if item_type in {"input_image", "image"}:
         media_url = value.get("image_url") or value.get("url")
-        return _url_media_message(job, direction, role, media_url, source_path, "image")
+        return _url_media_message(job, direction, role, media_url, source_path, "image", extraction_context)
     if item_type == "input_audio" and isinstance(value.get("input_audio"), dict):
         audio = value["input_audio"]
         if isinstance(audio.get("data"), str):
+            raw_b64 = audio["data"]
+            if extraction_context:
+                asset = extraction_context.extract_raw_base64(raw_b64, "audio/wav", "audio")
+                if asset:
+                    return _message(job, direction, 0, role, "", source_path, "base64_media_extracted", modality="audio")
             return _message(
                 job,
                 direction,
@@ -248,20 +267,25 @@ def _media_message(
                 role,
                 "",
                 source_path,
-                "base64_media" if isinstance(audio.get("data"), str) else "media_url",
+                "base64_media",
                 modality="audio",
             )
-        return _url_media_message(job, direction, role, audio.get("url"), source_path, "audio")
+        return _url_media_message(job, direction, role, audio.get("url"), source_path, "audio", extraction_context)
     inline_data = _dict_value(value, "inlineData", "inline_data")
     if inline_data:
         mime_type = _string_value(inline_data, "mimeType", "mime_type")
         modality = _modality_from_mime_type(mime_type)
+        raw_b64 = inline_data.get("data")
+        if isinstance(raw_b64, str) and raw_b64 and extraction_context:
+            asset = extraction_context.extract_raw_base64(raw_b64, mime_type or "application/octet-stream", modality)
+            if asset:
+                return _message(job, direction, 0, role, "", source_path, "base64_media_extracted", modality=modality)
         return _message(job, direction, 0, role, "", source_path, "base64_media", modality=modality)
     file_data = _dict_value(value, "fileData", "file_data")
     if file_data:
         mime_type = _string_value(file_data, "mimeType", "mime_type")
         file_uri = _string_value(file_data, "fileUri", "file_uri")
-        return _url_media_message(job, direction, role, file_uri, source_path, _modality_from_mime_type(mime_type))
+        return _url_media_message(job, direction, role, file_uri, source_path, _modality_from_mime_type(mime_type), extraction_context)
     return None
 
 
@@ -298,10 +322,15 @@ def _url_media_message(
     media_url: Any,
     source_path: str,
     modality: str,
+    extraction_context: MediaExtractionContext | None = None,
 ) -> NormalizedMessage | None:
     if not isinstance(media_url, str) or not media_url:
         return None
     if _is_base64_data_url(media_url):
+        if extraction_context:
+            asset = extraction_context.extract_data_url(media_url, modality)
+            if asset:
+                return _message(job, direction, 0, role, "", source_path, "base64_media_extracted", modality=modality)
         return _message(job, direction, 0, role, "", source_path, "base64_media", modality=modality)
     if media_url.startswith(("http://", "https://")):
         return _message(job, direction, 0, role, "", source_path, "image_url", modality=modality, media_url=media_url)

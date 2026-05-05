@@ -1,5 +1,9 @@
+import base64
 import json
+from pathlib import Path
 
+from evidence import FilesystemEvidenceStore
+from media_extraction import MediaExtractionContext
 from models import TraceCapturedJob
 from normalizers import normalize_json_trace
 
@@ -452,3 +456,107 @@ def test_normalizes_openai_responses_sse_output_text_delta():
     messages, _ = normalize_json_trace(trace_job, json.dumps(request), response)
 
     assert any(message.direction == "response" and message.content_text == "hello world" for message in messages)
+
+
+def test_extracts_base64_data_url_to_media_asset(tmp_path: Path):
+    store = FilesystemEvidenceStore(tmp_path)
+    evidence_dir = "raw/2026/05/05/trace_1"
+    trace_job = job(protocol_family="openai_chat", route_pattern="/v1/chat/completions")
+    png_data = b"\x89PNG\r\n\x1a\n"
+    data_url = "data:image/png;base64," + base64.b64encode(png_data).decode()
+    request = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "inspect this"},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            }
+        ]
+    }
+    request_body = json.dumps(request)
+    store.write_text(f"{evidence_dir}/request_body.bin", request_body)
+    ctx = MediaExtractionContext(store, evidence_dir, "trace_1")
+
+    messages, _ = normalize_json_trace(trace_job, request_body, "{}", extraction_context=ctx)
+
+    image_msg = [m for m in messages if m.modality == "image"][0]
+    assert image_msg.protocol_item_type == "base64_media_extracted"
+    assert len(ctx.assets) == 1
+    assert ctx.assets[0].media_type == "image/png"
+    assert store.read_bytes(f"{evidence_dir}/media_asset_000001.bin") == png_data
+    assert len(ctx.replacements) == 1
+    assert ctx.replacements[0] == (data_url, "audit-media:media_asset_000001")
+
+
+def test_extracts_base64_without_extraction_context_returns_base64_media():
+    trace_job = job(protocol_family="openai_chat", route_pattern="/v1/chat/completions")
+    data_url = "data:image/png;base64," + base64.b64encode(b"img").decode()
+    request = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            }
+        ]
+    }
+
+    messages, _ = normalize_json_trace(trace_job, json.dumps(request), "{}")
+
+    assert messages[0].protocol_item_type == "base64_media"
+
+
+def test_extracts_openai_input_audio_raw_base64(tmp_path: Path):
+    store = FilesystemEvidenceStore(tmp_path)
+    evidence_dir = "raw/2026/05/05/trace_1"
+    trace_job = job(protocol_family="openai_chat", route_pattern="/v1/chat/completions")
+    audio_data = b"RIFF\x00\x00\x00\x00WAVEfmt "
+    raw_b64 = base64.b64encode(audio_data).decode()
+    request = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_audio", "input_audio": {"data": raw_b64, "format": "wav"}},
+                ],
+            }
+        ]
+    }
+    request_body = json.dumps(request)
+    ctx = MediaExtractionContext(store, evidence_dir, "trace_1")
+
+    messages, _ = normalize_json_trace(trace_job, request_body, "{}", extraction_context=ctx)
+
+    audio_msg = [m for m in messages if m.modality == "audio"][0]
+    assert audio_msg.protocol_item_type == "base64_media_extracted"
+    assert len(ctx.assets) == 1
+
+
+def test_extracts_gemini_inline_data_base64(tmp_path: Path):
+    store = FilesystemEvidenceStore(tmp_path)
+    evidence_dir = "raw/2026/05/05/trace_1"
+    trace_job = job(protocol_family="gemini", route_pattern="/v1beta/models/gemini:generateContent")
+    img_data = b"PNG image bytes here"
+    raw_b64 = base64.b64encode(img_data).decode()
+    request = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": "inspect this"},
+                    {"inlineData": {"mimeType": "image/png", "data": raw_b64}},
+                ],
+            }
+        ]
+    }
+    request_body = json.dumps(request)
+    ctx = MediaExtractionContext(store, evidence_dir, "trace_1")
+
+    messages, _ = normalize_json_trace(trace_job, request_body, "{}", extraction_context=ctx)
+
+    image_msg = [m for m in messages if m.modality == "image"][0]
+    assert image_msg.protocol_item_type == "base64_media_extracted"
+    assert ctx.assets[0].media_type == "image/png"
