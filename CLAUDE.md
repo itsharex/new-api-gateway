@@ -23,7 +23,7 @@
 - `internal/routes/`：上游路由注册与匹配。
 - `internal/config/`：环境变量加载与校验。
 - `internal/authkeys/`、`internal/fingerprint/`、`internal/identity/`、`internal/employee/`：API key 提取、HMAC 指纹、身份解析、员工号规则。
-- `internal/evidence/`、`internal/traces/`、`internal/jobs/`：原始证据存储、trace 持久化、Redis 分析任务发布。
+- `internal/evidence/`、`internal/traces/`、`internal/jobs/`：原始证据存储（filesystem/OSS 双后端）、trace 持久化、Redis 分析任务发布。
 - `internal/admin/`、`internal/adminui/`：管理 API、RBAC、审计日志、内置管理界面。
 - `internal/alerts/`、`internal/ops/`：覆盖告警、健康检查、Prometheus 指标。
 - `workers/analysis_worker/`：Python 分析 worker，负责归一化、用量聚合、异常/覆盖告警、工作相关性分类。

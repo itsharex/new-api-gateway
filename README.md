@@ -38,7 +38,7 @@ new-api 项目的前端网关代理层，用于记录所有访问 new-api 的请
 2. 路由匹配 → 确定 30+ 已知 API 路由的采集模式
 3. 从 6 个来源提取 API Key → HMAC-SHA256 指纹脱敏
 4. 身份解析（Redis 缓存 → PG 缓存 → new-api DB 逐级查找）
-5. 采集请求体与请求头，存入文件系统证据库
+5. 采集请求体与请求头，存入证据库（文件系统或 OSS）
 6. 转发请求至上游 new-api 实例
 7. 采集响应（支持 SSE 流式、WebSocket 双向隧道）
 8. 写入 trace + evidence 记录到 PostgreSQL
@@ -48,7 +48,7 @@ new-api 项目的前端网关代理层，用于记录所有访问 new-api 的请
 ### 分析 Worker 流程
 
 1. 持续从 Redis `BLPOP analysis_jobs` 阻塞等待任务
-2. 从文件系统读取证据
+2. 从证据库读取证据（文件系统或 OSS）
 3. 协议归一化（OpenAI / Claude / Gemini）+ base64 媒体提取
 4. 工作相关性分类
 5. 运行 12+ 异常检测规则
@@ -78,9 +78,12 @@ docker compose -f deploy/docker-compose.yml run --rm migrate
 |------|------|
 | `NEW_API_BASE_URL` | 上游 new-api 实例地址 |
 | `AUDIT_HMAC_SECRET` | HMAC 密钥（≥32 字符） |
-| `EVIDENCE_STORAGE_DIR` | 证据文件存储路径 |
+| `EVIDENCE_STORAGE_BACKEND` | 证据存储后端：`filesystem` 或 `oss` |
+| `EVIDENCE_STORAGE_DIR` | 证据文件存储路径（`filesystem` 时必需） |
 | `POSTGRES_DSN` | 审计网关数据库 DSN |
 | `NEW_API_POSTGRES_DSN` | new-api 数据库 DSN（身份解析用） |
+
+OSS 后端额外变量（`EVIDENCE_STORAGE_BACKEND=oss` 时必需）：`OSS_ENDPOINT`、`OSS_BUCKET`、`OSS_ACCESS_KEY_ID`、`OSS_ACCESS_KEY_SECRET`。
 
 ### 运行
 
