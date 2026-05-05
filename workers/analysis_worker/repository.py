@@ -332,7 +332,7 @@ class PostgresAnalysisRepository:
             )
         self.connection.commit()
 
-    def save_media_assets(self, trace_id: str, assets: list) -> None:
+    def save_media_assets(self, trace_id: str, assets: list, storage_backend: str = "filesystem") -> None:
         if not assets:
             return
         cursor = self.connection.cursor()
@@ -342,12 +342,13 @@ class PostgresAnalysisRepository:
                 INSERT INTO raw_evidence_objects (
                     trace_id, object_type, object_ref, storage_backend,
                     content_type, size_bytes
-                ) VALUES (%s, %s, %s, 'filesystem', %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s)
                 """,
                 (
                     trace_id,
                     asset.object_type,
                     asset.object_ref,
+                    storage_backend,
                     asset.media_type,
                     asset.size_bytes,
                 ),
