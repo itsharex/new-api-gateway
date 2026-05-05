@@ -198,3 +198,25 @@ func ensureWithinRoot(root, path string) error {
 	}
 	return nil
 }
+
+// StoreConfig holds configuration for creating the appropriate evidence Store.
+type StoreConfig struct {
+	Backend            string
+	FilesystemRoot     string
+	OSSEndpoint        string
+	OSSBucket          string
+	OSSAccessKeyID     string
+	OSSAccessKeySecret string
+}
+
+// NewStore creates the appropriate Store implementation based on Backend.
+func NewStore(cfg StoreConfig) (Store, error) {
+	switch cfg.Backend {
+	case "filesystem":
+		return NewFilesystemStore(cfg.FilesystemRoot), nil
+	case "oss":
+		return NewOSSStore(cfg.OSSEndpoint, cfg.OSSBucket, cfg.OSSAccessKeyID, cfg.OSSAccessKeySecret)
+	default:
+		return nil, fmt.Errorf("unsupported evidence storage backend: %q", cfg.Backend)
+	}
+}

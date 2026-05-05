@@ -9,6 +9,8 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 )
 
 type ossBucketClient interface {
@@ -23,6 +25,43 @@ type OSSStore struct {
 
 func NewOSSStoreWithBucket(bucketName string, client ossBucketClient) OSSStore {
 	return OSSStore{bucketName: bucketName, client: client}
+}
+
+type realOSSBucket struct {
+	bucket *oss.Bucket
+}
+
+func newRealOSSBucket(endpoint, bucketName, accessKeyID, accessKeySecret string) (*realOSSBucket, error) {
+	client, err := oss.New(endpoint, accessKeyID, accessKeySecret)
+	if err != nil {
+		return nil, fmt.Errorf("oss client: %w", err)
+	}
+	bucket, err := client.Bucket(bucketName)
+	if err != nil {
+		return nil, fmt.Errorf("oss bucket %s: %w", bucketName, err)
+	}
+	return &realOSSBucket{bucket: bucket}, nil
+}
+
+func (r *realOSSBucket) put(key string, data []byte) error {
+	return r.bucket.PutObject(key, bytes.NewReader(data))
+}
+
+func (r *realOSSBucket) get(key string) ([]byte, error) {
+	reader, err := r.bucket.GetObject(key)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	return io.ReadAll(reader)
+}
+
+func NewOSSStore(endpoint, bucketName, accessKeyID, accessKeySecret string) (OSSStore, error) {
+	client, err := newRealOSSBucket(endpoint, bucketName, accessKeyID, accessKeySecret)
+	if err != nil {
+		return OSSStore{}, err
+	}
+	return NewOSSStoreWithBucket(bucketName, client), nil
 }
 
 func (s OSSStore) Put(ctx context.Context, req PutRequest) (Object, error) {
