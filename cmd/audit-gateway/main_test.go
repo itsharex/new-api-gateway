@@ -16,10 +16,11 @@ import (
 
 func TestBuildHandlerWiresGatewayRuntimeDependencies(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr:         "127.0.0.1:8080",
-		NewAPIBaseURL:      "https://new-api.example.test/base",
-		AuditHMACSecret:    "0123456789abcdef0123456789abcdef",
-		EvidenceStorageDir: t.TempDir(),
+		ListenAddr:              "127.0.0.1:8080",
+		NewAPIBaseURL:           "https://new-api.example.test/base",
+		AuditHMACSecret:         "0123456789abcdef0123456789abcdef",
+		EvidenceStorageBackend:  "filesystem",
+		EvidenceStorageDir:      t.TempDir(),
 	}
 
 	handler := buildHandler(cfg, nil, nil, nil, log.New(ioDiscard{}, "", 0))
@@ -52,12 +53,13 @@ func TestBuildHandlerWiresGatewayRuntimeDependencies(t *testing.T) {
 
 func TestBuildHTTPHandlerRoutesAdminBeforeProxy(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr:         "127.0.0.1:8080",
-		NewAPIBaseURL:      "https://new-api.example.test/base",
-		AuditHMACSecret:    "0123456789abcdef0123456789abcdef",
-		AdminSessionSecret: "admin-session-secret-0123456789abcdef",
-		AdminCookieName:    "audit_admin_session",
-		EvidenceStorageDir: t.TempDir(),
+		ListenAddr:              "127.0.0.1:8080",
+		NewAPIBaseURL:           "https://new-api.example.test/base",
+		AuditHMACSecret:         "0123456789abcdef0123456789abcdef",
+		AdminSessionSecret:      "admin-session-secret-0123456789abcdef",
+		AdminCookieName:         "audit_admin_session",
+		EvidenceStorageBackend:  "filesystem",
+		EvidenceStorageDir:      t.TempDir(),
 	}
 
 	handler := buildHTTPHandler(cfg, nil, nil, nil, log.New(ioDiscard{}, "", 0))
@@ -79,6 +81,7 @@ func TestBuildHTTPHandlerServesOperationalRoutesBeforeAdminAndProxy(t *testing.T
 	cfg := config.Config{
 		NewAPIBaseURL:            "https://new-api.example.test/base",
 		AuditHMACSecret:          "0123456789abcdef0123456789abcdef",
+		EvidenceStorageBackend:   "filesystem",
 		EvidenceStorageDir:       t.TempDir(),
 		OpsCheckTimeout:          50 * time.Millisecond,
 		OpsWorkerHeartbeatMaxAge: 5 * time.Minute,
@@ -105,7 +108,7 @@ func TestBuildHTTPHandlerServesOperationalRoutesBeforeAdminAndProxy(t *testing.T
 }
 
 func TestBuildHTTPHandlerServesAdminUIWithoutInterceptingAPIOrProxy(t *testing.T) {
-	handler := buildHTTPHandler(config.Config{}, nil, nil, nil, log.New(io.Discard, "", 0))
+	handler := buildHTTPHandler(config.Config{EvidenceStorageBackend: "filesystem", EvidenceStorageDir: t.TempDir()}, nil, nil, nil, log.New(io.Discard, "", 0))
 
 	adminReq := httptest.NewRequest(http.MethodGet, "/admin", nil)
 	adminRec := httptest.NewRecorder()

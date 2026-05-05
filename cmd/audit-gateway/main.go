@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -109,7 +110,7 @@ func buildHandler(cfg config.Config, pool *pgxpool.Pool, newAPIPool *pgxpool.Poo
 	return gateway.Handler{
 		UpstreamBaseURL: cfg.NewAPIBaseURL,
 		Registry:        routes.DefaultRegistry(),
-		EvidenceStore:   evidence.NewFilesystemStore(cfg.EvidenceStorageDir),
+		EvidenceStore:   evidenceStoreFromConfig(cfg),
 		TraceRepo:       traces.NewPostgresRepository(pool),
 		IdentityResolver: identity.Resolver{
 			Cache: identity.ChainCache{Caches: []identity.Cache{
@@ -159,7 +160,7 @@ func buildHTTPHandler(cfg config.Config, pool *pgxpool.Pool, newAPIPool *pgxpool
 		Repo:          adminRepo,
 		Auth:          adminAuth,
 		AuditSecret:   cfg.AuditHMACSecret,
-		EvidenceStore: evidence.NewFilesystemStore(cfg.EvidenceStorageDir),
+		EvidenceStore: evidenceStoreFromConfig(cfg),
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isOpsPath(r.URL.Path) {
@@ -199,7 +200,7 @@ func buildOpsHandler(cfg config.Config, pool *pgxpool.Pool, redisClient *redis.C
 			return redisClient.Ping(ctx).Err()
 		},
 		EvidenceCheck: func(ctx context.Context) error {
-			store := evidence.NewFilesystemStore(cfg.EvidenceStorageDir)
+			store := evidenceStoreFromConfig(cfg)
 			ctx, cancel := context.WithTimeout(ctx, cfg.OpsCheckTimeout)
 			defer cancel()
 			object, err := store.Put(ctx, evidence.PutRequest{
@@ -305,6 +306,21 @@ func isAdminAPIPath(path string) bool {
 
 func isAdminUIPath(path string) bool {
 	return path == "/admin" || strings.HasPrefix(path, "/admin/")
+}
+
+func evidenceStoreFromConfig(cfg config.Config) evidence.Store {
+	store, err := evidence.NewStore(evidence.StoreConfig{
+		Backend:            cfg.EvidenceStorageBackend,
+		FilesystemRoot:     cfg.EvidenceStorageDir,
+		OSSEndpoint:        cfg.OSSEndpoint,
+		OSSBucket:          cfg.OSSBucket,
+		OSSAccessKeyID:     cfg.OSSAccessKeyID,
+		OSSAccessKeySecret: cfg.OSSAccessKeySecret,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("evidence store init: %v", err))
+	}
+	return store
 }
 
 func auditErrorLogger(logger *log.Logger) func(context.Context, error) {
