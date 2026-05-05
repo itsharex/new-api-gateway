@@ -162,6 +162,12 @@ def run_test(spec: TestSpec, index: int, total: int) -> bool:
     passed = result.returncode == 0
     status = "✓ PASSED" if passed else "✗ FAILED"
     print(f"      {status} ({elapsed:.1f}s)")
+
+    # Rate-limit cooldown: upstream allows 15 req/min
+    if spec.needs_gateway:
+        print("      (cooldown 5s)")
+        time.sleep(5)
+
     return passed
 
 

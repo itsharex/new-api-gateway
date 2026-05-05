@@ -204,7 +204,7 @@ def assert_media_assets(conn: psycopg.Connection, trace_id: str) -> None:
     print("\n=== Phase 7: Media asset DB assertions ===")
     rows = conn.execute(
         "SELECT object_type, object_ref, content_type, size_bytes FROM raw_evidence_objects "
-        "WHERE trace_id = %s AND object_type LIKE 'media_asset_%'",
+        "WHERE trace_id = %s AND object_type LIKE 'media_asset_%%'",
         (trace_id,),
     ).fetchall()
     check("media_assets.exists", len(rows) > 0, f"no media_asset rows for trace_id={trace_id}")

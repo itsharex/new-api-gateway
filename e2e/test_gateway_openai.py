@@ -220,12 +220,11 @@ def send_responses() -> list[TraceResult]:
         "status_code": resp1.status_code,
     })
 
-    # Turn 2 (chained via previous_response_id)
+    # Turn 2 (standalone request)
     resp2, err2 = _gateway_post(
         "/v1/responses",
         {
             "model": MODEL,
-            "previous_response_id": response_id_1,
             "input": "what is 1+1?",
             "max_output_tokens": 10,
         },
