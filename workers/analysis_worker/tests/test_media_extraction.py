@@ -18,7 +18,7 @@ def _ref(path: str) -> str:
 
 def test_extract_data_url_writes_binary_asset(tmp_path: Path):
     store = FilesystemEvidenceStore(tmp_path)
-    ctx = MediaExtractionContext(store, "raw/2026/05/05/trace_1", "trace_1")
+    ctx = MediaExtractionContext(store, "file:///raw/2026/05/05/trace_1", "trace_1")
     png_data = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
     data_url = _data_url("image/png", png_data)
 
@@ -28,13 +28,13 @@ def test_extract_data_url_writes_binary_asset(tmp_path: Path):
     assert asset.object_type == "media_asset_000001"
     assert asset.media_type == "image/png"
     assert asset.size_bytes == len(png_data)
-    written = store.read_bytes(_ref("raw/2026/05/05/trace_1/media_asset_000001.bin"))
+    written = store.read_bytes("file:///raw/2026/05/05/trace_1/media_asset_000001.bin")
     assert written == png_data
 
 
 def test_extract_data_url_returns_replacement_mapping(tmp_path: Path):
     store = FilesystemEvidenceStore(tmp_path)
-    ctx = MediaExtractionContext(store, "raw/2026/05/05/trace_1", "trace_1")
+    ctx = MediaExtractionContext(store, "file:///raw/2026/05/05/trace_1", "trace_1")
     png_data = b"small image data"
     data_url = _data_url("image/png", png_data)
 
@@ -47,7 +47,7 @@ def test_extract_data_url_returns_replacement_mapping(tmp_path: Path):
 
 def test_extract_data_url_sequential_numbering(tmp_path: Path):
     store = FilesystemEvidenceStore(tmp_path)
-    ctx = MediaExtractionContext(store, "raw/2026/05/05/trace_1", "trace_1")
+    ctx = MediaExtractionContext(store, "file:///raw/2026/05/05/trace_1", "trace_1")
 
     asset1 = ctx.extract_data_url(_data_url("image/png", b"img1"), "image")
     asset2 = ctx.extract_data_url("data:audio/wav;base64," + base64.b64encode(b"aud1").decode(), "audio")
@@ -59,7 +59,7 @@ def test_extract_data_url_sequential_numbering(tmp_path: Path):
 
 def test_extract_data_url_skips_oversized(tmp_path: Path):
     store = FilesystemEvidenceStore(tmp_path)
-    ctx = MediaExtractionContext(store, "raw/2026/05/05/trace_1", "trace_1", max_bytes=10)
+    ctx = MediaExtractionContext(store, "file:///raw/2026/05/05/trace_1", "trace_1", max_bytes=10)
     big_payload = b"x" * 100
     data_url = _data_url("image/png", big_payload)
 
@@ -71,7 +71,7 @@ def test_extract_data_url_skips_oversized(tmp_path: Path):
 
 def test_extract_data_url_skips_invalid_base64(tmp_path: Path):
     store = FilesystemEvidenceStore(tmp_path)
-    ctx = MediaExtractionContext(store, "raw/2026/05/05/trace_1", "trace_1")
+    ctx = MediaExtractionContext(store, "file:///raw/2026/05/05/trace_1", "trace_1")
 
     asset = ctx.extract_data_url("data:image/png;base64,!!!invalid!!!", "image")
 
@@ -81,7 +81,7 @@ def test_extract_data_url_skips_invalid_base64(tmp_path: Path):
 
 def test_extract_raw_base64_writes_binary_asset(tmp_path: Path):
     store = FilesystemEvidenceStore(tmp_path)
-    ctx = MediaExtractionContext(store, "raw/2026/05/05/trace_1", "trace_1")
+    ctx = MediaExtractionContext(store, "file:///raw/2026/05/05/trace_1", "trace_1")
     raw_b64 = base64.b64encode(b"audio data").decode("ascii")
 
     asset = ctx.extract_raw_base64(raw_b64, "audio/wav", "audio")
@@ -94,13 +94,13 @@ def test_extract_raw_base64_writes_binary_asset(tmp_path: Path):
 
 def test_apply_replacements_modifies_json(tmp_path: Path):
     store = FilesystemEvidenceStore(tmp_path)
-    evidence_dir = "raw/2026/05/05/trace_1"
+    evidence_dir = "file:///raw/2026/05/05/trace_1"
     ctx = MediaExtractionContext(store, evidence_dir, "trace_1")
     data_url = _data_url("image/png", b"img")
     ctx.extract_data_url(data_url, "image")
 
     original_json = '{"url":"' + data_url + '"}'
-    ref = _ref(f"{evidence_dir}/request_body.bin")
+    ref = f"{evidence_dir}/request_body.bin"
     store.write_text(ref, original_json)
     ctx.apply_replacements(ref)
 
@@ -111,8 +111,8 @@ def test_apply_replacements_modifies_json(tmp_path: Path):
 
 def test_apply_replacements_noop_when_empty(tmp_path: Path):
     store = FilesystemEvidenceStore(tmp_path)
-    ctx = MediaExtractionContext(store, "raw/2026/05/05/trace_1", "trace_1")
-    ref = _ref("raw/2026/05/05/trace_1/request_body.bin")
+    ctx = MediaExtractionContext(store, "file:///raw/2026/05/05/trace_1", "trace_1")
+    ref = "file:///raw/2026/05/05/trace_1/request_body.bin"
     original = '{"model":"gpt-4.1"}'
     store.write_text(ref, original)
 

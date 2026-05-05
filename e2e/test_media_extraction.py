@@ -62,8 +62,15 @@ WORKER_DIR = os.path.join(
 )
 MODEL = os.environ.get("TEST_MODEL", "gpt-5.2")
 
-# Minimal valid 1x1 PNG (8 bytes)
-SMALL_PNG = b"\x89PNG\r\n\x1a\n"
+# Minimal valid 1x1 RGBA PNG (70 bytes)
+SMALL_PNG = (
+    b"\x89PNG\r\n\x1a\n"
+    b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+    b"\x00\x00\x00\rIDATx\x9cc\xf8\xcf\xc0\xf0\x1f"
+    b"\x00\x05\x00\x01\xff\x89\x99=\x1d"
+    b"\x00\x00\x00\x00IEND\xaeB`\x82"
+)
 SMALL_PNG_B64 = base64.b64encode(SMALL_PNG).decode("ascii")
 DATA_URL = f"data:image/png;base64,{SMALL_PNG_B64}"
 

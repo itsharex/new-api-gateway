@@ -460,7 +460,7 @@ def test_normalizes_openai_responses_sse_output_text_delta():
 
 def test_extracts_base64_data_url_to_media_asset(tmp_path: Path):
     store = FilesystemEvidenceStore(tmp_path)
-    evidence_dir = "raw/2026/05/05/trace_1"
+    evidence_dir = "file:///raw/2026/05/05/trace_1"
     trace_job = job(protocol_family="openai_chat", route_pattern="/v1/chat/completions")
     png_data = b"\x89PNG\r\n\x1a\n"
     data_url = "data:image/png;base64," + base64.b64encode(png_data).decode()
@@ -476,7 +476,7 @@ def test_extracts_base64_data_url_to_media_asset(tmp_path: Path):
         ]
     }
     request_body = json.dumps(request)
-    store.write_text(f"file:///{evidence_dir}/request_body.bin", request_body)
+    store.write_text(f"{evidence_dir}/request_body.bin", request_body)
     ctx = MediaExtractionContext(store, evidence_dir, "trace_1")
 
     messages, _ = normalize_json_trace(trace_job, request_body, "{}", extraction_context=ctx)
@@ -485,7 +485,7 @@ def test_extracts_base64_data_url_to_media_asset(tmp_path: Path):
     assert image_msg.protocol_item_type == "base64_media_extracted"
     assert len(ctx.assets) == 1
     assert ctx.assets[0].media_type == "image/png"
-    assert store.read_bytes(f"file:///{evidence_dir}/media_asset_000001.bin") == png_data
+    assert store.read_bytes(f"{evidence_dir}/media_asset_000001.bin") == png_data
     assert len(ctx.replacements) == 1
     assert ctx.replacements[0] == (data_url, "audit-media:media_asset_000001")
 
@@ -511,7 +511,7 @@ def test_extracts_base64_without_extraction_context_returns_base64_media():
 
 def test_extracts_openai_input_audio_raw_base64(tmp_path: Path):
     store = FilesystemEvidenceStore(tmp_path)
-    evidence_dir = "raw/2026/05/05/trace_1"
+    evidence_dir = "file:///raw/2026/05/05/trace_1"
     trace_job = job(protocol_family="openai_chat", route_pattern="/v1/chat/completions")
     audio_data = b"RIFF\x00\x00\x00\x00WAVEfmt "
     raw_b64 = base64.b64encode(audio_data).decode()
@@ -537,7 +537,7 @@ def test_extracts_openai_input_audio_raw_base64(tmp_path: Path):
 
 def test_extracts_gemini_inline_data_base64(tmp_path: Path):
     store = FilesystemEvidenceStore(tmp_path)
-    evidence_dir = "raw/2026/05/05/trace_1"
+    evidence_dir = "file:///raw/2026/05/05/trace_1"
     trace_job = job(protocol_family="gemini", route_pattern="/v1beta/models/gemini:generateContent")
     img_data = b"PNG image bytes here"
     raw_b64 = base64.b64encode(img_data).decode()
@@ -564,7 +564,7 @@ def test_extracts_gemini_inline_data_base64(tmp_path: Path):
 
 def test_extracts_claude_source_base64_image(tmp_path: Path):
     store = FilesystemEvidenceStore(tmp_path)
-    evidence_dir = "raw/2026/05/05/trace_1"
+    evidence_dir = "file:///raw/2026/05/05/trace_1"
     trace_job = job(protocol_family="claude_messages", route_pattern="/v1/messages")
     png_data = b"\x89PNG\r\n\x1a\n"
     raw_b64 = base64.b64encode(png_data).decode()
@@ -588,7 +588,7 @@ def test_extracts_claude_source_base64_image(tmp_path: Path):
         ],
     }
     request_body = json.dumps(request)
-    store.write_text(f"file:///{evidence_dir}/request_body.bin", request_body)
+    store.write_text(f"{evidence_dir}/request_body.bin", request_body)
     ctx = MediaExtractionContext(store, evidence_dir, "trace_1")
 
     messages, _ = normalize_json_trace(trace_job, request_body, '{"content":[{"type":"text","text":"A diagram."}]}', extraction_context=ctx)
@@ -597,7 +597,7 @@ def test_extracts_claude_source_base64_image(tmp_path: Path):
     assert image_msg.protocol_item_type == "base64_media_extracted"
     assert len(ctx.assets) == 1
     assert ctx.assets[0].media_type == "image/png"
-    assert store.read_bytes(f"file:///{evidence_dir}/media_asset_000001.bin") == png_data
+    assert store.read_bytes(f"{evidence_dir}/media_asset_000001.bin") == png_data
     assert len(ctx.replacements) == 1
     assert ctx.replacements[0] == (raw_b64, "audit-media:media_asset_000001")
 

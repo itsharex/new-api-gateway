@@ -119,7 +119,7 @@ def process_trace(
 ) -> dict:
     extraction_context: MediaExtractionContext | None = None
     if evidence_store and job.request_raw_ref:
-        evidence_dir = str(Path(job.request_raw_ref).parent)
+        evidence_dir = job.request_raw_ref.rsplit("/", 1)[0]
         extraction_context = MediaExtractionContext(evidence_store, evidence_dir, job.trace_id)
     messages, results = normalize_json_trace(job, request_body, response_body, extraction_context)
     work_relevance = classify_work_relevance(job, messages, list(contexts or []))

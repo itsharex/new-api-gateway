@@ -68,8 +68,15 @@ WORKER_DIR = os.path.join(
 )
 MODEL = os.environ.get("TEST_MODEL", "gpt-5.2")
 
-# Minimal valid 1x1 PNG (8 bytes)
-SMALL_PNG = b"\x89PNG\r\n\x1a\n"
+# Minimal valid 1x1 RGBA PNG (70 bytes)
+SMALL_PNG = (
+    b"\x89PNG\r\n\x1a\n"
+    b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+    b"\x00\x00\x00\rIDATx\x9cc\xf8\xcf\xc0\xf0\x1f"
+    b"\x00\x05\x00\x01\xff\x89\x99=\x1d"
+    b"\x00\x00\x00\x00IEND\xaeB`\x82"
+)
 SMALL_PNG_B64 = base64.b64encode(SMALL_PNG).decode("ascii")
 DATA_URL = f"data:image/png;base64,{SMALL_PNG_B64}"
 
@@ -234,7 +241,7 @@ def assert_oss_media_assets(conn: psycopg.Connection, trace_id: str) -> None:
     rows = conn.execute(
         "SELECT object_type, object_ref, content_type, size_bytes, storage_backend "
         "FROM raw_evidence_objects "
-        "WHERE trace_id = %s AND object_type LIKE 'media_asset_%'",
+        "WHERE trace_id = %s AND object_type LIKE 'media_asset_%%'",
         (trace_id,),
     ).fetchall()
     check("oss_media_assets.exists", len(rows) > 0, f"no media_asset rows for trace_id={trace_id}")
@@ -263,19 +270,19 @@ def assert_oss_media_content(conn: psycopg.Connection, trace_id: str) -> None:
         (trace_id,),
     ).fetchone()
     if row is None:
-        check("oss_media_content", "asset_found", False, "no media_asset_000001 row")
+        check("oss_media_content.asset_found", False, "no media_asset_000001 row")
         return
     asset_ref = row[0]
     try:
         data = _read_oss_object(asset_ref)
         check(
-            "oss_media_content", "content_matches",
+            "oss_media_content.content_matches",
             data == SMALL_PNG,
             f"size={len(data)} expected={len(SMALL_PNG)}",
         )
         print(f"  media content: {len(data)} bytes, matches original PNG={data == SMALL_PNG}")
     except oss2.exceptions.NoSuchKey:
-        check("oss_media_content", "object_exists", False, f"object {asset_ref} not found in OSS")
+        check("oss_media_content.object_exists", False, f"object {asset_ref} not found in OSS")
 
 
 def assert_oss_evidence_rewritten(conn: psycopg.Connection, trace_id: str) -> None:
@@ -287,24 +294,24 @@ def assert_oss_evidence_rewritten(conn: psycopg.Connection, trace_id: str) -> No
         (trace_id,),
     ).fetchone()
     if row is None:
-        check("oss_evidence_rewrite", "request_body_found", False, "no request_body row")
+        check("oss_evidence_rewrite.request_body_found", False, "no request_body row")
         return
     request_ref = row[0]
     try:
         body = _read_oss_object(request_ref).decode("utf-8")
         check(
-            "oss_evidence_rewrite", "contains_audit_media_ref",
+            "oss_evidence_rewrite.contains_audit_media_ref",
             "audit-media:media_asset_000001" in body,
             "expected 'audit-media:media_asset_000001' in evidence JSON",
         )
         check(
-            "oss_evidence_rewrite", "base64_removed",
+            "oss_evidence_rewrite.base64_removed",
             SMALL_PNG_B64 not in body,
             "base64 data should be replaced by reference",
         )
         print(f"  request_body evidence: {len(body)} chars, audit-media ref present")
     except oss2.exceptions.NoSuchKey:
-        check("oss_evidence_rewrite", "object_readable", False, f"object {request_ref} not found in OSS")
+        check("oss_evidence_rewrite.object_readable", False, f"object {request_ref} not found in OSS")
 
 
 def assert_sha256_updated(conn: psycopg.Connection, trace_id: str) -> None:

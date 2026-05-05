@@ -69,8 +69,8 @@ echo "=== Starting Gateway with OSS backend ==="
     OSS_BUCKET="$OSS_BUCKET" \
     OSS_ACCESS_KEY_ID="$OSS_ACCESS_KEY_ID" \
     OSS_ACCESS_KEY_SECRET="$OSS_ACCESS_KEY_SECRET" \
-    go run ./cmd/audit-gateway &>/tmp/oss-e2e-gateway.log &
-)
+    go run ./cmd/audit-gateway &>/tmp/oss-e2e-gateway.log
+) &
 GATEWAY_PID=$!
 echo "  Gateway PID: $GATEWAY_PID"
 
@@ -115,12 +115,12 @@ done
 
 echo ""
 echo "=== Running OSS pipeline e2e test ==="
-cd "$REPO_ROOT"
-uv run e2e/test_gateway_worker_pipeline_oss.py
+cd "$REPO_ROOT/e2e"
+uv run test_gateway_worker_pipeline_oss.py
 
 echo ""
 echo "=== Running OSS media extraction e2e test ==="
-uv run e2e/test_media_extraction_oss.py
+uv run test_media_extraction_oss.py
 
 echo ""
 echo "=== All OSS e2e tests passed ==="
