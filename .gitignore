@@ -6,3 +6,4 @@ workers/analysis_worker/uv.lock
 .env
 .claude/
 .env.local
+audit-gateway
