@@ -1,5 +1,7 @@
+from unittest.mock import MagicMock
+
 from models import ContextCatalogEntry, NormalizedMessage, TraceCapturedJob
-from work_relevance import ANALYZER_VERSION, classify_work_relevance
+from work_relevance import ANALYZER_VERSION, classify_work_relevance, classify_work_relevance_with_embeddings
 
 
 def job(**overrides):
@@ -88,3 +90,46 @@ def test_empty_messages_are_unknown_and_low_confidence():
     assert assessment.personal_use_score == 0.0
     assert assessment.confidence == 0.1
     assert assessment.needs_review is True
+
+
+def test_embedding_match_overrides_keyword_classification():
+    mock_embedding_client = MagicMock()
+    mock_embedding_client.embed.return_value = [0.1] * 1024
+
+    mock_connection = MagicMock()
+    mock_cursor = MagicMock()
+    mock_connection.cursor.return_value = mock_cursor
+    mock_cursor.fetchall.return_value = [
+        ("repo", "Backend API Development", 0.85, ["coding"], ["gpt-4.1"]),
+    ]
+
+    test_job = job()
+    messages = [message("Help me implement a REST API endpoint for user authentication")]
+
+    result = classify_work_relevance_with_embeddings(
+        test_job, messages, [], mock_embedding_client, mock_connection,
+    )
+
+    assert result.task_category == "coding"
+    assert result.work_related_score >= 0.7
+    assert result.confidence >= 0.7
+
+
+def test_embedding_falls_back_to_keywords_when_no_match():
+    mock_embedding_client = MagicMock()
+    mock_embedding_client.embed.return_value = [0.1] * 1024
+
+    mock_connection = MagicMock()
+    mock_cursor = MagicMock()
+    mock_connection.cursor.return_value = mock_cursor
+    mock_cursor.fetchall.return_value = []  # No matches
+
+    test_job = job()
+    messages = [message("Help me debug this error in my code")]
+
+    result = classify_work_relevance_with_embeddings(
+        test_job, messages, [], mock_embedding_client, mock_connection,
+    )
+
+    # Falls back to keyword classification
+    assert result.task_category == "debugging"

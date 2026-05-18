@@ -149,3 +149,59 @@ def _match_contexts(text: str, contexts: list[ContextCatalogEntry]) -> list[dict
                 "matched_terms": matched_terms,
             })
     return matches
+
+
+def classify_work_relevance_with_embeddings(
+    job,
+    messages,
+    contexts,
+    embedding_client,
+    pg_connection,
+) -> WorkRelevanceAssessment:
+    text = _combined_text(messages)
+    if not text or embedding_client is None or pg_connection is None:
+        return classify_work_relevance(job, messages, contexts)
+
+    trace_embedding = embedding_client.embed(text)
+    embedding_str = "[" + ",".join(str(v) for v in trace_embedding) + "]"
+
+    cursor = pg_connection.cursor()
+    cursor.execute(
+        """
+        SELECT
+            cc.context_type,
+            cc.name,
+            1 - (cc.embedding <=> %s::vector) AS similarity,
+            cc.expected_task_categories,
+            cc.expected_models
+        FROM context_catalog cc
+        WHERE cc.active = true
+          AND cc.embedding IS NOT NULL
+        ORDER BY cc.embedding <=> %s::vector
+        LIMIT 3
+        """,
+        (embedding_str, embedding_str),
+    )
+    matches = cursor.fetchall()
+
+    if matches and matches[0][2] > 0.75:
+        context_type, name, similarity, categories, models = matches[0]
+        category = categories[0] if categories else "unknown"
+        return WorkRelevanceAssessment(
+            trace_id=job.trace_id,
+            task_category=category,
+            work_related_score=min(similarity, 1.0),
+            personal_use_score=max(1.0 - similarity, 0.0),
+            confidence=min(similarity, 1.0),
+            matched_context=[{
+                "type": context_type,
+                "name": name,
+                "similarity": similarity,
+                "source": "embedding",
+            }],
+            evidence=[f"Semantic match with catalog entry '{name}' (similarity={similarity:.3f})."],
+            needs_review=False,
+            analyzer_version=ANALYZER_VERSION + "+emb",
+        )
+
+    return classify_work_relevance(job, messages, contexts)
