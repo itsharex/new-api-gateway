@@ -368,6 +368,7 @@ def run_worker_once(*, postgres_dsn: str, evidence_dir: str) -> dict:
     env = {
         **os.environ,
         "POSTGRES_DSN": postgres_dsn,
+        "EVIDENCE_STORAGE_BACKEND": "filesystem",
         "EVIDENCE_STORAGE_DIR": evidence_dir,
         "REDIS_URL": REDIS_URL,
     }

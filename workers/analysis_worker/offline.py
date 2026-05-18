@@ -52,7 +52,7 @@ def run_offline_batch(connection, lookback_days: int = 7) -> dict:
             1 AS distinct_models_24h,
             trace_id,
             token_fingerprint,
-            username,
+            username_snapshot,
             model_requested,
             route_pattern,
             request_started_at
@@ -83,7 +83,7 @@ def run_offline_batch(connection, lookback_days: int = 7) -> dict:
                 "distinct_models_24h": row[6],
                 "trace_id": row[7],
                 "token_fingerprint": row[8],
-                "username": row[9],
+                "username": row[9] or "",
                 "model_requested": row[10],
                 "route_pattern": row[11],
                 "request_started_at": row[12],
