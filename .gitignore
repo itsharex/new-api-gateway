@@ -7,3 +7,4 @@ workers/analysis_worker/uv.lock
 .claude/
 .env.local
 audit-gateway
+.gitnexus
