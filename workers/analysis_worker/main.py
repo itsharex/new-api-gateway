@@ -116,13 +116,21 @@ def process_trace(
     contexts: list[ContextCatalogEntry] | None = None,
     evidence_store: EvidenceStore | None = None,
     storage_backend: str = "filesystem",
+    embedding_client=None,
+    pg_connection=None,
 ) -> dict:
     extraction_context: MediaExtractionContext | None = None
     if evidence_store and job.request_raw_ref:
         evidence_dir = job.request_raw_ref.rsplit("/", 1)[0]
         extraction_context = MediaExtractionContext(evidence_store, evidence_dir, job.trace_id)
     messages, results = normalize_json_trace(job, request_body, response_body, extraction_context)
-    work_relevance = classify_work_relevance(job, messages, list(contexts or []))
+    if embedding_client and pg_connection:
+        from work_relevance import classify_work_relevance_with_embeddings
+        work_relevance = classify_work_relevance_with_embeddings(
+            job, messages, list(contexts or []), embedding_client, pg_connection,
+        )
+    else:
+        work_relevance = classify_work_relevance(job, messages, list(contexts or []))
     results.append(work_relevance.to_analysis_result())
     aggregates = aggregate_deltas(job)
     load_analysis_context = getattr(repository, "analysis_context_for", None)
