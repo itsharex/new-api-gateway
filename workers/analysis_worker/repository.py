@@ -83,11 +83,53 @@ class PostgresAnalysisRepository:
             ),
         )
         client_hash_row = cursor.fetchone()
+        cursor.execute(
+            """
+            SELECT metric_type, metric_value, metadata_json, computed_at
+            FROM baseline_cache
+            WHERE fingerprint_key = %s AND expires_at > now()
+            """,
+            (job.token_fingerprint,),
+        )
+        baseline_rows = cursor.fetchall()
+
+        baseline_fields = {
+            "hourly_tokens_median": "hourly_tokens_baseline",
+            "hourly_tokens_mad": "hourly_tokens_mad",
+            "short_window_baseline": "short_window_baseline",
+            "short_window_mad": "short_window_mad",
+            "trace_tokens_p95": "trace_tokens_p95",
+            "completion_tokens_p95": "completion_tokens_p95",
+            "off_hours_baseline": "off_hours_baseline",
+            "off_hours_mad": "off_hours_mad",
+        }
+        model_prefix = "model_hourly_median_"
+
+        baseline_kwargs: dict = {}
+        model_baselines: dict[str, float] = {}
+        max_computed_at = None
+
+        for metric_type, metric_value, _metadata_json, computed_at in baseline_rows:
+            if metric_type in baseline_fields:
+                baseline_kwargs[baseline_fields[metric_type]] = metric_value
+            elif metric_type.startswith(model_prefix):
+                model_name = metric_type[len(model_prefix):]
+                model_baselines[model_name] = metric_value
+            if computed_at is not None:
+                if max_computed_at is None or computed_at > max_computed_at:
+                    max_computed_at = computed_at
+
+        if model_baselines:
+            baseline_kwargs["model_baselines"] = model_baselines
+        if max_computed_at is not None:
+            baseline_kwargs["baseline_computed_at"] = max_computed_at.isoformat()
+
         return AnalysisContext(
             daily_tokens_before=int(daily_row[0] if daily_row else 0),
             short_window_tokens_before=int(short_window_row[0] if short_window_row else 0),
             distinct_client_hashes_1h=int(client_hash_row[0] if client_hash_row else 0),
             local_timezone_offset_hours=8,
+            **baseline_kwargs,
         )
 
     def save_trace_analysis(

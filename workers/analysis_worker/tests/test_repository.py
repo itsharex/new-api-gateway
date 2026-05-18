@@ -14,12 +14,13 @@ from repository import PostgresAnalysisRepository
 
 
 class SemanticCursor:
-    def __init__(self, rows_by_trace=None, aggregate_rows=None, client_rows=None, distinct_client_hashes=0):
+    def __init__(self, rows_by_trace=None, aggregate_rows=None, client_rows=None, distinct_client_hashes=0, baseline_rows=None):
         self.executed = []
         self.rows_by_trace = list(rows_by_trace or [])
         self.aggregate_rows = list(aggregate_rows or [])
         self.client_rows = list(client_rows or [])
         self.distinct_client_hashes = distinct_client_hashes
+        self.baseline_rows = list(baseline_rows or [])
         self.next_row = None
 
     def execute(self, query, params):
@@ -61,6 +62,11 @@ class SemanticCursor:
     def fetchone(self):
         return self.next_row
 
+    def fetchall(self):
+        if "baseline_cache" in (self.executed[-1][0] if self.executed else ""):
+            return self.baseline_rows
+        return []
+
 
 class SemanticConnection:
     def __init__(self, cursor):
@@ -75,9 +81,10 @@ def _parse_time(value):
 
 
 class FakeCursor:
-    def __init__(self, fetch_values=None):
+    def __init__(self, fetch_values=None, fetchall_rows=None):
         self.executed = []
         self.fetch_values = list(fetch_values or [])
+        self.fetchall_rows = list(fetchall_rows or [])
 
     def execute(self, query, params):
         self.executed.append((query, params))
@@ -87,10 +94,15 @@ class FakeCursor:
             return None
         return self.fetch_values.pop(0)
 
+    def fetchall(self):
+        if not self.fetchall_rows:
+            return []
+        return self.fetchall_rows.pop(0)
+
 
 class FakeConnection:
-    def __init__(self, fetch_values=None):
-        self.cursor_obj = FakeCursor(fetch_values)
+    def __init__(self, fetch_values=None, fetchall_rows=None):
+        self.cursor_obj = FakeCursor(fetch_values, fetchall_rows)
         self.committed = False
 
     def cursor(self):
@@ -553,3 +565,109 @@ def test_repository_updates_request_body_sha256():
     ]
     assert len(sha_queries) == 1
     assert sha_queries[0][1] == ("abc123sha256", "trace_1")
+
+
+def test_analysis_context_for_loads_baselines_from_cache():
+    from datetime import datetime, timezone
+
+    computed = datetime(2026, 5, 18, 12, 0, 0, tzinfo=timezone.utc)
+    baseline_rows = [
+        ("trace_tokens_p95", 25000.0, {}, computed),
+        ("hourly_tokens_median", 3000.0, {}, computed),
+        ("model_hourly_median_o1-pro", 600.0, {}, computed),
+    ]
+    conn = FakeConnection(
+        fetch_values=[(0,), (0,), (0,)],
+        fetchall_rows=[baseline_rows],
+    )
+    repo = PostgresAnalysisRepository(conn)
+    job = TraceCapturedJob(
+        type="trace_captured",
+        trace_id="t1",
+        route_pattern="/v1/chat/completions",
+        protocol_family="openai_chat",
+        capture_mode="raw_and_normalized",
+        username="alice",
+        token_fingerprint="tkfp_raw",
+        request_started_at="2026-05-18T10:00:00Z",
+    )
+
+    context = repo.analysis_context_for(job)
+
+    assert context.trace_tokens_p95 == 25000.0
+    assert context.hourly_tokens_baseline == 3000.0
+    assert context.model_baselines == {"o1-pro": 600.0}
+    assert context.baseline_computed_at is not None
+
+    queries = "\n".join(query for query, _ in conn.cursor_obj.executed)
+    assert "baseline_cache" in queries
+    assert "expires_at > now()" in queries
+
+
+def test_analysis_context_for_ignores_expired_baselines():
+    conn = FakeConnection(
+        fetch_values=[(0,), (0,), (0,)],
+        fetchall_rows=[[]],
+    )
+    repo = PostgresAnalysisRepository(conn)
+    job = TraceCapturedJob(
+        type="trace_captured",
+        trace_id="t1",
+        route_pattern="/v1/chat/completions",
+        protocol_family="openai_chat",
+        capture_mode="raw_and_normalized",
+        username="alice",
+        token_fingerprint="tkfp_raw",
+        request_started_at="2026-05-18T10:00:00Z",
+    )
+
+    context = repo.analysis_context_for(job)
+
+    assert context.trace_tokens_p95 is None
+    assert context.baseline_computed_at is None
+
+
+def test_analysis_context_for_maps_all_baseline_metric_types():
+    from datetime import datetime, timezone
+
+    computed = datetime(2026, 5, 18, 12, 0, 0, tzinfo=timezone.utc)
+    baseline_rows = [
+        ("hourly_tokens_median", 1000.0, {}, computed),
+        ("hourly_tokens_mad", 200.0, {}, computed),
+        ("short_window_baseline", 500.0, {}, computed),
+        ("short_window_mad", 50.0, {}, computed),
+        ("trace_tokens_p95", 8000.0, {}, computed),
+        ("completion_tokens_p95", 3000.0, {}, computed),
+        ("off_hours_baseline", 400.0, {}, computed),
+        ("off_hours_mad", 80.0, {}, computed),
+        ("model_hourly_median_gpt-4.1", 700.0, {}, computed),
+        ("model_hourly_median_o3", 300.0, {}, computed),
+    ]
+    conn = FakeConnection(
+        fetch_values=[(0,), (0,), (0,)],
+        fetchall_rows=[baseline_rows],
+    )
+    repo = PostgresAnalysisRepository(conn)
+    job = TraceCapturedJob(
+        type="trace_captured",
+        trace_id="t1",
+        route_pattern="/v1/chat/completions",
+        protocol_family="openai_chat",
+        capture_mode="raw_and_normalized",
+        username="alice",
+        token_fingerprint="tkfp_raw",
+        request_started_at="2026-05-18T10:00:00Z",
+    )
+
+    context = repo.analysis_context_for(job)
+
+    assert context.hourly_tokens_baseline == 1000.0
+    assert context.hourly_tokens_mad == 200.0
+    assert context.short_window_baseline == 500.0
+    assert context.short_window_mad == 50.0
+    assert context.trace_tokens_p95 == 8000.0
+    assert context.completion_tokens_p95 == 3000.0
+    assert context.off_hours_baseline == 400.0
+    assert context.off_hours_mad == 80.0
+    assert context.model_baselines == {"gpt-4.1": 700.0, "o3": 300.0}
+    assert context.baseline_computed_at is not None
