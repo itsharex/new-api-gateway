@@ -51,7 +51,7 @@ new-api 项目的前端网关代理层，用于记录所有访问 new-api 的请
 2. 从证据库读取证据（文件系统或 OSS）
 3. 协议归一化（OpenAI / Claude / Gemini）+ base64 媒体提取
 4. 工作相关性分类
-5. 运行 12+ 异常检测规则
+5. 运行 13+ 异常检测规则
 6. 用量聚合（小时 + 天级别 upsert）
 7. 持久化所有分析结果
 
@@ -59,35 +59,56 @@ new-api 项目的前端网关代理层，用于记录所有访问 new-api 的请
 
 ### 前置条件
 
-- Go 1.26+
-- Python 3.11+（使用 uv 管理依赖）
 - Docker & Docker Compose
 
-### 启动依赖服务
+### Docker Compose 部署（生产推荐）
 
 ```bash
-docker compose -f deploy/docker-compose.yml up -d
-docker compose -f deploy/docker-compose.yml run --rm migrate
+# 1. 配置环境变量
+cp .env.docker .env.docker.local
+# 编辑 .env.docker.local，填入 NEW_API_BASE_URL、AUDIT_HMAC_SECRET、NEW_API_POSTGRES_DSN
+
+# 2. 启动所有服务
+docker compose -f deploy/docker-compose.yml --env-file .env.docker.local up -d
+
+# 3. 运行数据库迁移（首次部署）
+docker compose -f deploy/docker-compose.yml --env-file .env.docker.local --profile tools run --rm migrate
+
+# 4. 按需启动定时批处理和嵌入服务
+docker compose -f deploy/docker-compose.yml --env-file .env.docker.local --profile tools up -d analysis-batch embedding
 ```
 
-### 配置
+#### 环境变量
 
-复制 `.env.example` 为 `.env`，填入以下必需变量：
+复制 `.env.docker` 为 `.env.docker.local`，填入以下必需变量：
 
 | 变量 | 说明 |
 |------|------|
-| `NEW_API_BASE_URL` | 上游 new-api 实例地址 |
+| `NEW_API_BASE_URL` | 上游 new-api 实例地址（容器可达的内网 IP 或域名） |
 | `AUDIT_HMAC_SECRET` | HMAC 密钥（≥32 字符） |
-| `EVIDENCE_STORAGE_BACKEND` | 证据存储后端：`filesystem` 或 `oss` |
-| `EVIDENCE_STORAGE_DIR` | 证据文件存储路径（`filesystem` 时必需） |
-| `POSTGRES_DSN` | 审计网关数据库 DSN |
 | `NEW_API_POSTGRES_DSN` | new-api 数据库 DSN（身份解析用） |
+| `AUDIT_GATEWAY_PORT` | 网关对外端口（默认 `8080`） |
+| `EVIDENCE_STORAGE_BACKEND` | 证据存储后端：`filesystem`（默认）或 `oss` |
+| `EVIDENCE_HOST_DIR` | 证据文件宿主机目录（默认 `./var/evidence`） |
 
 OSS 后端额外变量（`EVIDENCE_STORAGE_BACKEND=oss` 时必需）：`OSS_ENDPOINT`、`OSS_BUCKET`、`OSS_ACCESS_KEY_ID`、`OSS_ACCESS_KEY_SECRET`。
 
-### 运行
+### 本地开发
+
+前置条件：Go 1.26+、Python 3.11+（uv）、Docker。
 
 ```bash
+# 一键启动（基础设施 Docker + Go/Python 本地进程）
+bash start.sh
+```
+
+或手动启动：
+
+```bash
+# 启动依赖服务
+docker compose -f deploy/docker-compose.yml up -d
+docker compose -f deploy/docker-compose.yml run --rm migrate
+
 # Go 网关
 make run
 
@@ -96,6 +117,8 @@ cd workers/analysis_worker
 uv sync
 uv run python main.py
 ```
+
+本地开发环境变量参考 `.env.example`。
 
 ### 测试
 

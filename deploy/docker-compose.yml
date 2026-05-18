@@ -1,6 +1,7 @@
 name: new-api-gateway
 
 services:
+  # ── Infrastructure ─────────────────────────────────
   postgres:
     image: postgres:16
     environment:
@@ -28,6 +29,54 @@ services:
       interval: 2s
       timeout: 5s
       retries: 20
+
+  # ── Core services (production) ─────────────────────
+  audit-gateway:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${AUDIT_GATEWAY_PORT:-8080}:8080"
+    environment:
+      AUDIT_GATEWAY_LISTEN_ADDR: ":8080"
+      NEW_API_BASE_URL: ${NEW_API_BASE_URL:?NEW_API_BASE_URL is required}
+      AUDIT_HMAC_SECRET: ${AUDIT_HMAC_SECRET:?AUDIT_HMAC_SECRET is required}
+      EVIDENCE_STORAGE_BACKEND: ${EVIDENCE_STORAGE_BACKEND:-filesystem}
+      EVIDENCE_STORAGE_DIR: /evidence
+      POSTGRES_DSN: ${AUDIT_GW_POSTGRES_DSN:-postgres://audit:audit@postgres:5432/audit_gateway?sslmode=disable}
+      NEW_API_POSTGRES_DSN: ${NEW_API_POSTGRES_DSN:?NEW_API_POSTGRES_DSN is required}
+      REDIS_ADDR: redis:6379
+    volumes:
+      - ${EVIDENCE_HOST_DIR:-./var/evidence}:/evidence
+    restart: unless-stopped
+  analysis-worker:
+    image: ghcr.io/astral-sh/uv:python3.11-bookworm
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    working_dir: /workspace/workers/analysis_worker
+    environment:
+      EVIDENCE_STORAGE_BACKEND: filesystem
+      EVIDENCE_STORAGE_DIR: /evidence
+      POSTGRES_DSN: ${ANALYSIS_WORKER_POSTGRES_DSN:-postgres://audit:audit@postgres:5432/audit_gateway?sslmode=disable}
+      REDIS_URL: redis://redis:6379/0
+      PYTHONDONTWRITEBYTECODE: "1"
+      UV_CACHE_DIR: /tmp/uv-cache
+      UV_PROJECT_ENVIRONMENT: /tmp/analysis-worker-venv
+    volumes:
+      - ..:/workspace
+      - ${EVIDENCE_HOST_DIR:-./var/evidence}:/evidence
+    command: ["sh", "-c", "uv sync --quiet && exec uv run python main.py"]
+    restart: unless-stopped
+
+  # ── On-demand services ─────────────────────────────
   migrate:
     image: postgres:16
     profiles:
@@ -45,27 +94,6 @@ services:
         echo "applying $$f";
         psql -h postgres -U audit -d "$$POSTGRES_DB" -v ON_ERROR_STOP=1 -f "$$f";
       done'
-  analysis-worker:
-    image: ghcr.io/astral-sh/uv:python3.11-bookworm
-    profiles:
-      - tools
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    working_dir: /workspace/workers/analysis_worker
-    environment:
-      EVIDENCE_STORAGE_BACKEND: filesystem
-      EVIDENCE_STORAGE_DIR: /evidence
-      POSTGRES_DSN: ${ANALYSIS_WORKER_POSTGRES_DSN:-postgres://audit:audit@postgres:5432/audit_gateway?sslmode=disable}
-      REDIS_URL: redis://redis:6379/0
-      PYTHONDONTWRITEBYTECODE: "1"
-      UV_CACHE_DIR: /tmp/uv-cache
-      UV_PROJECT_ENVIRONMENT: /tmp/analysis-worker-venv
-    volumes:
-      - ..:/workspace
-      - ${EVIDENCE_STORAGE_DIR:-../var/e2e-evidence}:/evidence
   analysis-batch:
     image: ghcr.io/astral-sh/uv:python3.11-bookworm
     profiles:
@@ -92,8 +120,8 @@ services:
     profiles:
       - tools
     ports:
-      - "8081:8080"
-    command: --model-id BAAI/bge-m3 --port 8080
+      - "8081:80"
+    command: --model-id BAAI/bge-m3 --port 80
 volumes:
   audit-postgres:
   audit-redis:
