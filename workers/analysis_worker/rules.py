@@ -24,6 +24,13 @@ MISSING_TIMESTAMP_WINDOW_START = "1970-01-01T00:00:00+00:00"
 MISSING_TIMESTAMP_WINDOW_END = "1970-01-01T00:01:00+00:00"
 
 
+def _personalized(baseline, mad, default, k=3):
+    if baseline is None:
+        return default, None
+    effective_mad = mad if mad else baseline * 0.2
+    return baseline + k * effective_mad, baseline
+
+
 def detect_anomalies(
     job: TraceCapturedJob,
     messages: list[NormalizedMessage] | None = None,
@@ -59,76 +66,106 @@ def detect_anomalies(
             threshold_value=0,
             reason="identity resolver marked the token name snapshot as an invalid username",
         ))
-    if job.usage_total_tokens > HIGH_TRACE_TOKEN_THRESHOLD:
+    threshold, baseline = _personalized(context.trace_tokens_p95, None, HIGH_TRACE_TOKEN_THRESHOLD)
+    if context.trace_tokens_p95 is not None:
+        threshold = context.trace_tokens_p95
+        baseline = context.trace_tokens_p95
+    if job.usage_total_tokens > threshold:
         alerts.append(_anomaly(
             job,
             "high_trace_tokens",
             "medium",
             observed_value=job.usage_total_tokens,
-            threshold_value=HIGH_TRACE_TOKEN_THRESHOLD,
-            reason=f"single trace used {job.usage_total_tokens} tokens, exceeding {HIGH_TRACE_TOKEN_THRESHOLD}",
+            threshold_value=threshold,
+            reason=f"single trace used {job.usage_total_tokens} tokens, exceeding threshold {threshold:.0f}",
+            baseline_value=baseline,
         ))
     has_token_context = bool(job.token_fingerprint)
     if has_token_context:
+        daily_limit, baseline = _personalized(
+            context.hourly_tokens_baseline, None, context.daily_token_limit
+        )
+        if context.hourly_tokens_baseline is not None:
+            daily_limit = context.hourly_tokens_baseline * 24 * 2
+            baseline = context.hourly_tokens_baseline
         daily_total = context.daily_tokens_before + job.usage_total_tokens
-        if daily_total >= context.daily_token_limit:
+        if daily_total >= daily_limit:
             window = _day_window(job.request_started_at)
             alerts.append(_anomaly(
                 job,
                 "daily_token_limit_exceeded",
                 "high",
                 observed_value=daily_total,
-                threshold_value=context.daily_token_limit,
+                threshold_value=daily_limit,
                 reason=(
                     f"daily token total reached {daily_total}, meeting or exceeding "
-                    f"{context.daily_token_limit}"
+                    f"{daily_limit:.0f}"
                 ),
                 window_start=window[0],
                 window_end=window[1],
+                baseline_value=baseline,
             ))
+        sw_threshold, sw_baseline = _personalized(
+            context.short_window_baseline, context.short_window_mad,
+            context.short_window_token_threshold,
+        )
         short_window_total = context.short_window_tokens_before + job.usage_total_tokens
-        if short_window_total >= context.short_window_token_threshold:
+        if short_window_total >= sw_threshold:
             window = _relative_window(job.request_started_at, seconds=5 * 60)
             alerts.append(_anomaly(
                 job,
                 "short_window_token_spike",
                 "medium",
                 observed_value=short_window_total,
-                threshold_value=context.short_window_token_threshold,
+                threshold_value=sw_threshold,
                 reason=(
                     f"short-window token total reached {short_window_total}, meeting or exceeding "
-                    f"{context.short_window_token_threshold}"
+                    f"{sw_threshold:.0f}"
                 ),
                 window_start=window[0],
                 window_end=window[1],
+                baseline_value=sw_baseline,
             ))
+    model_threshold = context.expensive_model_token_threshold
+    model_baseline = None
+    if has_token_context and context.model_baselines:
+        model_baseline = context.model_baselines.get(job.model_requested.strip().lower())
+        if model_baseline is not None:
+            model_threshold = model_baseline
     if (
         job.model_requested.strip().lower() in context.expensive_model_set()
-        and job.usage_total_tokens >= context.expensive_model_token_threshold
+        and job.usage_total_tokens >= model_threshold
     ):
         alerts.append(_anomaly(
             job,
             "expensive_model_overuse",
             "high",
             observed_value=job.usage_total_tokens,
-            threshold_value=context.expensive_model_token_threshold,
+            threshold_value=model_threshold,
             reason=(
                 f"expensive model {job.model_requested} used {job.usage_total_tokens} tokens, "
-                "meeting or exceeding "
-                f"{context.expensive_model_token_threshold}"
+                f"meeting or exceeding {model_threshold:.0f}"
             ),
+            baseline_value=model_baseline,
         ))
-    if job.usage_completion_tokens >= context.long_output_token_threshold:
+    lo_threshold, lo_baseline = _personalized(
+        context.completion_tokens_p95, None, context.long_output_token_threshold,
+    )
+    if context.completion_tokens_p95 is not None:
+        lo_threshold = context.completion_tokens_p95
+        lo_baseline = context.completion_tokens_p95
+    if job.usage_completion_tokens >= lo_threshold:
         alerts.append(_anomaly(
             job,
             "long_output_anomaly",
             "medium",
             observed_value=job.usage_completion_tokens,
-            threshold_value=context.long_output_token_threshold,
+            threshold_value=lo_threshold,
             reason=(
                 f"completion used {job.usage_completion_tokens} tokens, meeting or exceeding "
-                f"{context.long_output_token_threshold}"
+                f"{lo_threshold:.0f}"
             ),
+            baseline_value=lo_baseline,
         ))
     repeated_prompt_count = _max_repeated_prompt_count(messages)
     if repeated_prompt_count >= context.repeated_prompt_threshold:
@@ -140,20 +177,25 @@ def detect_anomalies(
             threshold_value=context.repeated_prompt_threshold,
             reason=f"same request prompt appeared {repeated_prompt_count} times within one trace",
         ))
+    oh_threshold, oh_baseline = _personalized(
+        context.off_hours_baseline, context.off_hours_mad,
+        context.off_hours_token_threshold,
+    )
     if (
         _is_off_hours(job.request_started_at, context.local_timezone_offset_hours)
-        and job.usage_total_tokens >= context.off_hours_token_threshold
+        and job.usage_total_tokens >= oh_threshold
     ):
         alerts.append(_anomaly(
             job,
             "off_hours_high_usage",
             "medium",
             observed_value=job.usage_total_tokens,
-            threshold_value=context.off_hours_token_threshold,
+            threshold_value=oh_threshold,
             reason=(
                 f"off-hours trace used {job.usage_total_tokens} tokens, meeting or exceeding "
-                f"{context.off_hours_token_threshold}"
+                f"{oh_threshold:.0f}"
             ),
+            baseline_value=oh_baseline,
         ))
     if (
         has_token_context
@@ -321,6 +363,7 @@ def _anomaly(
     reason: str,
     window_start: str | None = None,
     window_end: str | None = None,
+    baseline_value: float | None = None,
 ) -> AnomalyAlert:
     default_window_start, default_window_end = _default_anomaly_window(job.request_started_at)
     resolved_window_start = window_start or default_window_start
@@ -338,7 +381,7 @@ def _anomaly(
         window_end=resolved_window_end,
         observed_value=observed_value,
         threshold_value=threshold_value,
-        baseline_value=None,
+        baseline_value=baseline_value,
         model=job.model_requested,
         route_pattern=job.route_pattern,
         sample_trace_ids=[job.trace_id],

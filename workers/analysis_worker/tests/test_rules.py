@@ -1,3 +1,5 @@
+import pytest
+
 from models import AnalysisContext, NormalizedMessage, TraceCapturedJob, WorkRelevanceAssessment
 from rules import DETECTOR_VERSION, detect_anomalies, detect_coverage_alerts, detect_work_relevance_anomalies
 
@@ -368,3 +370,76 @@ def test_malformed_request_timestamp_is_not_off_hours():
     ))
 
     assert [alert.anomaly_type for alert in alerts] == []
+
+
+def test_high_trace_tokens_uses_p95_baseline():
+    ctx = AnalysisContext(trace_tokens_p95=30000.0)
+    alerts = detect_anomalies(job(usage_total_tokens=35000), context=ctx)
+    high_trace = [a for a in alerts if a.anomaly_type == "high_trace_tokens"][0]
+    assert high_trace.threshold_value == 30000.0
+    assert high_trace.baseline_value == 30000.0
+
+
+def test_high_trace_tokens_falls_back_to_default_without_baseline():
+    ctx = AnalysisContext(trace_tokens_p95=None)
+    alerts = detect_anomalies(job(usage_total_tokens=25000), context=ctx)
+    high_trace = [a for a in alerts if a.anomaly_type == "high_trace_tokens"][0]
+    assert high_trace.threshold_value == 20000
+
+
+def test_short_window_uses_personalized_baseline():
+    ctx = AnalysisContext(
+        short_window_tokens_before=500,
+        short_window_baseline=800.0,
+        short_window_mad=200.0,
+    )
+    # short_window_baseline + 3 * MAD = 800 + 600 = 1400
+    # observed = 500 + 1000 = 1500 > 1400
+    alerts = detect_anomalies(job(usage_total_tokens=1000, request_started_at="2026-04-28T02:45:22Z"), context=ctx)
+    spike = [a for a in alerts if a.anomaly_type == "short_window_token_spike"][0]
+    assert spike.threshold_value == pytest.approx(1400.0)
+    assert spike.baseline_value == 800.0
+
+
+def test_long_output_uses_completion_p95_baseline():
+    ctx = AnalysisContext(completion_tokens_p95=12000.0)
+    alerts = detect_anomalies(job(usage_completion_tokens=13000, usage_total_tokens=15000), context=ctx)
+    long_out = [a for a in alerts if a.anomaly_type == "long_output_anomaly"][0]
+    assert long_out.threshold_value == 12000.0
+    assert long_out.baseline_value == 12000.0
+
+
+def test_expensive_model_uses_personalized_baseline():
+    ctx = AnalysisContext(model_baselines={"o1-pro": 800.0})
+    alerts = detect_anomalies(job(model_requested="o1-pro", usage_total_tokens=900), context=ctx)
+    expensive = [a for a in alerts if a.anomaly_type == "expensive_model_overuse"][0]
+    assert expensive.threshold_value == 800.0
+    assert expensive.baseline_value == 800.0
+
+
+def test_off_hours_uses_personalized_baseline():
+    ctx = AnalysisContext(
+        off_hours_baseline=500.0,
+        off_hours_mad=100.0,
+        local_timezone_offset_hours=8,
+    )
+    alerts = detect_anomalies(job(
+        request_started_at="2026-04-28T14:45:22Z",
+        usage_total_tokens=900,
+    ), context=ctx)
+    off_hours = [a for a in alerts if a.anomaly_type == "off_hours_high_usage"][0]
+    assert off_hours.threshold_value == pytest.approx(800.0)  # 500 + 3*100
+    assert off_hours.baseline_value == 500.0
+
+
+def test_daily_limit_uses_hourly_baseline():
+    ctx = AnalysisContext(
+        hourly_tokens_baseline=2000.0,
+        daily_tokens_before=40000,
+    )
+    # personalized daily = hourly_baseline * 24 * 2 = 2000 * 48 = 96000
+    # observed = 40000 + 60000 = 100000 > 96000
+    alerts = detect_anomalies(job(usage_total_tokens=60000, request_started_at="2026-04-28T02:45:22Z"), context=ctx)
+    daily = [a for a in alerts if a.anomaly_type == "daily_token_limit_exceeded"][0]
+    assert daily.threshold_value == pytest.approx(96000.0)
+    assert daily.baseline_value == 2000.0
