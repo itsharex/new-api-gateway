@@ -54,6 +54,16 @@ class AnalysisContext:
     off_hours_token_threshold: int = 2_000
     distinct_client_hashes_1h: int = 0
     token_leak_distinct_client_threshold: int = 3
+    hourly_tokens_baseline: float | None = None
+    hourly_tokens_mad: float | None = None
+    short_window_baseline: float | None = None
+    short_window_mad: float | None = None
+    trace_tokens_p95: float | None = None
+    completion_tokens_p95: float | None = None
+    off_hours_baseline: float | None = None
+    off_hours_mad: float | None = None
+    model_baselines: dict[str, float] | None = None
+    baseline_computed_at: str | None = None
 
     def expensive_model_set(self) -> set[str]:
         models = self.expensive_models or {"gpt-4.5-preview", "o1-pro"}
