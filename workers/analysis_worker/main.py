@@ -348,7 +348,20 @@ def main() -> int:
     parser.add_argument("--redis-list", default=os.environ.get("ANALYSIS_REDIS_LIST", "analysis_jobs"))
     parser.add_argument("--redis-timeout-seconds", type=int, default=5)
     parser.add_argument("--postgres-dsn", default=os.environ.get("POSTGRES_DSN", ""))
+    parser.add_argument("--offline-batch", action="store_true",
+                        help="Run offline baseline computation and exit")
     args = parser.parse_args()
+
+    if args.offline_batch:
+        from offline import run_offline_batch
+        dsn = os.environ.get("POSTGRES_DSN", "")
+        if not dsn:
+            print("--offline-batch requires POSTGRES_DSN environment variable", file=sys.stderr)
+            return 1
+        with psycopg.connect(dsn) as conn:
+            result = run_offline_batch(conn)
+        print(f"offline batch complete: {result}")
+        return 0
 
     if not args.redis_once and "EVIDENCE_STORAGE_BACKEND" not in os.environ and not args.postgres_dsn:
         return process_contract_stdin()
