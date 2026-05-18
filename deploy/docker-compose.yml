@@ -66,6 +66,34 @@ services:
     volumes:
       - ..:/workspace
       - ${EVIDENCE_STORAGE_DIR:-../var/e2e-evidence}:/evidence
+  analysis-batch:
+    image: ghcr.io/astral-sh/uv:python3.11-bookworm
+    profiles:
+      - tools
+    depends_on:
+      postgres:
+        condition: service_healthy
+    working_dir: /workspace/workers/analysis_worker
+    environment:
+      POSTGRES_DSN: ${ANALYSIS_WORKER_POSTGRES_DSN:-postgres://audit:audit@postgres:5432/audit_gateway?sslmode=disable}
+      PYTHONDONTWRITEBYTECODE: "1"
+      UV_CACHE_DIR: /tmp/uv-cache
+      UV_PROJECT_ENVIRONMENT: /tmp/analysis-worker-venv
+    volumes:
+      - ..:/workspace
+    entrypoint: >
+      sh -c '
+        uv sync &&
+        echo "0 * * * * cd /workspace/workers/analysis_worker && uv run python main.py --offline-batch" > /etc/crontabs/root &&
+        crond -f
+      '
+  embedding:
+    image: ghcr.io/huggingface/text-embeddings-inference:latest
+    profiles:
+      - tools
+    ports:
+      - "8081:8080"
+    command: --model-id BAAI/bge-m3 --port 8080
 volumes:
   audit-postgres:
   audit-redis:
