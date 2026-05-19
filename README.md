@@ -65,22 +65,22 @@ new-api 项目的前端网关代理层，用于记录所有访问 new-api 的请
 
 ```bash
 # 1. 配置环境变量
-cp .env.docker .env.docker.local
-# 编辑 .env.docker.local，填入 NEW_API_BASE_URL、AUDIT_HMAC_SECRET、NEW_API_POSTGRES_DSN
+cp .env.example .env.local
+# 编辑 .env.local，填入 NEW_API_BASE_URL、AUDIT_HMAC_SECRET、NEW_API_POSTGRES_DSN
 
 # 2. 启动所有服务
-docker compose -f deploy/docker-compose.yml --env-file .env.docker.local up -d
+docker compose -f deploy/docker-compose.yml --env-file .env.local up -d
 
 # 3. 运行数据库迁移（首次部署）
-docker compose -f deploy/docker-compose.yml --env-file .env.docker.local --profile tools run --rm migrate
+docker compose -f deploy/docker-compose.yml --env-file .env.local --profile tools run --rm migrate
 
 # 4. 按需启动定时批处理和嵌入服务
-docker compose -f deploy/docker-compose.yml --env-file .env.docker.local --profile tools up -d analysis-batch embedding
+docker compose -f deploy/docker-compose.yml --env-file .env.local --profile tools up -d analysis-batch embedding
 ```
 
 #### 环境变量
 
-复制 `.env.docker` 为 `.env.docker.local`，填入以下必需变量：
+复制 `.env.example` 为 `.env.local`，填入以下必需变量：
 
 | 变量 | 说明 |
 |------|------|
