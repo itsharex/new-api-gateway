@@ -61,6 +61,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      embedding:
+        condition: service_healthy
     working_dir: /workspace/workers/analysis_worker
     environment:
       EVIDENCE_STORAGE_BACKEND: filesystem
@@ -117,11 +119,18 @@ services:
       '
   embedding:
     image: ghcr.io/huggingface/text-embeddings-inference:latest
-    profiles:
-      - tools
     ports:
       - "8081:80"
     command: --model-id BAAI/bge-m3 --port 80
+    volumes:
+      - embedding-model-cache:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
 volumes:
   audit-postgres:
   audit-redis:
+  embedding-model-cache:
