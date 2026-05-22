@@ -158,6 +158,11 @@ def classify_work_relevance_with_embeddings(
     embedding_client,
     pg_connection,
 ) -> WorkRelevanceAssessment:
+    if embedding_client is None:
+        raise TypeError("embedding_client is required for classify_work_relevance_with_embeddings")
+    if pg_connection is None:
+        raise TypeError("pg_connection is required for classify_work_relevance_with_embeddings")
+
     text = _combined_text(messages)
     if not text:
         return classify_work_relevance(job, messages, contexts)

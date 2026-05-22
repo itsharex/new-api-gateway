@@ -1,6 +1,8 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
+import httpx
+
 from embedding_client import EmbeddingClient
 
 
@@ -55,9 +57,9 @@ def test_wait_until_ready_succeeds_immediately():
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     with patch("embedding_client.httpx.get", return_value=mock_resp) as mock_get:
-        client = EmbeddingClient()
+        client = EmbeddingClient("http://test-embed:80")
         client.wait_until_ready(timeout=5, interval=0.1)
-    mock_get.assert_called_once()
+    mock_get.assert_called_once_with("http://test-embed:80/health", timeout=3.0)
 
 
 def test_wait_until_ready_retries_then_succeeds():
@@ -75,6 +77,18 @@ def test_wait_until_ready_raises_on_timeout():
     resp_503 = MagicMock()
     resp_503.status_code = 503
     with patch("embedding_client.httpx.get", return_value=resp_503):
-        client = EmbeddingClient()
-        with pytest.raises(RuntimeError, match="embedding service not ready"):
+        client = EmbeddingClient("http://test-embed:80")
+        with pytest.raises(RuntimeError, match=r"embedding service not ready at http://test-embed:80 after"):
             client.wait_until_ready(timeout=0.05, interval=0.02)
+
+
+def test_wait_until_ready_retries_on_connect_error():
+    resp_200 = MagicMock()
+    resp_200.status_code = 200
+    with patch("embedding_client.httpx.get", side_effect=[
+        httpx.ConnectError("connection refused"),
+        resp_200,
+    ]) as mock_get:
+        client = EmbeddingClient()
+        client.wait_until_ready(timeout=5, interval=0.01)
+    assert mock_get.call_count == 2

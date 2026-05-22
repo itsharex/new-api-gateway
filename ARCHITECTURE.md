@@ -187,7 +187,7 @@ RBAC 角色：`viewer` → `auditor` → `raw_access` → `admin`，权限逐级
 | `models.py` | 数据类：`TraceCapturedJob`, `NormalizedMessage`, `AnalysisResult` 等 |
 | `normalizers.py` | 协议归一化器：OpenAI chat/responses, Claude, Gemini；SSE 流重组 |
 | `rules.py` | 12+ 异常检测规则（身份未解析、token 超限、短期飙升、重复提示词等） |
-| `work_relevance.py` | 关键词匹配的工作相关性分类器 |
+| `work_relevance.py` | 语义 embedding + 关键词匹配的工作相关性分类器（embedding 优先，关键词兜底） |
 | `repository.py` | PostgreSQL 持久化：归一化消息、分析结果、用量聚合、异常告警 |
 | `evidence.py` | 证据存储抽象（`EvidenceStore` Protocol）与文件系统实现 |
 | `oss_evidence.py` | OSS 证据存储实现（`OSSEvidenceStore`） |

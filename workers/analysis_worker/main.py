@@ -125,9 +125,12 @@ def process_trace(
         evidence_dir = job.request_raw_ref.rsplit("/", 1)[0]
         extraction_context = MediaExtractionContext(evidence_store, evidence_dir, job.trace_id)
     messages, results = normalize_json_trace(job, request_body, response_body, extraction_context)
-    work_relevance = classify_work_relevance_with_embeddings(
-        job, messages, list(contexts or []), embedding_client, pg_connection,
-    )
+    if embedding_client is not None and pg_connection is not None:
+        work_relevance = classify_work_relevance_with_embeddings(
+            job, messages, list(contexts or []), embedding_client, pg_connection,
+        )
+    else:
+        work_relevance = classify_work_relevance(job, messages, list(contexts or []))
     results.append(work_relevance.to_analysis_result())
     aggregates = aggregate_deltas(job)
     load_analysis_context = getattr(repository, "analysis_context_for", None)
@@ -380,7 +383,7 @@ def main() -> int:
     evidence_store = create_evidence_store()
     storage_backend = os.environ.get("EVIDENCE_STORAGE_BACKEND", "")
 
-    embedding_client = EmbeddingClient("http://embedding:80")
+    embedding_client = EmbeddingClient(os.environ.get("EMBEDDING_URL", "http://embedding:80"))
     embedding_client.wait_until_ready()
 
     if not args.postgres_dsn:
