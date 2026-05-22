@@ -159,7 +159,7 @@ def classify_work_relevance_with_embeddings(
     pg_connection,
 ) -> WorkRelevanceAssessment:
     text = _combined_text(messages)
-    if not text or embedding_client is None or pg_connection is None:
+    if not text:
         return classify_work_relevance(job, messages, contexts)
 
     trace_embedding = embedding_client.embed(text)

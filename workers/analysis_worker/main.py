@@ -26,7 +26,8 @@ from models import (
 from normalizers import normalize_json_trace
 from repository import PostgresAnalysisRepository
 from rules import detect_anomalies, detect_coverage_alerts, detect_work_relevance_anomalies
-from work_relevance import classify_work_relevance
+from work_relevance import classify_work_relevance, classify_work_relevance_with_embeddings
+from embedding_client import EmbeddingClient
 
 
 class NoopAnalysisRepository:
@@ -95,12 +96,12 @@ def aggregate_deltas(job: TraceCapturedJob) -> list[UsageAggregateDelta]:
     ]
 
 
-def process_job_line(line: str, evidence_store: EvidenceStore, repository, context_repository=None, storage_backend: str = "filesystem") -> dict:
+def process_job_line(line: str, evidence_store: EvidenceStore, repository, context_repository=None, storage_backend: str = "filesystem", embedding_client=None, pg_connection=None) -> dict:
     job = parse_job(line)
     request_body = evidence_store.read_text(job.request_raw_ref) if job.request_raw_ref else ""
     response_body = evidence_store.read_text(job.response_raw_ref) if job.response_raw_ref else ""
     contexts = context_repository.list_active_contexts() if context_repository else []
-    return process_trace(job, request_body, response_body, repository, contexts, evidence_store, storage_backend=storage_backend)
+    return process_trace(job, request_body, response_body, repository, contexts, evidence_store, storage_backend=storage_backend, embedding_client=embedding_client, pg_connection=pg_connection)
 
 
 def process_contract_validation_line(line: str) -> dict:
@@ -124,13 +125,9 @@ def process_trace(
         evidence_dir = job.request_raw_ref.rsplit("/", 1)[0]
         extraction_context = MediaExtractionContext(evidence_store, evidence_dir, job.trace_id)
     messages, results = normalize_json_trace(job, request_body, response_body, extraction_context)
-    if embedding_client and pg_connection:
-        from work_relevance import classify_work_relevance_with_embeddings
-        work_relevance = classify_work_relevance_with_embeddings(
-            job, messages, list(contexts or []), embedding_client, pg_connection,
-        )
-    else:
-        work_relevance = classify_work_relevance(job, messages, list(contexts or []))
+    work_relevance = classify_work_relevance_with_embeddings(
+        job, messages, list(contexts or []), embedding_client, pg_connection,
+    )
     results.append(work_relevance.to_analysis_result())
     aggregates = aggregate_deltas(job)
     load_analysis_context = getattr(repository, "analysis_context_for", None)
@@ -222,6 +219,7 @@ def process_redis_once(
     timeout_seconds: int,
     connection_factory=psycopg.connect,
     storage_backend: str = "filesystem",
+    embedding_client=None,
 ) -> int:
     client = redis.Redis.from_url(redis_url, decode_responses=True)
     item = client.blpop(list_name, timeout=timeout_seconds)
@@ -247,6 +245,8 @@ def process_redis_once(
                 PostgresAnalysisRepository(connection),
                 PostgresContextRepository(connection),
                 storage_backend=storage_backend,
+                embedding_client=embedding_client,
+                pg_connection=connection,
             )
         except Exception as exc:
             record_heartbeat_safely(
@@ -281,6 +281,7 @@ def process_redis_loop(
     postgres_dsn: str,
     timeout_seconds: int,
     storage_backend: str = "filesystem",
+    embedding_client=None,
 ) -> int:
     client = redis.Redis.from_url(redis_url, decode_responses=True)
     wid = worker_id()
@@ -319,6 +320,8 @@ def process_redis_loop(
                     PostgresAnalysisRepository(connection),
                     PostgresContextRepository(connection),
                     storage_backend=storage_backend,
+                    embedding_client=embedding_client,
+                    pg_connection=connection,
                 )
             except Exception as exc:
                 record_heartbeat_safely(
@@ -377,6 +380,9 @@ def main() -> int:
     evidence_store = create_evidence_store()
     storage_backend = os.environ.get("EVIDENCE_STORAGE_BACKEND", "")
 
+    embedding_client = EmbeddingClient("http://embedding:80")
+    embedding_client.wait_until_ready()
+
     if not args.postgres_dsn:
         raise SystemExit("POSTGRES_DSN is required")
     if args.redis_once:
@@ -387,6 +393,7 @@ def main() -> int:
             args.postgres_dsn,
             args.redis_timeout_seconds,
             storage_backend=storage_backend,
+            embedding_client=embedding_client,
         )
     return process_redis_loop(
         args.redis_url,
@@ -395,6 +402,7 @@ def main() -> int:
         args.postgres_dsn,
         args.redis_timeout_seconds,
         storage_backend=storage_backend,
+        embedding_client=embedding_client,
     )
 
 
