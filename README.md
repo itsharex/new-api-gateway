@@ -74,8 +74,8 @@ docker compose -f deploy/docker-compose.yml --env-file .env.local up -d
 # 3. 运行数据库迁移（首次部署）
 docker compose -f deploy/docker-compose.yml --env-file .env.local --profile tools run --rm migrate
 
-# 4. 按需启动定时批处理和嵌入服务
-docker compose -f deploy/docker-compose.yml --env-file .env.local --profile tools up -d analysis-batch embedding
+# 4. 按需启动定时批处理
+docker compose -f deploy/docker-compose.yml --env-file .env.local --profile tools up -d analysis-batch
 ```
 
 #### 环境变量
