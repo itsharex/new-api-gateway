@@ -24,3 +24,19 @@ class EmbeddingClient:
         )
         response.raise_for_status()
         return [item["embedding"] for item in response.json()["data"]]
+
+    def wait_until_ready(self, timeout: float = 30.0, interval: float = 1.0) -> None:
+        import time
+
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                resp = httpx.get(f"{self.base_url}/health", timeout=3.0)
+                if resp.status_code == 200:
+                    return
+            except Exception:
+                pass
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("embedding service not ready")
+            time.sleep(min(interval, remaining))
