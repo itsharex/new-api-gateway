@@ -60,6 +60,7 @@ RBAC 四级权限（viewer→auditor→raw_access→admin），HMAC 签名 Cooki
 - 修改 schema 时新增迁移文件（`migrations/` 按编号顺序），不改写已发布迁移。
 - 查找文件与文本优先用 `rg` / `rg --files`。
 - Python 依赖用 `uv` 管理。
+- 代码修改完成后，主动检查 `README.md`、`ARCHITECTURE.md`、`CLAUDE.md` 等文档是否需要同步更新（如部署命令、架构描述、服务依赖关系），不要只做代码调整而遗漏文档。
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
