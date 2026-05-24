@@ -8,8 +8,6 @@ services:
       POSTGRES_USER: audit
       POSTGRES_PASSWORD: audit
       POSTGRES_DB: audit_gateway
-    ports:
-      - "5432:5432"
     volumes:
       - audit-postgres:/var/lib/postgresql/data
     healthcheck:
@@ -19,8 +17,6 @@ services:
       retries: 20
   redis:
     image: redis:7
-    ports:
-      - "6379:6379"
     command: redis-server --appendonly yes --appendfsync everysec
     volumes:
       - audit-redis:/data
@@ -54,6 +50,8 @@ services:
     volumes:
       - ${EVIDENCE_HOST_DIR:-./var/evidence}:/evidence
     restart: unless-stopped
+    networks:
+      - new-api_new-api-network
   analysis-worker:
     image: ghcr.io/astral-sh/uv:python3.11-bookworm
     depends_on:
@@ -77,6 +75,8 @@ services:
       - ${EVIDENCE_HOST_DIR:-./var/evidence}:/evidence
     command: ["sh", "-c", "uv sync --quiet && exec uv run python main.py"]
     restart: unless-stopped
+    networks:
+      - new-api_new-api-network
 
   # ── On-demand services ─────────────────────────────
   migrate:
@@ -135,3 +135,7 @@ volumes:
   audit-postgres:
   audit-redis:
   embedding-model-cache:
+
+networks:
+  new-api_new-api-network:
+    external: true
