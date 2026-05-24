@@ -68,11 +68,11 @@ new-api 项目的前端网关代理层，用于记录所有访问 new-api 的请
 cp .env.example .env.local
 # 编辑 .env.local，填入 NEW_API_BASE_URL、AUDIT_HMAC_SECRET、NEW_API_POSTGRES_DSN
 
-# 2. 启动所有服务
-docker compose -f deploy/docker-compose.yml --env-file .env.local up -d
-
-# 3. 运行数据库迁移（首次部署）
+# 2. 运行数据库迁移（首次部署）
 docker compose -f deploy/docker-compose.yml --env-file .env.local --profile tools run --rm migrate
+
+# 3. 启动所有服务
+docker compose -f deploy/docker-compose.yml --env-file .env.local up -d
 
 # 4. 按需启动定时批处理
 docker compose -f deploy/docker-compose.yml --env-file .env.local --profile tools up -d analysis-batch
@@ -90,6 +90,18 @@ docker compose -f deploy/docker-compose.yml --env-file .env.local --profile tool
 | `AUDIT_GATEWAY_PORT` | 网关对外端口（默认 `8080`） |
 | `EVIDENCE_STORAGE_BACKEND` | 证据存储后端：`filesystem`（默认）或 `oss` |
 | `EVIDENCE_HOST_DIR` | 证据文件宿主机目录（默认 `./var/evidence`） |
+
+#### Embedding 服务配置
+
+Embedding 服务（语义搜索用）通过环境变量控制镜像和平台：
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `EMBEDDING_IMAGE` | TEI 镜像地址 | `ghcr.io/huggingface/text-embeddings-inference:latest` |
+| `EMBEDDING_PLATFORM` | 目标平台 | `linux/amd64` |
+| `EMBEDDING_PORT` | 宿主机端口 | `8081` |
+
+Linux GPU 服务器使用默认值即可；Linux CPU 服务器设置 `EMBEDDING_IMAGE=ghcr.io/huggingface/text-embeddings-inference:cpu-latest`。macOS 开发环境不支持 TEI（无 ARM 镜像），可不启动 embedding 和 analysis-worker。
 
 OSS 后端额外变量（`EVIDENCE_STORAGE_BACKEND=oss` 时必需）：`OSS_ENDPOINT`、`OSS_BUCKET`、`OSS_ACCESS_KEY_ID`、`OSS_ACCESS_KEY_SECRET`。
 

@@ -3,7 +3,7 @@ name: new-api-gateway
 services:
   # ── Infrastructure ─────────────────────────────────
   postgres:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: audit
       POSTGRES_PASSWORD: audit
@@ -118,9 +118,10 @@ services:
         crond -f
       '
   embedding:
-    image: ghcr.io/huggingface/text-embeddings-inference:latest
+    image: ${EMBEDDING_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:latest}
+    platform: ${EMBEDDING_PLATFORM:-linux/amd64}
     ports:
-      - "8081:80"
+      - "${EMBEDDING_PORT:-8081}:80"
     command: --model-id BAAI/bge-m3 --port 80
     volumes:
       - embedding-model-cache:/data

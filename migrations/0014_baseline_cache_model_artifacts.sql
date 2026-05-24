@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS baseline_cache (
     UNIQUE (fingerprint_key, metric_type)
 );
 
-CREATE INDEX idx_baseline_cache_lookup
+CREATE INDEX IF NOT EXISTS idx_baseline_cache_lookup
     ON baseline_cache (fingerprint_key, metric_type);
 
 CREATE TABLE IF NOT EXISTS model_artifacts (
