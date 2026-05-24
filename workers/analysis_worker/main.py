@@ -383,7 +383,7 @@ def main() -> int:
     evidence_store = create_evidence_store()
     storage_backend = os.environ.get("EVIDENCE_STORAGE_BACKEND", "")
 
-    embedding_client = EmbeddingClient(os.environ.get("EMBEDDING_URL", "http://embedding:80"))
+    embedding_client = EmbeddingClient(os.environ.get("EMBEDDING_URL", "http://embedding:8000"))
     embedding_client.wait_until_ready()
 
     if not args.postgres_dsn:

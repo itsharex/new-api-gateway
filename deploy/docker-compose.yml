@@ -120,13 +120,11 @@ services:
   embedding:
     image: ${EMBEDDING_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:latest}
     platform: ${EMBEDDING_PLATFORM:-linux/amd64}
-    ports:
-      - "${EMBEDDING_PORT:-8081}:80"
-    command: --model-id BAAI/bge-m3 --port 80
+    command: --model-id BAAI/bge-m3 --port 8000
     volumes:
       - embedding-model-cache:/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 5s
       timeout: 3s
       retries: 30

@@ -6,8 +6,6 @@ services:
     build:
       context: ./embedding
     platform: ""
-    ports: !override
-      - "${EMBEDDING_PORT:-8081}:8000"
     command: !override []
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
