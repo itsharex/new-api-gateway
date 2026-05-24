@@ -31,7 +31,9 @@ uv run pytest -q tests/test_normalizers.py  # 单文件测试
 uv run python main.py              # 持续消费模式
 uv run python main.py --redis-once # 处理一个任务后退出（调试用）
 
-# 依赖服务
+# 依赖服务（ARM Mac 自动使用原生 embedding）
+make dev -d
+# 或手动指定 compose 文件
 docker compose -f deploy/docker-compose.yml --env-file .env.local up -d postgres redis
 docker compose -f deploy/docker-compose.yml --env-file .env.local --profile tools run --rm migrate
 

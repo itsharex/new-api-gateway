@@ -101,7 +101,7 @@ Embedding 服务（语义搜索用）通过环境变量控制镜像和平台：
 | `EMBEDDING_PLATFORM` | 目标平台 | `linux/amd64` |
 | `EMBEDDING_PORT` | 宿主机端口 | `8081` |
 
-Linux GPU 服务器使用默认值即可；Linux CPU 服务器设置 `EMBEDDING_IMAGE=ghcr.io/huggingface/text-embeddings-inference:cpu-latest`。macOS 开发环境不支持 TEI（无 ARM 镜像），可不启动 embedding 和 analysis-worker。
+Linux GPU 服务器使用默认值即可；Linux CPU 服务器设置 `EMBEDDING_IMAGE=ghcr.io/huggingface/text-embeddings-inference:cpu-latest`。macOS ARM 开发环境使用 `make dev` 自动启动轻量 Python embedding 服务，无需手动配置。
 
 OSS 后端额外变量（`EVIDENCE_STORAGE_BACKEND=oss` 时必需）：`OSS_ENDPOINT`、`OSS_BUCKET`、`OSS_ACCESS_KEY_ID`、`OSS_ACCESS_KEY_SECRET`。
 
@@ -117,9 +117,11 @@ bash start.sh
 或手动启动：
 
 ```bash
-# 启动依赖服务
-docker compose -f deploy/docker-compose.yml up -d
-docker compose -f deploy/docker-compose.yml run --rm migrate
+# 启动依赖服务（ARM Mac 自动使用原生 embedding 服务）
+make dev -d
+
+# 首次部署运行迁移
+docker compose -f deploy/docker-compose.yml --env-file .env.local --profile tools run --rm migrate
 
 # Go 网关
 make run
@@ -129,6 +131,8 @@ cd workers/analysis_worker
 uv sync
 uv run python main.py
 ```
+
+`make dev` 会自动检测平台：ARM Mac 叠加 `docker-compose.arm.yml` 使用原生 Python embedding 服务；x86 环境使用 TEI。
 
 本地开发环境变量参考 `.env.example`。
 
