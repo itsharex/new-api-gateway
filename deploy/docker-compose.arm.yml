@@ -1,0 +1,19 @@
+# ARM Mac local development override.
+# Stacks on top of docker-compose.yml via: make dev
+services:
+  embedding:
+    image: ""
+    build:
+      context: ./embedding
+    platform: ""
+    ports:
+      - "${EMBEDDING_PORT:-8081}:8000"
+    command: []
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 120s
+    volumes:
+      - embedding-model-cache:/root/.cache
