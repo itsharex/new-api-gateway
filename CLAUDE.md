@@ -32,8 +32,8 @@ uv run python main.py              # 持续消费模式
 uv run python main.py --redis-once # 处理一个任务后退出（调试用）
 
 # 依赖服务
-docker compose -f deploy/docker-compose.yml up -d
-docker compose -f deploy/docker-compose.yml run --rm migrate
+docker compose -f deploy/docker-compose.yml --env-file .env.local up -d postgres redis
+docker compose -f deploy/docker-compose.yml --env-file .env.local --profile tools run --rm migrate
 
 # E2E（需 postgres/redis/new-api 运行中）
 cd e2e && uv run run_all.py
