@@ -50,8 +50,6 @@ services:
     volumes:
       - ${EVIDENCE_HOST_DIR:-./var/evidence}:/evidence
     restart: unless-stopped
-    networks:
-      - new-api_new-api-network
   analysis-worker:
     image: ghcr.io/astral-sh/uv:python3.11-bookworm
     depends_on:
@@ -70,13 +68,15 @@ services:
       PYTHONDONTWRITEBYTECODE: "1"
       UV_CACHE_DIR: /tmp/uv-cache
       UV_PROJECT_ENVIRONMENT: /tmp/analysis-worker-venv
+      UV_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
+      UV_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
+      EMBEDDING_URL: http://embedding:8000
+      UV_INDEX_STRATEGY: unsafe-best-match
     volumes:
       - ..:/workspace
       - ${EVIDENCE_HOST_DIR:-./var/evidence}:/evidence
     command: ["sh", "-c", "uv sync --quiet && exec uv run python main.py"]
     restart: unless-stopped
-    networks:
-      - new-api_new-api-network
 
   # ── On-demand services ─────────────────────────────
   migrate:
@@ -109,6 +109,8 @@ services:
       PYTHONDONTWRITEBYTECODE: "1"
       UV_CACHE_DIR: /tmp/uv-cache
       UV_PROJECT_ENVIRONMENT: /tmp/analysis-worker-venv
+      UV_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
+      UV_INDEX_STRATEGY: unsafe-best-match
     volumes:
       - ..:/workspace
     entrypoint: >
@@ -118,13 +120,16 @@ services:
         crond -f
       '
   embedding:
-    image: ${EMBEDDING_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:latest}
-    platform: ${EMBEDDING_PLATFORM:-linux/amd64}
-    command: --model-id BAAI/bge-m3 --port 8000
+    build:
+      context: ./embedding
+    environment:
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+      HF_HOME: /data
+      TRANSFORMERS_CACHE: /data
     volumes:
       - embedding-model-cache:/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "python", "/app/healthcheck.py"]
       interval: 5s
       timeout: 3s
       retries: 30
@@ -133,7 +138,3 @@ volumes:
   audit-postgres:
   audit-redis:
   embedding-model-cache:
-
-networks:
-  new-api_new-api-network:
-    external: true
