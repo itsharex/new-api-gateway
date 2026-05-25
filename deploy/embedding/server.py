@@ -1,5 +1,6 @@
 """Lightweight embedding server compatible with HuggingFace TEI /v1/embeddings API."""
 
+import os
 import time
 
 from fastapi import FastAPI
@@ -7,7 +8,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 
-MODEL_NAME = "BAAI/bge-m3"
+MODEL_NAME = os.environ.get("EMBEDDING_MODEL", "BAAI/bge-m3")
 
 app = FastAPI()
 
