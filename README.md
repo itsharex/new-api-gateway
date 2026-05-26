@@ -91,17 +91,16 @@ docker compose -f deploy/docker-compose.yml --env-file .env.local --profile tool
 | `EVIDENCE_STORAGE_BACKEND` | 证据存储后端：`filesystem`（默认）或 `oss` |
 | `EVIDENCE_HOST_DIR` | 证据文件宿主机目录（默认 `./var/evidence`） |
 
-#### Embedding 服务配置
+#### Embedding 服务
 
-Embedding 服务（语义搜索用）通过环境变量控制镜像和平台：
+Embedding 服务（语义工作相关性分类）使用本地构建的 Python 服务（FastAPI + sentence-transformers，模型 BAAI/bge-m3）。
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `EMBEDDING_IMAGE` | TEI 镜像地址 | `ghcr.io/huggingface/text-embeddings-inference:latest` |
-| `EMBEDDING_PLATFORM` | 目标平台 | `linux/amd64` |
-| `EMBEDDING_PORT` | 宿主机端口 | `8081` |
+| `HF_ENDPOINT` | HuggingFace 镜像地址 | `https://hf-mirror.com` |
+| `EMBEDDING_MODEL` | 嵌入模型名 | `BAAI/bge-m3` |
 
-Linux GPU 服务器使用默认值即可；Linux CPU 服务器设置 `EMBEDDING_IMAGE=ghcr.io/huggingface/text-embeddings-inference:cpu-latest`。macOS ARM 开发环境使用 `make dev` 自动启动轻量 Python embedding 服务，无需手动配置。
+中国区部署默认使用 `hf-mirror.com` 下载模型，无需额外配置。模型权重缓存到 Docker volume，首次启动需等待下载完成（约 2-3 分钟）。
 
 OSS 后端额外变量（`EVIDENCE_STORAGE_BACKEND=oss` 时必需）：`OSS_ENDPOINT`、`OSS_BUCKET`、`OSS_ACCESS_KEY_ID`、`OSS_ACCESS_KEY_SECRET`。
 
@@ -132,7 +131,7 @@ uv sync
 uv run python main.py
 ```
 
-`make dev` 会自动检测平台：ARM Mac 叠加 `docker-compose.arm.yml` 使用原生 Python embedding 服务；x86 环境使用 TEI。
+`make dev` 会自动检测平台：ARM Mac 叠加 `docker-compose.arm.yml` 调整模型加载超时（ARM 较慢）。
 
 本地开发环境变量参考 `.env.example`。
 
