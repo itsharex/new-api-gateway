@@ -30,7 +30,7 @@ class EmbeddingClient:
         response.raise_for_status()
         return [item["embedding"] for item in response.json()["data"]]
 
-    def wait_until_ready(self, timeout: float = 30.0, interval: float = 1.0) -> None:
+    def wait_until_ready(self, timeout: float = 300.0, interval: float = 1.0) -> None:
         """Block until the embedding service /health endpoint returns 200.
 
         Polls at ``interval`` seconds. Raises RuntimeError if the service
