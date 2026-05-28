@@ -133,6 +133,10 @@ func buildHTTPHandler(cfg config.Config, pool *pgxpool.Pool, newAPIPool *pgxpool
 	opsHandler := buildOpsHandler(cfg, pool, redisClient)
 	if pool == nil {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/" {
+				http.Redirect(w, r, "/admin", http.StatusFound)
+				return
+			}
 			if isOpsPath(r.URL.Path) {
 				opsHandler.ServeHTTP(w, r)
 				return
@@ -163,6 +167,10 @@ func buildHTTPHandler(cfg config.Config, pool *pgxpool.Pool, newAPIPool *pgxpool
 		EvidenceStore: evidenceStoreFromConfig(cfg),
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			http.Redirect(w, r, "/admin", http.StatusFound)
+			return
+		}
 		if isOpsPath(r.URL.Path) {
 			opsHandler.ServeHTTP(w, r)
 			return
