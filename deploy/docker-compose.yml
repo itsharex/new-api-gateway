@@ -125,7 +125,6 @@ services:
     build:
       context: ./embedding
     environment:
-      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
       HF_HOME: /data
       TRANSFORMERS_CACHE: /data
     volumes:
