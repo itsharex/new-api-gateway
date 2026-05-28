@@ -8,4 +8,3 @@ workers/analysis_worker/uv.lock
 .env.local
 .env.docker*
 audit-gateway
-.gitnexus

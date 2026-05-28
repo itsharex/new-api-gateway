@@ -296,7 +296,7 @@ Expected: All PASS, 0 failures.
 Run: `cd workers/analysis_worker && uv run pytest -q`
 Expected: All PASS (no changes to Python code, just verify no cross-contract breakage).
 
-- [ ] **Step 3: Run detect_changes to verify scope**
+- [ ] **Step 3: Verify scope**
 
-Run: `gitnexus_detect_changes` to confirm changes are scoped to expected files only.
+Inspect git diff to confirm changes are scoped to expected files only.
 Expected: changes in `proxy.go`, `proxy_test.go`, `registry.go`, `README.md` only.
