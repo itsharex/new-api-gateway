@@ -54,6 +54,11 @@ TESTS = [
     TestSpec("test_worker_work_relevance.py", "Worker 工作相关性分类"),
     # Phase 2: Gateway filesystem mode
     TestSpec(
+        "test_smoke.py",
+        "冒烟测试：三种协议端点各一请求",
+        needs_gateway=True,
+    ),
+    TestSpec(
         "test_gateway_openai.py",
         "OpenAI 协议网关代理与 trace 持久化",
         needs_gateway=True,
