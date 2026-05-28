@@ -73,7 +73,7 @@ new-api-gateway/
 - **采集模式**：
   - `raw_and_normalized` — 完整采集 + 归一化（chat/completions, embeddings 等）
   - `raw_and_minimal` — 完整采集 + 最小元数据（WebSocket, 视频生成等）
-  - `raw_only` — 仅完整采集（未知路由的默认值）
+  - `raw_only` — 仅完整采集（当前未被使用）
 
 支持精确匹配、段参数（`:model`）、通配符后缀（`*`）。
 
@@ -152,7 +152,7 @@ RBAC 角色：`viewer` → `auditor` → `raw_access` → `admin`，权限逐级
 
 ### `internal/alerts/` — 覆盖告警
 
-- `unknown_route`（高严重性）— 未识别的路由
+- `unknown_route`（高严重性）— 未识别的路由（已废弃：未匹配路由现在返回 404，不再被代理和采集）
 - `known_route_raw_first`（中严重性）— 已知但仅原始采集的路由
 
 使用确定性 `alert_id`（基于关键字段 SHA-256），upsert 递增出现次数。

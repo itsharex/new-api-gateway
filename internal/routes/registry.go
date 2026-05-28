@@ -27,37 +27,53 @@ type Registry struct {
 
 func DefaultRegistry() Registry {
 	return Registry{entries: []Entry{
+		// OpenAI Chat Completions (incl. compatible path /pg/)
 		{Method: "POST", PathPattern: "/v1/chat/completions", ProtocolFamily: "openai_chat", BodyKind: "json", CaptureMode: CaptureRawAndNormalized, Normalizer: "openai_chat"},
 		{Method: "POST", PathPattern: "/pg/chat/completions", ProtocolFamily: "openai_chat", BodyKind: "json", CaptureMode: CaptureRawAndNormalized, Normalizer: "openai_chat"},
+		// OpenAI Responses API
 		{Method: "POST", PathPattern: "/v1/responses", ProtocolFamily: "openai_responses", BodyKind: "json", CaptureMode: CaptureRawAndNormalized, Normalizer: "openai_responses"},
 		{Method: "POST", PathPattern: "/v1/responses/compact", ProtocolFamily: "openai_responses", BodyKind: "json", CaptureMode: CaptureRawAndNormalized, Normalizer: "openai_responses_compact"},
+		// Anthropic Claude Messages
 		{Method: "POST", PathPattern: "/v1/messages", ProtocolFamily: "claude_messages", BodyKind: "json", CaptureMode: CaptureRawAndNormalized, Normalizer: "claude_messages"},
+		// OpenAI Legacy Completions
 		{Method: "POST", PathPattern: "/v1/completions", ProtocolFamily: "openai_completions", BodyKind: "json", CaptureMode: CaptureRawAndNormalized, Normalizer: "openai_completions"},
+		// Embeddings & Rerank
 		{Method: "POST", PathPattern: "/v1/embeddings", ProtocolFamily: "embeddings", BodyKind: "json", CaptureMode: CaptureRawAndNormalized, Normalizer: "embeddings"},
 		{Method: "POST", PathPattern: "/v1/rerank", ProtocolFamily: "rerank", BodyKind: "json", CaptureMode: CaptureRawAndNormalized, Normalizer: "rerank"},
+		// OpenAI Image Generations & Edits
 		{Method: "POST", PathPattern: "/v1/images/generations", ProtocolFamily: "openai_images", BodyKind: "json", CaptureMode: CaptureRawAndNormalized, Normalizer: "openai_image_generation"},
 		{Method: "POST", PathPattern: "/v1/images/edits", ProtocolFamily: "openai_images", BodyKind: "multipart_or_json", CaptureMode: CaptureRawAndNormalized, Normalizer: "openai_image_edit"},
 		{Method: "POST", PathPattern: "/v1/edits", ProtocolFamily: "openai_images", BodyKind: "multipart_or_json", CaptureMode: CaptureRawAndNormalized, Normalizer: "openai_edit"},
+		// OpenAI Audio (Transcription, Translation, TTS)
 		{Method: "POST", PathPattern: "/v1/audio/transcriptions", ProtocolFamily: "openai_audio", BodyKind: "multipart", CaptureMode: CaptureRawAndNormalized, Normalizer: "audio_transcription"},
 		{Method: "POST", PathPattern: "/v1/audio/translations", ProtocolFamily: "openai_audio", BodyKind: "multipart", CaptureMode: CaptureRawAndNormalized, Normalizer: "audio_translation"},
 		{Method: "POST", PathPattern: "/v1/audio/speech", ProtocolFamily: "openai_audio", BodyKind: "json", CaptureMode: CaptureRawAndNormalized, Normalizer: "audio_speech"},
+		// Google Gemini Generate Content
 		{Method: "POST", PathPattern: "/v1beta/models/*", ProtocolFamily: "gemini", BodyKind: "json", CaptureMode: CaptureRawAndNormalized, Normalizer: "gemini_generate_content"},
 		{Method: "POST", PathPattern: "/v1/models/*", ProtocolFamily: "gemini", BodyKind: "json", CaptureMode: CaptureRawAndNormalized, Normalizer: "gemini_generate_content"},
+		// OpenAI Realtime WebSocket
 		{Method: "GET", PathPattern: "/v1/realtime", ProtocolFamily: "realtime", BodyKind: "websocket", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "realtime_minimal", UnsupportedAlertCode: "known_route_raw_first"},
+		// Legacy Engine Embeddings
 		{Method: "POST", PathPattern: "/v1/engines/:model/embeddings", ProtocolFamily: "embeddings", BodyKind: "json", CaptureMode: CaptureRawAndNormalized, Normalizer: "embeddings"},
+		// Video Generation & Polling
 		{Method: "POST", PathPattern: "/v1/video/generations", ProtocolFamily: "video", BodyKind: "json_or_multipart", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
 		{Method: "GET", PathPattern: "/v1/video/generations/:task_id", ProtocolFamily: "video", BodyKind: "none", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
 		{Method: "GET", PathPattern: "/v1/videos/:task_id", ProtocolFamily: "video", BodyKind: "none", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
 		{Method: "GET", PathPattern: "/v1/videos/:task_id/content", ProtocolFamily: "video", BodyKind: "none", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
 		{Method: "POST", PathPattern: "/v1/videos/:video_id/remix", ProtocolFamily: "video", BodyKind: "json_or_multipart", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
+		// Kling Video
 		{Method: "POST", PathPattern: "/kling/v1/videos/text2video", ProtocolFamily: "kling_video", BodyKind: "json", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
 		{Method: "POST", PathPattern: "/kling/v1/videos/image2video", ProtocolFamily: "kling_video", BodyKind: "json_or_multipart", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
 		{Method: "GET", PathPattern: "/kling/v1/videos/text2video/:task_id", ProtocolFamily: "kling_video", BodyKind: "none", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
 		{Method: "GET", PathPattern: "/kling/v1/videos/image2video/:task_id", ProtocolFamily: "kling_video", BodyKind: "none", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
+		// Jimeng Image
 		{Method: "POST", PathPattern: "/jimeng/", ProtocolFamily: "jimeng", BodyKind: "json", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
+		// Midjourney
 		{Method: "POST", PathPattern: "/:mode/mj/*", ProtocolFamily: "midjourney", BodyKind: "json", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
 		{Method: "POST", PathPattern: "/mj/*", ProtocolFamily: "midjourney", BodyKind: "json", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
+		// Suno Music
 		{Method: "POST", PathPattern: "/suno/*", ProtocolFamily: "suno", BodyKind: "json", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
+		// Video (wildcard fallback)
 		{Method: "POST", PathPattern: "/v1/videos*", ProtocolFamily: "video", BodyKind: "json_or_multipart", CaptureMode: CaptureRawAndMinimal, MinimalExtractor: "generic_task_minimal", UnsupportedAlertCode: "known_route_raw_first"},
 	}}
 }

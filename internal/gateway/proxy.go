@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -58,19 +59,29 @@ const (
 	defaultWebSocketHandshakeTimeout = 10 * time.Second
 )
 
+func writeRouteNotFound(w http.ResponseWriter, method, path string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
+		"error": map[string]interface{}{
+			"message": fmt.Sprintf("unknown route: %s %s", method, path),
+			"type":    "not_found",
+			"code":    404,
+		},
+	}); err != nil {
+		log.Printf("writeRouteNotFound: encode error for %s %s: %v", method, path, err)
+	}
+}
+
 func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	startedAt := h.now()
 	traceID := ids.NewTraceID()
 
 	entry, ok := h.Registry.Match(req.Method, req.URL.Path)
-	unknownRoute := !ok
 	if !ok {
-		entry = routes.Entry{
-			Method:         req.Method,
-			PathPattern:    req.URL.Path,
-			ProtocolFamily: "unknown",
-			CaptureMode:    routes.CaptureRawOnly,
-		}
+		log.Printf("route not found: %s %s remote=%s", req.Method, req.URL.Path, req.RemoteAddr)
+		writeRouteNotFound(w, req.Method, req.URL.Path)
+		return
 	}
 
 	capturedReq, err := captureRequestBody(req, h.maxRequestBodyBytes())
@@ -158,7 +169,6 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			requestSize:          capturedReq.SizeBytes,
 			snapshot:             snapshot,
 			stream:               true,
-			unknownRoute:         unknownRoute,
 			skipPostPersistence:  requestBodyCaptureDegraded,
 			errorType:            errorType,
 			errorMessage:         errorMessage,
@@ -192,7 +202,6 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			modelRequested:       modelRequested,
 			requestSize:          capturedReq.SizeBytes,
 			snapshot:             snapshot,
-			unknownRoute:         unknownRoute,
 			skipPostPersistence:  requestBodyCaptureDegraded,
 			errorType:            mergeTraceErrorType(errorType, "upstream_request_error"),
 			errorMessage:         mergeTraceErrorMessage(errorMessage, err.Error()),
@@ -220,7 +229,6 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			requestSize:          capturedReq.SizeBytes,
 			snapshot:             snapshot,
 			stream:               true,
-			unknownRoute:         unknownRoute,
 			responseStartedAt:    responseStartedAt,
 			responseHeaders:      responseHeaders,
 			skipPostPersistence:  requestBodyCaptureDegraded,
@@ -257,7 +265,6 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			modelRequested:        modelRequested,
 			requestSize:           capturedReq.SizeBytes,
 			snapshot:              snapshot,
-			unknownRoute:          unknownRoute,
 			skipPostPersistence:   true,
 			responseStartedAt:     responseStartedAt,
 			responseHeaders:       responseHeaders,
@@ -306,7 +313,6 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		requestSize:           capturedReq.SizeBytes,
 		responseSize:          int64(len(responseBody)),
 		snapshot:              snapshot,
-		unknownRoute:          unknownRoute,
 		skipPostPersistence:   skipPostPersistence,
 		responseStartedAt:     responseStartedAt,
 		responseHeaders:       responseHeaders,
@@ -347,7 +353,6 @@ type traceRecord struct {
 	responseSize          int64
 	snapshot              identity.Snapshot
 	stream                bool
-	unknownRoute          bool
 	skipPostPersistence   bool
 }
 
@@ -804,8 +809,6 @@ func (h Handler) emitCoverageAlert(ctx context.Context, record traceRecord) erro
 	}
 	var alert alerts.CoverageAlert
 	switch {
-	case record.unknownRoute:
-		alert = alerts.UnknownRoute(record.req.Method, record.req.URL.Path, record.req.Header.Get("Content-Type"), record.traceID)
 	case record.entry.UnsupportedAlertCode == "known_route_raw_first":
 		alert = alerts.KnownRawFirst(record.req.Method, record.entry.PathPattern, record.req.URL.Path, record.entry.ProtocolFamily, record.traceID)
 	default:
@@ -883,16 +886,11 @@ func redactAuditMessage(value string) string {
 }
 
 func routeSupportLevel(record traceRecord) string {
-	if record.unknownRoute {
-		return "unknown_route"
-	}
 	switch record.entry.CaptureMode {
 	case routes.CaptureRawAndNormalized:
 		return "deep_normalized"
 	case routes.CaptureRawAndMinimal:
 		return "raw_minimal"
-	case routes.CaptureRawOnly:
-		return "raw_only"
 	default:
 		return "unsupported"
 	}

@@ -48,23 +48,6 @@ func KnownRawFirst(method, routePattern, rawPath, protocolFamily, traceID string
 	}
 }
 
-func UnknownRoute(method, rawPath, contentType, traceID string) CoverageAlert {
-	now := time.Now().UTC()
-	return CoverageAlert{
-		AlertCode:      "unknown_route",
-		Severity:       "high",
-		Method:         method,
-		RoutePattern:   rawPath,
-		RawPath:        rawPath,
-		ContentType:    contentType,
-		ProtocolFamily: "unknown",
-		Message:        "route is not registered and is captured as raw evidence only",
-		SampleTraceID:  traceID,
-		FirstSeenAt:    now,
-		LastSeenAt:     now,
-	}
-}
-
 type postgresExecer interface {
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 }

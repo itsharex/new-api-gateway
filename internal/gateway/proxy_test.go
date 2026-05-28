@@ -803,67 +803,6 @@ func TestProxyEmitsCoverageAlertForKnownRawFirstRoute(t *testing.T) {
 	}
 }
 
-func TestProxyEmitsCoverageAlertForUnknownRoute(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"ok":true}`))
-	}))
-	defer upstream.Close()
-
-	emitter := &recordingCoverageEmitter{}
-	handler := testHandler(upstream.URL, &memoryTraceRepo{}, evidence.NewFilesystemStore(t.TempDir()))
-	handler.CoverageEmitter = emitter
-
-	req := httptest.NewRequest(http.MethodPost, "/unmapped/provider/task", strings.NewReader(`{}`))
-	req.Header.Set("Authorization", "Bearer sk-abc123")
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
-	}
-	if len(emitter.alerts) != 1 {
-		t.Fatalf("coverage alerts = %d, want 1", len(emitter.alerts))
-	}
-	alert := emitter.alerts[0]
-	if alert.AlertCode != "unknown_route" {
-		t.Fatalf("AlertCode = %q", alert.AlertCode)
-	}
-	if alert.RawPath != "/unmapped/provider/task" {
-		t.Fatalf("RawPath = %q", alert.RawPath)
-	}
-	if alert.ContentType != "application/json" {
-		t.Fatalf("ContentType = %q", alert.ContentType)
-	}
-}
-
-func TestProxyEmitsCoverageAlertForUnknownRouteWhenUpstreamFails(t *testing.T) {
-	emitter := &recordingCoverageEmitter{}
-	handler := testHandler("https://upstream.test", &memoryTraceRepo{}, evidence.NewFilesystemStore(t.TempDir()))
-	handler.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return nil, errors.New("upstream unavailable")
-	})}
-	handler.CoverageEmitter = emitter
-
-	req := httptest.NewRequest(http.MethodPost, "/unmapped/provider/task", strings.NewReader(`{}`))
-	req.Header.Set("Authorization", "Bearer sk-abc123")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
-	}
-	if len(emitter.alerts) != 1 {
-		t.Fatalf("coverage alerts = %d, want 1", len(emitter.alerts))
-	}
-	if emitter.alerts[0].AlertCode != "unknown_route" {
-		t.Fatalf("AlertCode = %q", emitter.alerts[0].AlertCode)
-	}
-}
-
 func TestProxyDoesNotEmitCoverageAlertWhenTracePersistenceFails(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -1925,6 +1864,78 @@ func TestProxyStreamingAuditPersistenceSurvivesCanceledRequestContext(t *testing
 	}
 	if repo.traces[0].ResponseRawRef == "" {
 		t.Fatal("ResponseRawRef is empty")
+	}
+}
+
+func TestProxyRejectsUnmatchedRouteWith404(t *testing.T) {
+	repo := &memoryTraceRepo{}
+	emitter := &recordingCoverageEmitter{}
+	publisher := &recordingJobPublisher{}
+	handler := testHandler("https://upstream.test", repo, evidence.NewFilesystemStore(t.TempDir()))
+	handler.CoverageEmitter = emitter
+	handler.JobPublisher = publisher
+
+	for _, tc := range []struct {
+		method string
+		path   string
+		auth   bool
+	}{
+		{"GET", "/panel", true},
+		{"GET", "/api/home_page_content", true},
+		{"POST", "/api/user/login", true},
+		{"GET", "/favicon.ico", true},
+		{"GET", "/static/app.js", true},
+		{"GET", "/panel", false},
+		{"OPTIONS", "/v1/chat/completions", true},
+		{"GET", "/unknown?foo=bar", true},
+	} {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			repo.traces = nil
+			emitter.alerts = nil
+			publisher.jobs = nil
+
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			if tc.auth {
+				req.Header.Set("Authorization", "Bearer sk-abc123")
+			}
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404", rec.Code)
+			}
+			if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+				t.Fatalf("Content-Type = %q, want application/json", ct)
+			}
+			var body map[string]interface{}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("unmarshal response: %v", err)
+			}
+			errObj, ok := body["error"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("response has no error object: %v", body)
+			}
+			if code, _ := errObj["code"].(float64); code != 404 {
+				t.Fatalf("error.code = %v, want 404", code)
+			}
+			if errType, _ := errObj["type"].(string); errType != "not_found" {
+				t.Fatalf("error.type = %q, want not_found", errType)
+			}
+			msg, _ := errObj["message"].(string)
+			if !strings.Contains(msg, tc.method) || !strings.Contains(msg, req.URL.Path) {
+				t.Fatalf("error.message = %q, want it to contain method and path", msg)
+			}
+			if len(repo.traces) != 0 {
+				t.Fatalf("expected 0 traces, got %d", len(repo.traces))
+			}
+			if len(emitter.alerts) != 0 {
+				t.Fatalf("expected 0 coverage alerts, got %d", len(emitter.alerts))
+			}
+			if len(publisher.jobs) != 0 {
+				t.Fatalf("expected 0 published jobs, got %d", len(publisher.jobs))
+			}
+		})
 	}
 }
 

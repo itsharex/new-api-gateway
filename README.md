@@ -1,6 +1,6 @@
 # new-api-gateway
 
-new-api 项目的前端网关代理层，用于记录所有访问 new-api 的请求信息，并支撑后续数据记录与分析。
+new-api 项目的前端网关代理层，仅代理已注册的模型 API 路由并记录 trace，非模型请求返回 404。
 
 ## 架构概览
 
@@ -35,7 +35,7 @@ new-api 项目的前端网关代理层，用于记录所有访问 new-api 的请
 ### 请求处理流程
 
 1. 客户端请求到达网关
-2. 路由匹配 → 确定 30+ 已知 API 路由的采集模式
+2. 路由匹配 → 未匹配路由直接返回 404；匹配的 30+ 已知 API 路由进入采集流程
 3. 从 6 个来源提取 API Key → HMAC-SHA256 指纹脱敏
 4. 身份解析（Redis 缓存 → PG 缓存 → new-api DB 逐级查找）
 5. 采集请求体与请求头，存入证据库（文件系统或 OSS）
@@ -54,6 +54,45 @@ new-api 项目的前端网关代理层，用于记录所有访问 new-api 的请
 5. 运行 13+ 异常检测规则
 6. 用量聚合（小时 + 天级别 upsert）
 7. 持久化所有分析结果
+
+## 中转路由清单
+
+网关仅代理以下已注册的模型 API 路由，非模型请求（管理后台、静态资源等）返回 `404`。
+
+| 方法 | 路径模式 | 协议族 | 说明 |
+|------|---------|--------|------|
+| POST | `/v1/chat/completions` | openai_chat | OpenAI Chat Completions |
+| POST | `/pg/chat/completions` | openai_chat | OpenAI Chat Completions（兼容路径） |
+| POST | `/v1/responses` | openai_responses | OpenAI Responses API |
+| POST | `/v1/responses/compact` | openai_responses | OpenAI Responses API (compact) |
+| POST | `/v1/messages` | claude_messages | Anthropic Claude Messages |
+| POST | `/v1/completions` | openai_completions | OpenAI Legacy Completions |
+| POST | `/v1/embeddings` | embeddings | Embeddings |
+| POST | `/v1/engines/:model/embeddings` | embeddings | Legacy Engine Embeddings |
+| POST | `/v1/rerank` | rerank | Rerank |
+| POST | `/v1/images/generations` | openai_images | Image Generations |
+| POST | `/v1/images/edits` | openai_images | Image Edits |
+| POST | `/v1/edits` | openai_images | Legacy Edits |
+| POST | `/v1/audio/transcriptions` | openai_audio | Audio Transcription |
+| POST | `/v1/audio/translations` | openai_audio | Audio Translation |
+| POST | `/v1/audio/speech` | openai_audio | Text-to-Speech |
+| POST | `/v1beta/models/*` | gemini | Google Gemini |
+| POST | `/v1/models/*` | gemini | Google Gemini (v1) |
+| GET | `/v1/realtime` | realtime | Realtime WebSocket |
+| POST | `/v1/video/generations` | video | Video Generation |
+| GET | `/v1/video/generations/:task_id` | video | Video Polling |
+| GET | `/v1/videos/:task_id` | video | Video Polling (alt) |
+| GET | `/v1/videos/:task_id/content` | video | Video Content Download |
+| POST | `/v1/videos/:video_id/remix` | video | Video Remix |
+| POST | `/v1/videos*` | video | Video (wildcard) |
+| POST | `/kling/v1/videos/text2video` | kling_video | Kling Text-to-Video |
+| POST | `/kling/v1/videos/image2video` | kling_video | Kling Image-to-Video |
+| GET | `/kling/v1/videos/text2video/:task_id` | kling_video | Kling Polling |
+| GET | `/kling/v1/videos/image2video/:task_id` | kling_video | Kling Polling |
+| POST | `/jimeng/` | jimeng | Jimeng Image |
+| POST | `/:mode/mj/*` | midjourney | Midjourney（带 mode 前缀） |
+| POST | `/mj/*` | midjourney | Midjourney |
+| POST | `/suno/*` | suno | Suno Music |
 
 ## 快速开始
 
