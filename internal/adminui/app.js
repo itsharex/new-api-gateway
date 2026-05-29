@@ -11,6 +11,8 @@ const state = {
   },
 };
 
+let usageRequestSeq = 0;
+
 const views = [
   { id: "overview", label: "概览" },
   { id: "usage", label: "用量" },
@@ -314,9 +316,10 @@ async function loadView() {
 }
 
 async function loadUsage() {
+  const requestSeq = ++usageRequestSeq;
   const username = String(state.usage.username || "").trim();
   if (!username) {
-    renderUsage({});
+    if (requestSeq === usageRequestSeq) renderUsage({});
     return;
   }
   const params = queryString({
@@ -325,8 +328,24 @@ async function loadUsage() {
     model: state.usage.model || "",
     bucket_size: "day",
   });
-  const body = await api(`/usage?${params}`);
+  let body;
+  try {
+    body = await api(`/usage?${params}`);
+  } catch (error) {
+    if (requestSeq !== usageRequestSeq) return;
+    throw error;
+  }
+  if (requestSeq !== usageRequestSeq) return;
   renderUsage(body);
+}
+
+async function reloadUsageView() {
+  renderShell(`<section class="loading-panel">正在加载用量...</section>`);
+  try {
+    await loadUsage();
+  } catch (error) {
+    renderShell(page("用量", `<section class="panel error">${escapeHTML(error.message || "加载用量失败。")}</section>`));
+  }
 }
 
 function renderOverview(body) {
@@ -439,18 +458,18 @@ function renderUsage(body = {}) {
   const rangeTabs = ranges
     .map(
       (item) => `
-        <button type="button" data-usage-range="${escapeHTML(item)}" class="${item === range ? "active" : ""}">
+        <button type="button" data-usage-range="${escapeHTML(item)}" class="${item === range ? "active" : ""}" aria-pressed="${item === range ? "true" : "false"}">
           ${escapeHTML(item)}
         </button>
       `,
     )
     .join("");
   const modelTabs = [
-    `<button type="button" data-usage-model="" class="${selectedModel ? "" : "active"}">全部</button>`,
+    `<button type="button" data-usage-model="" class="${selectedModel ? "" : "active"}" aria-pressed="${selectedModel ? "false" : "true"}">全部</button>`,
     ...models.map((model) => {
       const value = String(model || "");
       return `
-        <button type="button" data-usage-model="${escapeHTML(value)}" class="${value === selectedModel ? "active" : ""}">
+        <button type="button" data-usage-model="${escapeHTML(value)}" class="${value === selectedModel ? "active" : ""}" aria-pressed="${value === selectedModel ? "true" : "false"}">
           ${escapeHTML(value || "unknown")}
         </button>
       `;
@@ -543,7 +562,7 @@ function bindUsageSearch() {
     const username = String(new FormData(event.currentTarget).get("username") || "").trim();
     state.usage.username = username;
     state.usage.model = "";
-    await loadUsage();
+    await reloadUsageView();
   });
 }
 
@@ -551,24 +570,29 @@ function bindUsageControls() {
   document.querySelectorAll("[data-usage-range]").forEach((button) => {
     button.addEventListener("click", async () => {
       state.usage.range = button.dataset.usageRange || "30d";
-      await loadUsage();
+      await reloadUsageView();
     });
   });
   document.querySelectorAll("[data-usage-model]").forEach((button) => {
     button.addEventListener("click", async () => {
       state.usage.model = button.dataset.usageModel || "";
-      await loadUsage();
+      await reloadUsageView();
     });
   });
+}
+
+function finiteNumber(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? number : 0;
 }
 
 function usageChart(points) {
   const items = arrayValue(points).map((item) => ({
     label: String(item.date || item.bucket_start || ""),
-    total: Number(item.total_tokens || 0),
-    input: Number(item.prompt_tokens || 0),
-    output: Number(item.completion_tokens || 0),
-    cache: Number(item.cached_tokens || 0),
+    total: finiteNumber(item.total_tokens),
+    input: finiteNumber(item.prompt_tokens),
+    output: finiteNumber(item.completion_tokens),
+    cache: finiteNumber(item.cached_tokens),
   }));
   if (!items.length) {
     return `<div class="chart-wrap"><div class="empty-chart">暂无 token 使用数据</div></div>`;
@@ -586,7 +610,7 @@ function usageChart(points) {
   const divisor = maxValue > 0 ? maxValue : 1;
   const lastIndex = Math.max(items.length - 1, 1);
   const xFor = (index) => left + (chartWidth * index) / lastIndex;
-  const yFor = (value) => top + chartHeight - (chartHeight * value) / divisor;
+  const yFor = (value) => top + chartHeight - (chartHeight * finiteNumber(value)) / divisor;
   const series = [
     ["total", "Total", "total"],
     ["input", "Input", "input"],
@@ -619,11 +643,11 @@ function usageChart(points) {
     </div>
     <div class="chart-wrap">
       <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="员工 token 使用趋势">
-        <line class="grid" x1="${left}" y1="${top}" x2="${width - right}" y2="${top}"></line>
-        <line class="grid" x1="${left}" y1="${top + chartHeight / 2}" x2="${width - right}" y2="${top + chartHeight / 2}"></line>
-        <line class="grid" x1="${left}" y1="${top + chartHeight}" x2="${width - right}" y2="${top + chartHeight}"></line>
-        <line class="axis" x1="${left}" y1="${top}" x2="${left}" y2="${top + chartHeight}"></line>
-        <line class="axis" x1="${left}" y1="${top + chartHeight}" x2="${width - right}" y2="${top + chartHeight}"></line>
+        <line class="usage-chart-grid" x1="${left}" y1="${top}" x2="${width - right}" y2="${top}"></line>
+        <line class="usage-chart-grid" x1="${left}" y1="${top + chartHeight / 2}" x2="${width - right}" y2="${top + chartHeight / 2}"></line>
+        <line class="usage-chart-grid" x1="${left}" y1="${top + chartHeight}" x2="${width - right}" y2="${top + chartHeight}"></line>
+        <line class="usage-chart-axis" x1="${left}" y1="${top}" x2="${left}" y2="${top + chartHeight}"></line>
+        <line class="usage-chart-axis" x1="${left}" y1="${top + chartHeight}" x2="${width - right}" y2="${top + chartHeight}"></line>
         ${series
           .map(([key, label, className]) => `<path class="series-${className}" d="${pathFor(key)}"><title>${escapeHTML(label)}</title></path>`)
           .join("")}

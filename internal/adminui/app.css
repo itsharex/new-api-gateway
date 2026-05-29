@@ -426,13 +426,13 @@ textarea {
   min-height: 260px;
 }
 
-.axis,
-.grid {
+.usage-chart-axis,
+.usage-chart-grid {
   stroke: #d7dde8;
   stroke-width: 1;
 }
 
-.grid {
+.usage-chart-grid {
   stroke-dasharray: 4 4;
 }
 
