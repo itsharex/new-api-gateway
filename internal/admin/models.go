@@ -76,7 +76,7 @@ type ReviewDecision struct {
 
 type TraceFilter struct {
 	TraceID          string
-	Username       string
+	Username         string
 	TokenFingerprint string
 	RoutePattern     string
 	Model            string
@@ -85,18 +85,21 @@ type TraceFilter struct {
 }
 
 type TraceSummary struct {
-	TraceID            string `json:"trace_id"`
-	Method             string `json:"method"`
-	Path               string `json:"path"`
-	RoutePattern       string `json:"route_pattern"`
-	ProtocolFamily     string `json:"protocol_family"`
-	StatusCode         int    `json:"status_code"`
-	Username         string `json:"username"`
-	FingerprintDisplay string `json:"fingerprint_display"`
-	ModelRequested     string `json:"model_requested"`
-	UsageTotalTokens   int    `json:"usage_total_tokens"`
-	CreatedAt          string `json:"created_at"`
-	NeedsReview        bool   `json:"needs_review"`
+	TraceID               string `json:"trace_id"`
+	Method                string `json:"method"`
+	Path                  string `json:"path"`
+	RoutePattern          string `json:"route_pattern"`
+	ProtocolFamily        string `json:"protocol_family"`
+	StatusCode            int    `json:"status_code"`
+	Username              string `json:"username"`
+	FingerprintDisplay    string `json:"fingerprint_display"`
+	ModelRequested        string `json:"model_requested"`
+	UsagePromptTokens     int    `json:"usage_prompt_tokens"`
+	UsageCompletionTokens int    `json:"usage_completion_tokens"`
+	UsageCachedTokens     int    `json:"usage_cached_tokens"`
+	UsageTotalTokens      int    `json:"usage_total_tokens"`
+	CreatedAt             string `json:"created_at"`
+	NeedsReview           bool   `json:"needs_review"`
 }
 
 type AnomalySummary struct {
@@ -104,7 +107,7 @@ type AnomalySummary struct {
 	AnomalyType        string `json:"anomaly_type"`
 	Severity           string `json:"severity"`
 	Status             string `json:"status"`
-	Username         string `json:"username"`
+	Username           string `json:"username"`
 	FingerprintDisplay string `json:"fingerprint_display"`
 	ObservedValue      string `json:"observed_value"`
 	ThresholdValue     string `json:"threshold_value"`
@@ -129,7 +132,7 @@ type CoverageAlertSummary struct {
 type LookupSummary struct {
 	FingerprintDisplay string         `json:"fingerprint_display"`
 	TokenFingerprint   string         `json:"token_fingerprint"`
-	Username         string         `json:"username"`
+	Username           string         `json:"username"`
 	NewAPITokenID      int            `json:"new_api_token_id"`
 	TokenName          string         `json:"token_name"`
 	TokenStatus        int            `json:"token_status"`
@@ -157,7 +160,7 @@ type OverviewSummary struct {
 }
 
 type UsageFilter struct {
-	Username       string
+	Username         string
 	TokenFingerprint string
 	Model            string
 	RoutePattern     string
@@ -168,19 +171,22 @@ type UsageFilter struct {
 type UsageBucket struct {
 	BucketStart        string `json:"bucket_start"`
 	BucketSize         string `json:"bucket_size"`
-	Username         string `json:"username"`
+	Username           string `json:"username"`
 	FingerprintDisplay string `json:"fingerprint_display"`
 	Model              string `json:"model"`
 	RoutePattern       string `json:"route_pattern"`
 	RequestCount       int64  `json:"request_count"`
 	SuccessCount       int64  `json:"success_count"`
 	ErrorCount         int64  `json:"error_count"`
+	PromptTokens       int64  `json:"prompt_tokens"`
+	CompletionTokens   int64  `json:"completion_tokens"`
+	CachedTokens       int64  `json:"cached_tokens"`
 	TotalTokens        int64  `json:"total_tokens"`
 	EstimatedCost      string `json:"estimated_cost"`
 }
 
 type TokenIdentityFilter struct {
-	Username       string
+	Username         string
 	TokenFingerprint string
 	Limit            int
 }
@@ -190,7 +196,7 @@ type TokenIdentitySummary struct {
 	TokenFingerprint   string `json:"token_fingerprint"`
 	NewAPITokenID      int    `json:"new_api_token_id"`
 	TokenNameRaw       string `json:"token_name_raw"`
-	Username         string `json:"username"`
+	Username           string `json:"username"`
 	DisplayName        string `json:"display_name"`
 	Department         string `json:"department"`
 	TokenStatus        int    `json:"token_status"`
@@ -206,9 +212,9 @@ type ReviewDecisionFilter struct {
 
 type SystemSettingsSummary struct {
 	UsernamePattern string `json:"username_pattern"`
-	MetricsEnabled    bool   `json:"metrics_enabled"`
-	LookupLimit       int    `json:"lookup_limit"`
-	RawAccessLimit    int    `json:"raw_access_limit"`
+	MetricsEnabled  bool   `json:"metrics_enabled"`
+	LookupLimit     int    `json:"lookup_limit"`
+	RawAccessLimit  int    `json:"raw_access_limit"`
 }
 
 type TraceDetail struct {

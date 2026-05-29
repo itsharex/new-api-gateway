@@ -157,7 +157,8 @@ func (r Repository) ListTraces(ctx context.Context, filter TraceFilter) ([]Trace
 	args = append(args, limit)
 	query := fmt.Sprintf(`
 SELECT t.trace_id, t.method, t.path, t.route_pattern, t.protocol_family, t.status_code,
-       t.username_snapshot, t.fingerprint_display, t.model_requested, t.usage_total_tokens,
+       t.username_snapshot, t.fingerprint_display, t.model_requested,
+       t.usage_prompt_tokens, t.usage_completion_tokens, t.usage_cached_tokens, t.usage_total_tokens,
        t.created_at::text,
        EXISTS(SELECT 1 FROM analysis_results WHERE trace_id = t.trace_id AND severity = 'review') AS needs_review
 FROM traces t
@@ -175,6 +176,7 @@ LIMIT $%d`, strings.Join(where, " AND "), len(args))
 		if err := rows.Scan(
 			&trace.TraceID, &trace.Method, &trace.Path, &trace.RoutePattern, &trace.ProtocolFamily,
 			&trace.StatusCode, &trace.Username, &trace.FingerprintDisplay, &trace.ModelRequested,
+			&trace.UsagePromptTokens, &trace.UsageCompletionTokens, &trace.UsageCachedTokens,
 			&trace.UsageTotalTokens, &trace.CreatedAt, &trace.NeedsReview,
 		); err != nil {
 			return nil, err
@@ -363,7 +365,8 @@ func (r Repository) ListUsageAggregates(ctx context.Context, filter UsageFilter)
 	args = append(args, limit)
 	query := fmt.Sprintf(`
 SELECT bucket_start::text, bucket_size, username, token_name_snapshot, model, route_pattern,
-       request_count, success_count, error_count, total_tokens, estimated_cost
+       request_count, success_count, error_count,
+       prompt_tokens, completion_tokens, cached_tokens, total_tokens, estimated_cost
 FROM usage_aggregates
 WHERE %s
 ORDER BY bucket_start DESC
@@ -386,6 +389,9 @@ LIMIT $%d`, strings.Join(where, " AND "), len(args))
 			&item.RequestCount,
 			&item.SuccessCount,
 			&item.ErrorCount,
+			&item.PromptTokens,
+			&item.CompletionTokens,
+			&item.CachedTokens,
 			&item.TotalTokens,
 			&item.EstimatedCost,
 		); err != nil {
@@ -550,7 +556,8 @@ func (r Repository) GetTraceDetail(ctx context.Context, traceID string) (TraceDe
 	var detail TraceDetail
 	err := r.db.QueryRow(ctx, `
 SELECT trace_id, method, path, route_pattern, protocol_family, status_code,
-       username_snapshot, fingerprint_display, model_requested, usage_total_tokens,
+       username_snapshot, fingerprint_display, model_requested,
+       usage_prompt_tokens, usage_completion_tokens, usage_cached_tokens, usage_total_tokens,
        created_at::text, request_raw_ref, response_raw_ref, request_headers_ref,
        response_headers_ref, identity_resolution_status, analysis_status
 FROM traces
@@ -565,6 +572,9 @@ LIMIT 1`, traceID).Scan(
 		&detail.Username,
 		&detail.FingerprintDisplay,
 		&detail.ModelRequested,
+		&detail.UsagePromptTokens,
+		&detail.UsageCompletionTokens,
+		&detail.UsageCachedTokens,
 		&detail.UsageTotalTokens,
 		&detail.CreatedAt,
 		&detail.RequestRawRef,

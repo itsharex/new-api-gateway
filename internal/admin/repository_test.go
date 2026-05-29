@@ -96,7 +96,7 @@ func TestRepositoryListTracesBuildsBoundedQuery(t *testing.T) {
 	db.rows = &fakeRows{}
 
 	_, err := repo.ListTraces(context.Background(), TraceFilter{
-		Username:   "E10001",
+		Username:     "E10001",
 		RoutePattern: "/v1/chat/completions",
 		Limit:        500,
 	})
@@ -106,6 +106,11 @@ func TestRepositoryListTracesBuildsBoundedQuery(t *testing.T) {
 	}
 	if !strings.Contains(db.querySQL, "FROM traces") {
 		t.Fatalf("query = %s", db.querySQL)
+	}
+	for _, column := range []string{"t.usage_prompt_tokens", "t.usage_completion_tokens", "t.usage_cached_tokens", "t.usage_total_tokens"} {
+		if !strings.Contains(db.querySQL, column) {
+			t.Fatalf("query missing %s: %s", column, db.querySQL)
+		}
 	}
 	if strings.Contains(db.querySQL, "500") {
 		t.Fatalf("query interpolated limit instead of binding/capping: %s", db.querySQL)
@@ -213,7 +218,7 @@ func TestRepositoryListUsageAggregatesCapsLimitAndBindsFilters(t *testing.T) {
 	repo := NewRepository(db)
 
 	_, err := repo.ListUsageAggregates(context.Background(), UsageFilter{
-		Username:       "E10001",
+		Username:         "E10001",
 		TokenFingerprint: "fingerprint-value",
 		BucketSize:       "hour",
 		Limit:            500,
@@ -224,6 +229,11 @@ func TestRepositoryListUsageAggregatesCapsLimitAndBindsFilters(t *testing.T) {
 	}
 	if !strings.Contains(db.querySQL, "FROM usage_aggregates") {
 		t.Fatalf("query = %s", db.querySQL)
+	}
+	for _, column := range []string{"prompt_tokens", "completion_tokens", "cached_tokens", "total_tokens"} {
+		if !strings.Contains(db.querySQL, column) {
+			t.Fatalf("query missing %s: %s", column, db.querySQL)
+		}
 	}
 	if strings.Contains(db.querySQL, "500") {
 		t.Fatalf("query interpolated limit instead of binding/capping: %s", db.querySQL)
@@ -305,14 +315,17 @@ func TestRepositoryGetTraceDetailScansMessagesAndAnalysisResults(t *testing.T) {
 				*(dest[6].(*string)) = "E10001"
 				*(dest[7].(*string)) = "prod key"
 				*(dest[8].(*string)) = "gpt-5.2"
-				*(dest[9].(*int)) = 321
-				*(dest[10].(*string)) = "2026-04-28 10:00:00+00"
-				*(dest[11].(*string)) = "raw/request.json"
-				*(dest[12].(*string)) = "raw/response.json"
-				*(dest[13].(*string)) = "raw/request-headers.json"
-				*(dest[14].(*string)) = "raw/response-headers.json"
-				*(dest[15].(*string)) = "resolved"
-				*(dest[16].(*string)) = "complete"
+				*(dest[9].(*int)) = 111
+				*(dest[10].(*int)) = 222
+				*(dest[11].(*int)) = 33
+				*(dest[12].(*int)) = 321
+				*(dest[13].(*string)) = "2026-04-28 10:00:00+00"
+				*(dest[14].(*string)) = "raw/request.json"
+				*(dest[15].(*string)) = "raw/response.json"
+				*(dest[16].(*string)) = "raw/request-headers.json"
+				*(dest[17].(*string)) = "raw/response-headers.json"
+				*(dest[18].(*string)) = "resolved"
+				*(dest[19].(*string)) = "complete"
 				return nil
 			}},
 		},
@@ -354,6 +367,9 @@ func TestRepositoryGetTraceDetailScansMessagesAndAnalysisResults(t *testing.T) {
 	}
 	if detail.TraceID != "trace-123" || detail.Username != "E10001" || detail.RequestRawRef != "raw/request.json" {
 		t.Fatalf("detail representative fields = %#v", detail)
+	}
+	if detail.UsagePromptTokens != 111 || detail.UsageCompletionTokens != 222 || detail.UsageCachedTokens != 33 || detail.UsageTotalTokens != 321 {
+		t.Fatalf("usage fields = %#v", detail.TraceSummary)
 	}
 	if len(detail.NormalizedMessages) != 1 || detail.NormalizedMessages[0].ContentText != "hello" || detail.NormalizedMessages[0].TokenCountEstimate != 8 {
 		t.Fatalf("normalized messages = %#v", detail.NormalizedMessages)
