@@ -55,6 +55,23 @@ func TestGenericExtractorExtractResponseOpenAICompatibleDetails(t *testing.T) {
 	}
 }
 
+func TestGenericExtractorExtractResponsePromptCompletionDetails(t *testing.T) {
+	g := newGenericExtractor()
+	u, m := g.extractResponse([]byte(`{"model":"x","usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8,"prompt_tokens_details":{"cached_tokens":4},"completion_tokens_details":{"reasoning_tokens":2}}}`))
+	if u.PromptTokens != 5 || u.CompletionTokens != 3 || u.TotalTokens != 8 {
+		t.Fatalf("usage=%+v", u)
+	}
+	if u.CachedTokens != 4 {
+		t.Fatalf("CachedTokens=%d, want 4", u.CachedTokens)
+	}
+	if u.ReasoningTokens != 2 {
+		t.Fatalf("ReasoningTokens=%d, want 2", u.ReasoningTokens)
+	}
+	if m != "x" {
+		t.Fatalf("model=%q, want x", m)
+	}
+}
+
 func TestGenericExtractorExtractResponseEmpty(t *testing.T) {
 	g := newGenericExtractor()
 	u, m := g.extractResponse([]byte(`{}`))
