@@ -51,6 +51,7 @@ func (h Handler) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /admin/api/login", h.login)
 	mux.Handle("GET /admin/api/me", h.auth.Middleware(http.HandlerFunc(h.me)))
+	mux.Handle("POST /admin/api/me/password", h.auth.Middleware(h.requireCSRF(http.HandlerFunc(h.changePassword))))
 	mux.Handle("GET /admin/api/overview", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.overview))))
 	mux.Handle("GET /admin/api/usage", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.listUsage))))
 	mux.Handle("GET /admin/api/traces/{trace_id}", h.auth.Middleware(h.auth.Require(PermissionViewNormalizedTraces, http.HandlerFunc(h.getTraceDetail))))
@@ -130,6 +131,79 @@ func (h Handler) login(w http.ResponseWriter, r *http.Request) {
 func (h Handler) me(w http.ResponseWriter, r *http.Request) {
 	principal, _ := PrincipalFromContext(r.Context())
 	writeJSON(w, http.StatusOK, map[string]any{"user": principal})
+}
+
+func (h Handler) changePassword(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+		ConfirmPassword string `json:"confirm_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	input.CurrentPassword = strings.TrimSpace(input.CurrentPassword)
+	input.NewPassword = strings.TrimSpace(input.NewPassword)
+	input.ConfirmPassword = strings.TrimSpace(input.ConfirmPassword)
+	if input.CurrentPassword == "" || input.NewPassword == "" || input.ConfirmPassword == "" {
+		http.Error(w, "password fields are required", http.StatusBadRequest)
+		return
+	}
+	if len(input.NewPassword) < 12 {
+		http.Error(w, "new password must be at least 12 characters", http.StatusBadRequest)
+		return
+	}
+	if input.NewPassword != input.ConfirmPassword {
+		http.Error(w, "new password confirmation does not match", http.StatusBadRequest)
+		return
+	}
+	principal, ok := PrincipalFromContext(r.Context())
+	if !ok {
+		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		return
+	}
+	user, err := h.repo.FindActiveUserByID(r.Context(), principal.UserID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		return
+	}
+	if err != nil {
+		http.Error(w, "failed to change password", http.StatusInternalServerError)
+		return
+	}
+	if CheckPassword(user.PasswordHash, input.CurrentPassword) != nil {
+		http.Error(w, "current password is incorrect", http.StatusUnauthorized)
+		return
+	}
+	if CheckPassword(user.PasswordHash, input.NewPassword) == nil {
+		http.Error(w, "new password must be different from current password", http.StatusBadRequest)
+		return
+	}
+	newHash, err := HashPassword(input.NewPassword)
+	if err != nil {
+		http.Error(w, "failed to change password", http.StatusInternalServerError)
+		return
+	}
+	now := h.auth.now()
+	if err := h.repo.UpdateUserPassword(r.Context(), user.ID, newHash, now); err != nil {
+		http.Error(w, "failed to change password", http.StatusInternalServerError)
+		return
+	}
+	if err := h.repo.RevokeOtherSessions(r.Context(), user.ID, principal.SessionID, now); err != nil {
+		http.Error(w, "failed to change password", http.StatusInternalServerError)
+		return
+	}
+	_ = h.repo.InsertAuditActionLog(r.Context(), AuditActionLog{
+		ActorUserID:   user.ID,
+		ActorUsername: user.Username,
+		Action:        "password_changed",
+		TargetType:    "audit_user",
+		TargetID:      user.Username,
+		MetadataJSON:  `{"revoked_other_sessions":true}`,
+		CreatedAt:     now,
+	})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h Handler) logout(w http.ResponseWriter, r *http.Request) {

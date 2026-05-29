@@ -97,6 +97,141 @@ func TestLoginMeLogoutFlow(t *testing.T) {
 	}
 }
 
+func TestChangeCurrentUserPasswordSucceedsAndRevokesOtherSessions(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleViewer, "", nil)
+	oldHash := db.user.PasswordHash
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/me/password", strings.NewReader(`{"current_password":"secret-password","new_password":"new-secret-password","confirm_password":"new-secret-password"}`))
+	addAuthenticatedCookies(req, cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if db.updatedPasswordUserID != int64(1) {
+		t.Fatalf("updatedPasswordUserID = %d, want 1", db.updatedPasswordUserID)
+	}
+	if db.updatedPasswordHash == "" || db.updatedPasswordHash == oldHash {
+		t.Fatalf("updatedPasswordHash was not changed")
+	}
+	if err := CheckPassword(db.updatedPasswordHash, "new-secret-password"); err != nil {
+		t.Fatalf("new password does not verify: %v", err)
+	}
+	if err := CheckPassword(db.updatedPasswordHash, "secret-password"); err == nil {
+		t.Fatal("old password still verifies")
+	}
+	if db.revokedOtherUserID != int64(1) {
+		t.Fatalf("revokedOtherUserID = %d, want 1", db.revokedOtherUserID)
+	}
+	if db.revokedOtherKeepSession == "" {
+		t.Fatal("current session id was not passed to RevokeOtherSessions")
+	}
+	if db.revokedOtherAt != time.Unix(1000, 0).UTC() {
+		t.Fatalf("revokedOtherAt = %s, want auth now", db.revokedOtherAt)
+	}
+	if len(db.auditActions) == 0 || db.auditActions[len(db.auditActions)-1] != "password_changed" {
+		t.Fatalf("auditActions = %#v", db.auditActions)
+	}
+	if len(db.auditMetadata) == 0 || db.auditMetadata[len(db.auditMetadata)-1] != `{"revoked_other_sessions":true}` {
+		t.Fatalf("auditMetadata = %#v", db.auditMetadata)
+	}
+
+	meReq := httptest.NewRequest(http.MethodGet, "/admin/api/me", nil)
+	meReq.AddCookie(cookie)
+	meRec := httptest.NewRecorder()
+	handler.ServeHTTP(meRec, meReq)
+	if meRec.Code != http.StatusOK {
+		t.Fatalf("me status after password change = %d, body = %s", meRec.Code, meRec.Body.String())
+	}
+}
+
+func TestChangeCurrentUserPasswordRejectsInvalidInput(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     string
+		wantCode int
+		wantText string
+	}{
+		{
+			name:     "wrong current password",
+			body:     `{"current_password":"wrong-password","new_password":"new-secret-password","confirm_password":"new-secret-password"}`,
+			wantCode: http.StatusUnauthorized,
+			wantText: "current password is incorrect",
+		},
+		{
+			name:     "short new password",
+			body:     `{"current_password":"secret-password","new_password":"short","confirm_password":"short"}`,
+			wantCode: http.StatusBadRequest,
+			wantText: "new password must be at least 12 characters",
+		},
+		{
+			name:     "confirmation mismatch",
+			body:     `{"current_password":"secret-password","new_password":"new-secret-password","confirm_password":"different-password"}`,
+			wantCode: http.StatusBadRequest,
+			wantText: "new password confirmation does not match",
+		},
+		{
+			name:     "same as current password",
+			body:     `{"current_password":"secret-password","new_password":"secret-password","confirm_password":"secret-password"}`,
+			wantCode: http.StatusBadRequest,
+			wantText: "new password must be different from current password",
+		},
+		{
+			name:     "missing field",
+			body:     `{"current_password":"secret-password","new_password":"new-secret-password"}`,
+			wantCode: http.StatusBadRequest,
+			wantText: "password fields are required",
+		},
+		{
+			name:     "invalid json",
+			body:     `{"current_password":"secret-password"`,
+			wantCode: http.StatusBadRequest,
+			wantText: "invalid json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler, db, cookie := newAuthenticatedAdminHandler(t, RoleAuditor, "", nil)
+			oldHash := db.user.PasswordHash
+			req := httptest.NewRequest(http.MethodPost, "/admin/api/me/password", strings.NewReader(tt.body))
+			addAuthenticatedCookies(req, cookie)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantCode {
+				t.Fatalf("status = %d, want %d, body = %s", rec.Code, tt.wantCode, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), tt.wantText) {
+				t.Fatalf("body = %q, want %q", rec.Body.String(), tt.wantText)
+			}
+			if db.user.PasswordHash != oldHash {
+				t.Fatal("password hash changed after invalid request")
+			}
+			if db.revokedOtherUserID != 0 {
+				t.Fatalf("revokedOtherUserID = %d, want 0", db.revokedOtherUserID)
+			}
+		})
+	}
+}
+
+func TestChangeCurrentUserPasswordRequiresCSRF(t *testing.T) {
+	handler, _, cookie := newAuthenticatedAdminHandler(t, RoleAuditor, "", nil)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/me/password", strings.NewReader(`{"current_password":"secret-password","new_password":"new-secret-password","confirm_password":"new-secret-password"}`))
+	req.AddCookie(cookie)
+	req.Header.Set("X-CSRF-Token", "forged-csrf")
+	req.AddCookie(&http.Cookie{Name: "audit_admin_csrf", Value: "forged-csrf"})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+}
+
 func TestLogoutClearsMalformedAndStaleCookies(t *testing.T) {
 	db := &memoryAdminDB{
 		user: User{ID: 1, Username: "alice", DisplayName: "Alice", Role: RoleAuditor, Status: "active"},
@@ -1085,26 +1220,33 @@ func (s *recordingEvidenceStore) Get(ctx context.Context, objectRef string) (io.
 }
 
 type memoryAdminDB struct {
-	user                   User
-	session                Session
-	revokedSessionID       string
-	auditActions           []string
-	auditMetadata          []string
-	auditLogs              []AuditActionLog
-	reviewDecisions        []ReviewDecision
-	contextEntry           ContextCatalogEntry
-	rawEvidenceObject      EvidenceObjectSummary
-	rawEvidenceErr         error
-	rawEvidenceSQL         string
-	rawEvidenceArgs        []any
-	lookupTokenFingerprint string
-	auditErr               error
-	findUserErr            error
-	revokeErr              error
-	traceDetail            TraceDetail
-	usageModelFilter       string
-	employeeUsageFilter    EmployeeUsageFilter
-	employeeUsageCalled    bool
+	user                    User
+	session                 Session
+	revokedSessionID        string
+	auditActions            []string
+	auditMetadata           []string
+	auditLogs               []AuditActionLog
+	reviewDecisions         []ReviewDecision
+	contextEntry            ContextCatalogEntry
+	rawEvidenceObject       EvidenceObjectSummary
+	rawEvidenceErr          error
+	rawEvidenceSQL          string
+	rawEvidenceArgs         []any
+	lookupTokenFingerprint  string
+	auditErr                error
+	findUserErr             error
+	revokeErr               error
+	updatedPasswordHash     string
+	updatedPasswordUserID   int64
+	revokedOtherUserID      int64
+	revokedOtherKeepSession string
+	revokedOtherAt          time.Time
+	updatePasswordErr       error
+	revokeOtherErr          error
+	traceDetail             TraceDetail
+	usageModelFilter        string
+	employeeUsageFilter     EmployeeUsageFilter
+	employeeUsageCalled     bool
 }
 
 func (m *memoryAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -1118,6 +1260,20 @@ func (m *memoryAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgco
 		if len(args) > 3 {
 			m.session.CSRFToken = args[3].(string)
 		}
+	case strings.Contains(sql, "UPDATE audit_users") && strings.Contains(sql, "password_hash"):
+		if m.updatePasswordErr != nil {
+			return pgconn.CommandTag{}, m.updatePasswordErr
+		}
+		m.updatedPasswordUserID = args[0].(int64)
+		m.updatedPasswordHash = args[1].(string)
+		m.user.PasswordHash = args[1].(string)
+	case strings.Contains(sql, "UPDATE audit_sessions") && strings.Contains(sql, "session_id <>"):
+		if m.revokeOtherErr != nil {
+			return pgconn.CommandTag{}, m.revokeOtherErr
+		}
+		m.revokedOtherUserID = args[0].(int64)
+		m.revokedOtherKeepSession = args[1].(string)
+		m.revokedOtherAt = args[2].(time.Time)
 	case strings.Contains(sql, "UPDATE audit_sessions SET revoked_at"):
 		if m.revokeErr != nil {
 			return pgconn.CommandTag{}, m.revokeErr
@@ -1249,9 +1405,16 @@ func (r memoryAdminRow) Scan(dest ...any) error {
 		if r.db.findUserErr != nil {
 			return r.db.findUserErr
 		}
-		username := r.args[0].(string)
-		if username != r.db.user.Username || r.db.user.Status != "active" {
-			return pgx.ErrNoRows
+		if strings.Contains(r.sql, "WHERE username = $1") {
+			username := r.args[0].(string)
+			if username != r.db.user.Username || r.db.user.Status != "active" {
+				return pgx.ErrNoRows
+			}
+		} else {
+			userID := r.args[0].(int64)
+			if userID != r.db.user.ID || r.db.user.Status != "active" {
+				return pgx.ErrNoRows
+			}
 		}
 		*(dest[0].(*int64)) = r.db.user.ID
 		*(dest[1].(*string)) = r.db.user.Username
