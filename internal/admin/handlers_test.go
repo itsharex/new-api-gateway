@@ -267,8 +267,8 @@ func TestChangeCurrentUserPasswordRevokeFailureDoesNotUpdatePassword(t *testing.
 	if len(db.auditActions) != 1 || db.auditActions[0] != "login" {
 		t.Fatalf("auditActions = %#v, want only login audit", db.auditActions)
 	}
-	if got := strings.Join(db.passwordChangeOps, ","); got != "revoke_other_sessions" {
-		t.Fatalf("passwordChangeOps = %s, want revoke_other_sessions", got)
+	if got := strings.Join(db.passwordChangeOps, ","); got != "" {
+		t.Fatalf("passwordChangeOps = %s, want no committed password change ops", got)
 	}
 }
 
@@ -285,8 +285,8 @@ func TestChangeCurrentUserPasswordUpdateFailureKeepsRevocationVisible(t *testing
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500, body = %s", rec.Code, rec.Body.String())
 	}
-	if db.revokedOtherUserID != int64(1) {
-		t.Fatalf("revokedOtherUserID = %d, want 1", db.revokedOtherUserID)
+	if db.revokedOtherUserID != 0 {
+		t.Fatalf("revokedOtherUserID = %d, want 0", db.revokedOtherUserID)
 	}
 	if db.user.PasswordHash != oldHash {
 		t.Fatal("password hash changed despite update failure")
@@ -294,12 +294,12 @@ func TestChangeCurrentUserPasswordUpdateFailureKeepsRevocationVisible(t *testing
 	if len(db.auditActions) != 1 || db.auditActions[0] != "login" {
 		t.Fatalf("auditActions = %#v, want only login audit", db.auditActions)
 	}
-	if got := strings.Join(db.passwordChangeOps, ","); got != "revoke_other_sessions,update_password" {
-		t.Fatalf("passwordChangeOps = %s, want revoke_other_sessions,update_password", got)
+	if got := strings.Join(db.passwordChangeOps, ","); got != "" {
+		t.Fatalf("passwordChangeOps = %s, want no committed password change ops", got)
 	}
 }
 
-func TestChangeCurrentUserPasswordAuditFailureIsVisibleAfterPasswordUpdate(t *testing.T) {
+func TestChangeCurrentUserPasswordAuditFailureRollsBackPasswordChange(t *testing.T) {
 	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleAuditor, "", nil)
 	oldHash := db.user.PasswordHash
 	db.auditErr = errors.New("audit failed")
@@ -312,17 +312,20 @@ func TestChangeCurrentUserPasswordAuditFailureIsVisibleAfterPasswordUpdate(t *te
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500, body = %s", rec.Code, rec.Body.String())
 	}
-	if db.revokedOtherUserID != int64(1) {
-		t.Fatalf("revokedOtherUserID = %d, want 1", db.revokedOtherUserID)
+	if db.revokedOtherUserID != 0 {
+		t.Fatalf("revokedOtherUserID = %d, want 0", db.revokedOtherUserID)
 	}
-	if db.updatedPasswordHash == "" || db.updatedPasswordHash == oldHash {
-		t.Fatal("password hash was not updated before audit failure became visible")
+	if db.user.PasswordHash != oldHash {
+		t.Fatal("password hash changed despite audit failure")
 	}
-	if err := CheckPassword(db.updatedPasswordHash, "new-secret-password"); err != nil {
-		t.Fatalf("new password does not verify: %v", err)
+	if db.updatedPasswordUserID != 0 {
+		t.Fatalf("updatedPasswordUserID = %d, want 0", db.updatedPasswordUserID)
 	}
-	if got := strings.Join(db.passwordChangeOps, ","); got != "revoke_other_sessions,update_password,audit_log" {
-		t.Fatalf("passwordChangeOps = %s, want revoke_other_sessions,update_password,audit_log", got)
+	if len(db.auditActions) != 1 || db.auditActions[0] != "login" {
+		t.Fatalf("auditActions = %#v, want only login audit", db.auditActions)
+	}
+	if got := strings.Join(db.passwordChangeOps, ","); got != "" {
+		t.Fatalf("passwordChangeOps = %s, want no committed password change ops", got)
 	}
 }
 
@@ -1370,6 +1373,39 @@ func (m *memoryAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgco
 		if len(args) > 3 {
 			m.session.CSRFToken = args[3].(string)
 		}
+	case strings.Contains(sql, "WITH updated_user AS") && strings.Contains(sql, "revoked_sessions AS"):
+		if m.revokeOtherErr != nil {
+			return pgconn.CommandTag{}, m.revokeOtherErr
+		}
+		if m.updatePasswordErr != nil {
+			return pgconn.CommandTag{}, m.updatePasswordErr
+		}
+		if m.auditErr != nil {
+			return pgconn.CommandTag{}, m.auditErr
+		}
+		m.passwordChangeOps = append(m.passwordChangeOps, "revoke_other_sessions", "update_password", "audit_log")
+		m.revokedOtherUserID = args[0].(int64)
+		m.revokedOtherKeepSession = args[3].(string)
+		m.revokedOtherAt = args[2].(time.Time)
+		m.updatedPasswordUserID = args[0].(int64)
+		m.updatedPasswordHash = args[1].(string)
+		m.user.PasswordHash = args[1].(string)
+		m.auditActions = append(m.auditActions, args[6].(string))
+		m.auditMetadata = append(m.auditMetadata, args[14].(string))
+		m.auditLogs = append(m.auditLogs, AuditActionLog{
+			ActorUserID:        args[4].(int64),
+			ActorUsername:      args[5].(string),
+			Action:             args[6].(string),
+			TargetType:         args[7].(string),
+			TargetID:           args[8].(string),
+			TokenFingerprint:   args[9].(string),
+			FingerprintDisplay: args[10].(string),
+			TraceID:            args[11].(string),
+			IPHash:             args[12].(string),
+			UserAgentHash:      args[13].(string),
+			MetadataJSON:       args[14].(string),
+			CreatedAt:          args[15].(time.Time),
+		})
 	case strings.Contains(sql, "UPDATE audit_users") && strings.Contains(sql, "password_hash"):
 		m.passwordChangeOps = append(m.passwordChangeOps, "update_password")
 		if m.updatePasswordErr != nil {

@@ -126,6 +126,45 @@ WHERE user_id = $1
 	return err
 }
 
+func (r Repository) ChangeUserPassword(ctx context.Context, userID int64, passwordHash string, keepSessionID string, log AuditActionLog, now time.Time) error {
+	if r.db == nil {
+		return ErrAdminDBRequired
+	}
+	if log.CreatedAt.IsZero() {
+		log.CreatedAt = now
+	}
+	if strings.TrimSpace(log.MetadataJSON) == "" {
+		log.MetadataJSON = `{}`
+	}
+	_, err := r.db.Exec(ctx, `
+WITH updated_user AS (
+  UPDATE audit_users
+  SET password_hash = $2, updated_at = $3
+  WHERE id = $1
+  RETURNING id
+), revoked_sessions AS (
+  UPDATE audit_sessions
+  SET revoked_at = $3
+  WHERE user_id = $1
+    AND session_id <> $4
+    AND revoked_at IS NULL
+    AND expires_at > $3
+  RETURNING id
+)
+INSERT INTO audit_action_logs (
+  actor_user_id, actor_username, action, target_type, target_id,
+  token_fingerprint, fingerprint_display, trace_id, ip_hash, user_agent_hash,
+  metadata_json, created_at
+)
+SELECT $5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16
+FROM updated_user`, userID, passwordHash, now, keepSessionID,
+		log.ActorUserID, log.ActorUsername, log.Action, log.TargetType, log.TargetID,
+		log.TokenFingerprint, log.FingerprintDisplay, log.TraceID, log.IPHash, log.UserAgentHash,
+		log.MetadataJSON, log.CreatedAt,
+	)
+	return err
+}
+
 func (r Repository) InsertAuditActionLog(ctx context.Context, log AuditActionLog) error {
 	if r.db == nil {
 		return ErrAdminDBRequired

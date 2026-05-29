@@ -155,6 +155,82 @@ func TestRepositoryRevokeOtherSessionsRequiresDB(t *testing.T) {
 	}
 }
 
+func TestRepositoryChangeUserPasswordUsesAtomicStatement(t *testing.T) {
+	db := &recordingAdminDB{}
+	repo := NewRepository(db)
+	now := time.Unix(3000, 0).UTC()
+
+	err := repo.ChangeUserPassword(context.Background(), 7, "$2a$10$newhashabcdefghijkl", "sess_keep", AuditActionLog{
+		ActorUserID:        7,
+		ActorUsername:      "alice",
+		Action:             "password_changed",
+		TargetType:         "audit_user",
+		TargetID:           "alice",
+		TokenFingerprint:   "fingerprint-value",
+		FingerprintDisplay: "tkfp_example",
+		TraceID:            "trace_123",
+		IPHash:             "ip_hash",
+		UserAgentHash:      "ua_hash",
+		MetadataJSON:       "   ",
+	}, now)
+
+	if err != nil {
+		t.Fatalf("ChangeUserPassword error: %v", err)
+	}
+	for _, fragment := range []string{
+		"WITH updated_user AS",
+		"UPDATE audit_users",
+		"SET password_hash = $2, updated_at = $3",
+		"WHERE id = $1",
+		"revoked_sessions AS",
+		"UPDATE audit_sessions",
+		"session_id <> $4",
+		"INSERT INTO audit_action_logs",
+		"$15::jsonb",
+		"FROM updated_user",
+	} {
+		if !strings.Contains(db.sql, fragment) {
+			t.Fatalf("sql missing %q: %s", fragment, db.sql)
+		}
+	}
+	if len(db.args) != 16 {
+		t.Fatalf("arg count = %d, want 16: %#v", len(db.args), db.args)
+	}
+	wantArgs := []any{
+		int64(7),
+		"$2a$10$newhashabcdefghijkl",
+		now,
+		"sess_keep",
+		int64(7),
+		"alice",
+		"password_changed",
+		"audit_user",
+		"alice",
+		"fingerprint-value",
+		"tkfp_example",
+		"trace_123",
+		"ip_hash",
+		"ua_hash",
+		"{}",
+		now,
+	}
+	for i, want := range wantArgs {
+		if db.args[i] != want {
+			t.Fatalf("arg %d = %#v, want %#v", i, db.args[i], want)
+		}
+	}
+}
+
+func TestRepositoryChangeUserPasswordRequiresDB(t *testing.T) {
+	repo := NewRepository(nil)
+
+	err := repo.ChangeUserPassword(context.Background(), 7, "$2a$10$newhashabcdefghijkl", "sess_keep", AuditActionLog{}, time.Unix(3000, 0).UTC())
+
+	if !errors.Is(err, ErrAdminDBRequired) {
+		t.Fatalf("ChangeUserPassword error = %v, want ErrAdminDBRequired", err)
+	}
+}
+
 func TestRepositoryInsertAuditActionLogWritesMetadataJSON(t *testing.T) {
 	execer := &recordingAdminDB{}
 	repo := NewRepository(execer)

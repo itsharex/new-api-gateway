@@ -183,15 +183,7 @@ func (h Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := h.auth.now()
-	if err := h.repo.RevokeOtherSessions(r.Context(), user.ID, principal.SessionID, now); err != nil {
-		http.Error(w, "failed to change password", http.StatusInternalServerError)
-		return
-	}
-	if err := h.repo.UpdateUserPassword(r.Context(), user.ID, newHash, now); err != nil {
-		http.Error(w, "failed to change password", http.StatusInternalServerError)
-		return
-	}
-	if err := h.repo.InsertAuditActionLog(r.Context(), AuditActionLog{
+	if err := h.repo.ChangeUserPassword(r.Context(), user.ID, newHash, principal.SessionID, AuditActionLog{
 		ActorUserID:   user.ID,
 		ActorUsername: user.Username,
 		Action:        "password_changed",
@@ -199,7 +191,7 @@ func (h Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 		TargetID:      user.Username,
 		MetadataJSON:  `{"revoked_other_sessions":true}`,
 		CreatedAt:     now,
-	}); err != nil {
+	}, now); err != nil {
 		http.Error(w, "failed to change password", http.StatusInternalServerError)
 		return
 	}
