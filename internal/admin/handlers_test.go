@@ -706,6 +706,69 @@ func TestOverviewRequiresAggregatePermission(t *testing.T) {
 	}
 }
 
+func TestUsageWithUsernameReturnsEmployeeUsage(t *testing.T) {
+	now := time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleViewer, "", nil)
+	handler.auth.Now = func() time.Time { return now }
+	db.session.ExpiresAt = now.Add(time.Hour)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/usage?username=E10001&range=bad&model=gpt-5.2", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	if db.employeeUsageFilter.Username != "E10001" || db.employeeUsageFilter.Model != "gpt-5.2" {
+		t.Fatalf("filter = %#v", db.employeeUsageFilter)
+	}
+	if !db.employeeUsageFilter.End.Equal(now) {
+		t.Fatalf("end = %s, want %s", db.employeeUsageFilter.End, now)
+	}
+	if !db.employeeUsageFilter.Start.Equal(now.AddDate(0, 0, -30)) {
+		t.Fatalf("start = %s, want %s", db.employeeUsageFilter.Start, now.AddDate(0, 0, -30))
+	}
+	var body struct {
+		EmployeeUsage EmployeeUsageTrend `json:"employee_usage"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.EmployeeUsage.Username != "E10001" || body.EmployeeUsage.Summary.TotalTokens != 15 {
+		t.Fatalf("employee_usage = %#v", body.EmployeeUsage)
+	}
+	if body.EmployeeUsage.Range != "30d" || body.EmployeeUsage.SelectedModel != "gpt-5.2" {
+		t.Fatalf("employee_usage range/model = %#v", body.EmployeeUsage)
+	}
+}
+
+func TestUsageWithoutUsernameKeepsGenericResponse(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleViewer, "", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/usage", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	if db.employeeUsageCalled {
+		t.Fatal("employee usage trend was called without username")
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if _, ok := body["usage"]; !ok {
+		t.Fatalf("body missing usage: %s", rec.Body.String())
+	}
+	if _, ok := body["employee_usage"]; ok {
+		t.Fatalf("body unexpectedly included employee_usage: %s", rec.Body.String())
+	}
+}
+
 func TestOverviewReturnsThirtyDayTokenUsage(t *testing.T) {
 	handler, _, cookie := newAuthenticatedAdminHandler(t, RoleViewer, "", nil)
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview", nil)
@@ -1035,6 +1098,8 @@ type memoryAdminDB struct {
 	findUserErr            error
 	revokeErr              error
 	traceDetail            TraceDetail
+	employeeUsageFilter    EmployeeUsageFilter
+	employeeUsageCalled    bool
 }
 
 func (m *memoryAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -1103,6 +1168,53 @@ func (m *memoryAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgco
 }
 
 func (m *memoryAdminDB) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	if strings.Contains(sql, "SELECT DISTINCT model") && strings.Contains(sql, "FROM usage_aggregates") {
+		m.employeeUsageCalled = true
+		m.employeeUsageFilter = EmployeeUsageFilter{Username: args[0].(string), Start: args[1].(time.Time), End: args[2].(time.Time)}
+		return &scanRows{scans: []func(dest ...any) error{
+			func(dest ...any) error {
+				*(dest[0].(*string)) = "gpt-5.2"
+				return nil
+			},
+			func(dest ...any) error {
+				*(dest[0].(*string)) = "claude-4-sonnet"
+				return nil
+			},
+		}}, nil
+	}
+	if strings.Contains(sql, "GROUP BY bucket_start") && strings.Contains(sql, "FROM usage_aggregates") {
+		if len(args) > 3 {
+			m.employeeUsageFilter.Model = args[3].(string)
+		}
+		return &scanRows{scans: []func(dest ...any) error{
+			func(dest ...any) error {
+				*(dest[0].(*string)) = "2026-05-29 00:00:00+00"
+				*(dest[1].(*int64)) = int64(2)
+				*(dest[2].(*int64)) = int64(2)
+				*(dest[3].(*int64)) = int64(0)
+				*(dest[4].(*int64)) = int64(10)
+				*(dest[5].(*int64)) = int64(5)
+				*(dest[6].(*int64)) = int64(3)
+				*(dest[7].(*int64)) = int64(15)
+				return nil
+			},
+		}}, nil
+	}
+	if strings.Contains(sql, "GROUP BY model") && strings.Contains(sql, "FROM usage_aggregates") {
+		return &scanRows{scans: []func(dest ...any) error{
+			func(dest ...any) error {
+				*(dest[0].(*string)) = "gpt-5.2"
+				*(dest[1].(*int64)) = int64(2)
+				*(dest[2].(*int64)) = int64(2)
+				*(dest[3].(*int64)) = int64(0)
+				*(dest[4].(*int64)) = int64(10)
+				*(dest[5].(*int64)) = int64(5)
+				*(dest[6].(*int64)) = int64(3)
+				*(dest[7].(*int64)) = int64(15)
+				return nil
+			},
+		}}, nil
+	}
 	return &fakeRows{}, nil
 }
 

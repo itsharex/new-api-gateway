@@ -192,7 +192,7 @@ func (h Handler) requireCSRF(next http.Handler) http.Handler {
 func (h Handler) listTraces(w http.ResponseWriter, r *http.Request) {
 	filter := TraceFilter{
 		TraceID:          r.URL.Query().Get("trace_id"),
-		Username:       r.URL.Query().Get("username"),
+		Username:         r.URL.Query().Get("username"),
 		TokenFingerprint: r.URL.Query().Get("token_fingerprint"),
 		RoutePattern:     r.URL.Query().Get("route_pattern"),
 		Model:            r.URL.Query().Get("model"),
@@ -215,9 +215,21 @@ func (h Handler) overview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"overview": summary})
 }
 
+func usageRangeWindow(value string, now time.Time) (string, time.Time, time.Time) {
+	switch strings.TrimSpace(value) {
+	case "1d":
+		return "1d", now.AddDate(0, 0, -1), now
+	case "7d":
+		return "7d", now.AddDate(0, 0, -7), now
+	default:
+		return "30d", now.AddDate(0, 0, -30), now
+	}
+}
+
 func (h Handler) listUsage(w http.ResponseWriter, r *http.Request) {
+	username := strings.TrimSpace(r.URL.Query().Get("username"))
 	filter := UsageFilter{
-		Username:       r.URL.Query().Get("username"),
+		Username:         username,
 		TokenFingerprint: r.URL.Query().Get("token_fingerprint"),
 		Model:            r.URL.Query().Get("model"),
 		RoutePattern:     r.URL.Query().Get("route_pattern"),
@@ -229,12 +241,28 @@ func (h Handler) listUsage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to list usage", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"usage": items})
+	response := map[string]any{"usage": items}
+	if username != "" {
+		rangeValue, start, end := usageRangeWindow(r.URL.Query().Get("range"), h.auth.now())
+		trend, err := h.repo.EmployeeUsageTrend(r.Context(), EmployeeUsageFilter{
+			Username: username,
+			Range:    rangeValue,
+			Model:    strings.TrimSpace(r.URL.Query().Get("model")),
+			Start:    start,
+			End:      end,
+		})
+		if err != nil {
+			http.Error(w, "failed to load employee usage", http.StatusInternalServerError)
+			return
+		}
+		response["employee_usage"] = trend
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h Handler) listTokenIdentities(w http.ResponseWriter, r *http.Request) {
 	items, err := h.repo.ListTokenIdentities(r.Context(), TokenIdentityFilter{
-		Username:       r.URL.Query().Get("username"),
+		Username:         r.URL.Query().Get("username"),
 		TokenFingerprint: r.URL.Query().Get("token_fingerprint"),
 		Limit:            100,
 	})
@@ -261,9 +289,9 @@ func (h Handler) listReviewDecisions(w http.ResponseWriter, r *http.Request) {
 func (h Handler) systemSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"settings": SystemSettingsSummary{
 		UsernamePattern: "configured by USERNAME_PATTERN",
-		MetricsEnabled:    true,
-		LookupLimit:       20,
-		RawAccessLimit:    120,
+		MetricsEnabled:  true,
+		LookupLimit:     20,
+		RawAccessLimit:  120,
 	}})
 }
 
