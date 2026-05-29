@@ -587,6 +587,10 @@ func TestTraceDetailIncludesRawRefsForRawEvidenceRoles(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 				t.Fatalf("decode trace detail body: %v", err)
 			}
+			if body.Trace.UsagePromptTokens != 12 || body.Trace.UsageCompletionTokens != 23 ||
+				body.Trace.UsageCachedTokens != 7 || body.Trace.UsageTotalTokens != 42 {
+				t.Fatalf("usage fields = %#v", body.Trace.TraceSummary)
+			}
 			if body.Trace.RequestRawRef != "raw/trace_123/request_body.bin" ||
 				body.Trace.ResponseRawRef != "raw/trace_123/response_body.bin" ||
 				body.Trace.RequestHeadersRef != "raw/trace_123/request_headers.json" ||
@@ -1166,14 +1170,17 @@ func (r memoryAdminRow) Scan(dest ...any) error {
 		*(dest[6].(*string)) = detail.Username
 		*(dest[7].(*string)) = detail.FingerprintDisplay
 		*(dest[8].(*string)) = detail.ModelRequested
-		*(dest[9].(*int)) = detail.UsageTotalTokens
-		*(dest[10].(*string)) = detail.CreatedAt
-		*(dest[11].(*string)) = detail.RequestRawRef
-		*(dest[12].(*string)) = detail.ResponseRawRef
-		*(dest[13].(*string)) = detail.RequestHeadersRef
-		*(dest[14].(*string)) = detail.ResponseHeadersRef
-		*(dest[15].(*string)) = detail.IdentityResolutionStatus
-		*(dest[16].(*string)) = detail.AnalysisStatus
+		*(dest[9].(*int)) = detail.UsagePromptTokens
+		*(dest[10].(*int)) = detail.UsageCompletionTokens
+		*(dest[11].(*int)) = detail.UsageCachedTokens
+		*(dest[12].(*int)) = detail.UsageTotalTokens
+		*(dest[13].(*string)) = detail.CreatedAt
+		*(dest[14].(*string)) = detail.RequestRawRef
+		*(dest[15].(*string)) = detail.ResponseRawRef
+		*(dest[16].(*string)) = detail.RequestHeadersRef
+		*(dest[17].(*string)) = detail.ResponseHeadersRef
+		*(dest[18].(*string)) = detail.IdentityResolutionStatus
+		*(dest[19].(*string)) = detail.AnalysisStatus
 		return nil
 	}
 	if strings.Contains(r.sql, "FROM traces") {
@@ -1199,17 +1206,20 @@ func (r memoryAdminRow) Scan(dest ...any) error {
 func traceDetailWithRawRefs() TraceDetail {
 	return TraceDetail{
 		TraceSummary: TraceSummary{
-			TraceID:            "trace_123",
-			Method:             http.MethodPost,
-			Path:               "/v1/chat/completions",
-			RoutePattern:       "/v1/chat/completions",
-			ProtocolFamily:     "openai",
-			StatusCode:         http.StatusOK,
-			Username:         "E10001",
-			FingerprintDisplay: "fp_1234",
-			ModelRequested:     "gpt-5",
-			UsageTotalTokens:   42,
-			CreatedAt:          "2026-04-28 10:00:00+00",
+			TraceID:               "trace_123",
+			Method:                http.MethodPost,
+			Path:                  "/v1/chat/completions",
+			RoutePattern:          "/v1/chat/completions",
+			ProtocolFamily:        "openai",
+			StatusCode:            http.StatusOK,
+			Username:              "E10001",
+			FingerprintDisplay:    "fp_1234",
+			ModelRequested:        "gpt-5",
+			UsagePromptTokens:     12,
+			UsageCompletionTokens: 23,
+			UsageCachedTokens:     7,
+			UsageTotalTokens:      42,
+			CreatedAt:             "2026-04-28 10:00:00+00",
 		},
 		RequestRawRef:            "raw/trace_123/request_body.bin",
 		ResponseRawRef:           "raw/trace_123/response_body.bin",
