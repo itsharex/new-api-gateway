@@ -9,6 +9,10 @@ const state = {
     range: "30d",
     model: "",
   },
+  password: {
+    error: "",
+    success: "",
+  },
 };
 
 let usageRequestSeq = 0;
@@ -345,6 +349,9 @@ function renderLogin() {
 }
 
 function currentView() {
+  if (state.view === "password") {
+    return { id: "password", label: "修改密码" };
+  }
   return views.find((view) => view.id === state.view) || views[0];
 }
 
@@ -371,7 +378,10 @@ function renderShell(content) {
             <strong>${escapeHTML(user.username || "admin")}</strong>
             <div class="muted">${escapeHTML(user.role || "unknown")}</div>
           </div>
-          <button type="button" id="logout-button">退出登录</button>
+          <div class="user-actions">
+            <button type="button" id="change-password-button">修改密码</button>
+            <button type="button" id="logout-button">退出登录</button>
+          </div>
         </div>
       </aside>
       <section class="main">${content}</section>
@@ -382,9 +392,19 @@ function renderShell(content) {
     button.addEventListener("click", async () => {
       state.view = button.dataset.view;
       state.error = "";
+      state.password.error = "";
+      state.password.success = "";
       renderShell(`<section class="loading-panel">正在加载${escapeHTML(currentView().label)}...</section>`);
       await loadView();
     });
+  });
+
+  document.querySelector("#change-password-button").addEventListener("click", () => {
+    state.view = "password";
+    state.error = "";
+    state.password.error = "";
+    state.password.success = "";
+    renderPasswordChange();
   });
 
   document.querySelector("#logout-button").addEventListener("click", async () => {
@@ -453,6 +473,8 @@ async function loadView() {
     } else if (state.view === "settings") {
       const body = await api("/settings");
       renderSettings(body);
+    } else if (state.view === "password") {
+      renderPasswordChange();
     } else if (state.view === "audit") {
       const body = await api("/audit-logs");
       renderAudit(body);
@@ -1064,6 +1086,81 @@ function renderSettings(body) {
     ["原始证据访问限额", settings.raw_access_limit],
   ];
   renderShell(page("系统设置", `<section class="panel settings-list">${table(["设置项", "值"], rows)}</section>`));
+}
+
+function renderPasswordChange() {
+  renderShell(
+    page(
+      "修改密码",
+      `
+        <section class="panel password-panel">
+          <form id="password-form" class="stacked-form">
+            <div class="field">
+              <label for="current_password">当前密码</label>
+              <input id="current_password" name="current_password" type="password" autocomplete="current-password" required>
+            </div>
+            <div class="field">
+              <label for="new_password">新密码</label>
+              <input id="new_password" name="new_password" type="password" autocomplete="new-password" minlength="12" required>
+            </div>
+            <div class="field">
+              <label for="confirm_password">确认新密码</label>
+              <input id="confirm_password" name="confirm_password" type="password" autocomplete="new-password" minlength="12" required>
+            </div>
+            ${state.password.error ? `<div class="error">${escapeHTML(state.password.error)}</div>` : ""}
+            ${state.password.success ? `<div class="success">${escapeHTML(state.password.success)}</div>` : ""}
+            <div class="field">
+              <button class="primary" type="submit">更新密码</button>
+            </div>
+          </form>
+        </section>
+      `,
+    ),
+  );
+
+  document.querySelector("#password-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const currentPassword = String(form.get("current_password") || "");
+    const newPassword = String(form.get("new_password") || "");
+    const confirmPassword = String(form.get("confirm_password") || "");
+
+    state.password.error = "";
+    state.password.success = "";
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      state.password.error = "请填写所有密码字段。";
+      renderPasswordChange();
+      return;
+    }
+    if (newPassword.length < 12) {
+      state.password.error = "新密码长度至少 12 位。";
+      renderPasswordChange();
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      state.password.error = "两次输入的新密码不一致。";
+      renderPasswordChange();
+      return;
+    }
+
+    try {
+      await api("/me/password", {
+        method: "POST",
+        body: JSON.stringify({
+          current_password: currentPassword,
+          new_password: newPassword,
+          confirm_password: confirmPassword,
+        }),
+      });
+      formElement.reset();
+      state.password.success = "密码已更新，其他会话已退出。";
+      renderPasswordChange();
+    } catch (error) {
+      state.password.error = error.message || "修改密码失败。";
+      renderPasswordChange();
+    }
+  });
 }
 
 function renderAudit(body) {
