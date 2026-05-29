@@ -13,6 +13,19 @@ const state = {
 
 let usageRequestSeq = 0;
 
+const activeCharts = [];
+
+const chartColors = {
+  total: "#2563eb",
+  totalFill: "rgba(37, 99, 235, 0.12)",
+  input: "#16a34a",
+  output: "#f97316",
+  cache: "#7c3aed",
+  grid: "#e4e9f2",
+  muted: "#667085",
+  ink: "#172033",
+};
+
 const views = [
   { id: "overview", label: "概览" },
   { id: "usage", label: "用量" },
@@ -90,6 +103,138 @@ function compactNumber(value) {
   return formatNumber(number);
 }
 
+function destroyCharts() {
+  while (activeCharts.length) {
+    const chart = activeCharts.pop();
+    try {
+      chart.destroy();
+    } catch (_) {
+      // Ignore stale canvas cleanup errors after view swaps.
+    }
+  }
+}
+
+function chartAvailable() {
+  return typeof window !== "undefined" && typeof window.Chart === "function";
+}
+
+function chartErrorHTML(message = "图表组件加载失败") {
+  return `<div class="chart-fallback">${escapeHTML(message)}</div>`;
+}
+
+function hasPositiveValue(items, keys) {
+  return items.some((item) => keys.some((key) => finiteNumber(item[key]) > 0));
+}
+
+function registerChart(canvasID, config) {
+  const canvas = document.getElementById(canvasID);
+  if (!canvas) return null;
+  const frame = canvas.closest(".chart-frame, .chart-wrap");
+  if (!chartAvailable()) {
+    if (frame) frame.innerHTML = chartErrorHTML();
+    return null;
+  }
+  try {
+    const chart = new window.Chart(canvas, config);
+    activeCharts.push(chart);
+    return chart;
+  } catch (error) {
+    console.warn("failed to render admin chart", error);
+    if (frame) frame.innerHTML = chartErrorHTML();
+    return null;
+  }
+}
+
+function chartAxisTicks(value) {
+  return compactNumber(value);
+}
+
+function chartTooltipLabel(context) {
+  const label = context.dataset.label || "";
+  const value = context.parsed?.y ?? 0;
+  return `${label}: ${formatNumber(value)}`;
+}
+
+function chartBaseOptions() {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: {
+      duration: 450,
+      easing: "easeOutQuart",
+    },
+    interaction: {
+      mode: "index",
+      intersect: false,
+    },
+    plugins: {
+      legend: {
+        display: false,
+      },
+      tooltip: {
+        backgroundColor: "rgba(17, 24, 39, 0.94)",
+        titleColor: "#ffffff",
+        bodyColor: "#ffffff",
+        borderColor: "rgba(255, 255, 255, 0.12)",
+        borderWidth: 1,
+        displayColors: true,
+        padding: 10,
+        callbacks: {
+          label: chartTooltipLabel,
+        },
+      },
+    },
+    scales: {
+      x: {
+        grid: {
+          display: false,
+        },
+        border: {
+          color: chartColors.grid,
+        },
+        ticks: {
+          color: chartColors.muted,
+          maxRotation: 0,
+          autoSkip: true,
+          maxTicksLimit: 6,
+        },
+      },
+      y: {
+        beginAtZero: true,
+        grid: {
+          color: chartColors.grid,
+          drawBorder: false,
+        },
+        border: {
+          display: false,
+        },
+        ticks: {
+          color: chartColors.muted,
+          callback: chartAxisTicks,
+        },
+      },
+    },
+  };
+}
+
+function lineDataset({ label, data, color, backgroundColor, fill = false }) {
+  return {
+    label,
+    data,
+    borderColor: color,
+    backgroundColor: backgroundColor || color,
+    fill,
+    borderWidth: 2.5,
+    pointRadius: 0,
+    pointHoverRadius: 4,
+    pointHitRadius: 12,
+    pointBackgroundColor: "#ffffff",
+    pointBorderColor: color,
+    pointBorderWidth: 2,
+    tension: 0.35,
+  };
+}
+
 function queryString(params) {
   const query = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
@@ -155,6 +300,7 @@ function page(title, content, action = "") {
 }
 
 function renderLogin() {
+  destroyCharts();
   app.innerHTML = `
     <section class="login">
       <form id="login-form">
@@ -203,6 +349,7 @@ function currentView() {
 }
 
 function renderShell(content) {
+  destroyCharts();
   const user = state.user || {};
   app.innerHTML = `
     <div class="app-shell">
@@ -375,40 +522,16 @@ function renderOverview(body) {
       ${tokenUsageChart(overview.token_usage_daily)}
     </div>
   `));
+  renderOverviewChart(overview.token_usage_daily);
 }
 
 function tokenUsageChart(points) {
   const items = arrayValue(points).map((item) => ({
-    date: String(item.date || ""),
-    totalTokens: Number(item.total_tokens || 0),
+    label: String(item.date || ""),
+    total: finiteNumber(item.total_tokens),
   }));
-  const width = 760;
-  const height = 240;
-  const left = 44;
-  const right = 16;
-  const top = 24;
-  const bottom = 42;
-  const chartWidth = width - left - right;
-  const chartHeight = height - top - bottom;
-  const maxTokens = Math.max(0, ...items.map((item) => item.totalTokens));
-  const divisor = maxTokens > 0 ? maxTokens : 1;
-  const lastIndex = Math.max(items.length - 1, 1);
-  const coords = items.map((item, index) => {
-    const x = left + (chartWidth * index) / lastIndex;
-    const y = top + chartHeight - (chartHeight * item.totalTokens) / divisor;
-    return { x, y, item };
-  });
-  const linePath = coords
-    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`)
-    .join(" ");
-  const areaPath = coords.length
-    ? `M ${coords[0].x.toFixed(1)} ${top + chartHeight} ${coords
-        .map((point) => `L ${point.x.toFixed(1)} ${point.y.toFixed(1)}`)
-        .join(" ")} L ${coords[coords.length - 1].x.toFixed(1)} ${top + chartHeight} Z`
-    : "";
-  const firstDate = items[0]?.date || "";
-  const lastDate = items[items.length - 1]?.date || "";
-  const hasData = maxTokens > 0;
+  const maxTokens = Math.max(0, ...items.map((item) => item.total));
+  const hasData = items.length > 0 && maxTokens > 0;
 
   return `
     <section class="panel usage-chart">
@@ -419,30 +542,36 @@ function tokenUsageChart(points) {
         </div>
         <strong>${formatNumber(maxTokens)}</strong>
       </div>
-      <div class="chart-frame">
-        ${hasData ? "" : `<div class="chart-empty">暂无 token 使用数据</div>`}
-        <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="最近 30 天 Token 使用趋势">
-          <line class="chart-grid" x1="${left}" y1="${top}" x2="${left}" y2="${top + chartHeight}"></line>
-          <line class="chart-grid" x1="${left}" y1="${top + chartHeight}" x2="${width - right}" y2="${top + chartHeight}"></line>
-          ${areaPath ? `<path class="chart-area" d="${areaPath}"></path>` : ""}
-          ${linePath ? `<path class="chart-line" d="${linePath}"></path>` : ""}
-          ${coords
-            .filter((_, index) => index === 0 || index === coords.length - 1 || index % 7 === 0)
-            .map(
-              (point) => `
-                <circle class="chart-point" cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="3">
-                  <title>${escapeHTML(point.item.date)}: ${formatNumber(point.item.totalTokens)}</title>
-                </circle>
-              `,
-            )
-            .join("")}
-          <text class="chart-axis" x="${left}" y="${height - 12}">${escapeHTML(firstDate)}</text>
-          <text class="chart-axis chart-axis-end" x="${width - right}" y="${height - 12}">${escapeHTML(lastDate)}</text>
-          <text class="chart-axis" x="${left}" y="16">${formatNumber(maxTokens)}</text>
-        </svg>
+      <div class="chart-frame chart-frame-overview">
+        ${hasData ? `<canvas id="overview-token-chart" aria-label="最近 30 天 Token 使用趋势" role="img"></canvas>` : `<div class="chart-empty">暂无 token 使用数据</div>`}
       </div>
     </section>
   `;
+}
+
+function renderOverviewChart(points) {
+  const items = arrayValue(points).map((item) => ({
+    label: String(item.date || ""),
+    total: finiteNumber(item.total_tokens),
+  }));
+  if (!items.length || !hasPositiveValue(items, ["total"])) return;
+
+  registerChart("overview-token-chart", {
+    type: "line",
+    data: {
+      labels: items.map((item) => item.label),
+      datasets: [
+        lineDataset({
+          label: "Total",
+          data: items.map((item) => item.total),
+          color: chartColors.total,
+          backgroundColor: chartColors.totalFill,
+          fill: true,
+        }),
+      ],
+    },
+    options: chartBaseOptions(),
+  });
 }
 
 function renderUsage(body = {}) {
@@ -552,6 +681,7 @@ function renderUsage(body = {}) {
   );
   bindUsageSearch();
   bindUsageControls();
+  renderEmployeeUsageChart(daily);
 }
 
 function bindUsageSearch() {
@@ -594,45 +724,9 @@ function usageChart(points) {
     output: finiteNumber(item.completion_tokens),
     cache: finiteNumber(item.cached_tokens),
   }));
-  if (!items.length) {
+  if (!items.length || !hasPositiveValue(items, ["total", "input", "output", "cache"])) {
     return `<div class="chart-wrap"><div class="empty-chart">暂无 token 使用数据</div></div>`;
   }
-
-  const width = 760;
-  const height = 280;
-  const left = 48;
-  const right = 18;
-  const top = 22;
-  const bottom = 44;
-  const chartWidth = width - left - right;
-  const chartHeight = height - top - bottom;
-  const maxValue = Math.max(0, ...items.flatMap((item) => [item.total, item.input, item.output, item.cache]));
-  const divisor = maxValue > 0 ? maxValue : 1;
-  const lastIndex = Math.max(items.length - 1, 1);
-  const xFor = (index) => left + (chartWidth * index) / lastIndex;
-  const yFor = (value) => top + chartHeight - (chartHeight * finiteNumber(value)) / divisor;
-  const series = [
-    ["total", "Total", "total"],
-    ["input", "Input", "input"],
-    ["output", "Output", "output"],
-    ["cache", "Cache", "cache"],
-  ];
-  const pathFor = (key) =>
-    items
-      .map((item, index) => `${index === 0 ? "M" : "L"} ${xFor(index).toFixed(1)} ${yFor(item[key]).toFixed(1)}`)
-      .join(" ");
-  const dotsFor = (key, className) =>
-    items
-      .map(
-        (item, index) => `
-          <circle class="chart-dot ${escapeHTML(className)}" cx="${xFor(index).toFixed(1)}" cy="${yFor(item[key]).toFixed(1)}" r="3">
-            <title>${escapeHTML(item.label)} ${escapeHTML(className)}: ${formatNumber(item[key])}</title>
-          </circle>
-        `,
-      )
-      .join("");
-  const firstLabel = items[0]?.label || "";
-  const lastLabel = items[items.length - 1]?.label || "";
 
   return `
     <div class="legend" aria-label="Token 类型图例">
@@ -642,23 +736,34 @@ function usageChart(points) {
       <span><i class="swatch cache"></i>Cache</span>
     </div>
     <div class="chart-wrap">
-      <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="员工 token 使用趋势">
-        <line class="usage-chart-grid" x1="${left}" y1="${top}" x2="${width - right}" y2="${top}"></line>
-        <line class="usage-chart-grid" x1="${left}" y1="${top + chartHeight / 2}" x2="${width - right}" y2="${top + chartHeight / 2}"></line>
-        <line class="usage-chart-grid" x1="${left}" y1="${top + chartHeight}" x2="${width - right}" y2="${top + chartHeight}"></line>
-        <line class="usage-chart-axis" x1="${left}" y1="${top}" x2="${left}" y2="${top + chartHeight}"></line>
-        <line class="usage-chart-axis" x1="${left}" y1="${top + chartHeight}" x2="${width - right}" y2="${top + chartHeight}"></line>
-        ${series
-          .map(([key, label, className]) => `<path class="series-${className}" d="${pathFor(key)}"><title>${escapeHTML(label)}</title></path>`)
-          .join("")}
-        ${series.map(([key, , className]) => dotsFor(key, className)).join("")}
-        <text class="chart-axis" x="${left}" y="${height - 12}">${escapeHTML(firstLabel)}</text>
-        <text class="chart-axis chart-axis-end" x="${width - right}" y="${height - 12}">${escapeHTML(lastLabel)}</text>
-        <text class="chart-axis" x="${left}" y="16">${compactNumber(maxValue)}</text>
-        <text class="chart-axis" x="${left}" y="${top + chartHeight / 2 - 6}">${compactNumber(maxValue / 2)}</text>
-      </svg>
+      <canvas id="employee-usage-chart" aria-label="员工 token 使用趋势" role="img"></canvas>
     </div>
   `;
+}
+
+function renderEmployeeUsageChart(points) {
+  const items = arrayValue(points).map((item) => ({
+    label: String(item.date || item.bucket_start || ""),
+    total: finiteNumber(item.total_tokens),
+    input: finiteNumber(item.prompt_tokens),
+    output: finiteNumber(item.completion_tokens),
+    cache: finiteNumber(item.cached_tokens),
+  }));
+  if (!items.length || !hasPositiveValue(items, ["total", "input", "output", "cache"])) return;
+
+  registerChart("employee-usage-chart", {
+    type: "line",
+    data: {
+      labels: items.map((item) => item.label),
+      datasets: [
+        lineDataset({ label: "Total", data: items.map((item) => item.total), color: chartColors.total }),
+        lineDataset({ label: "Input", data: items.map((item) => item.input), color: chartColors.input }),
+        lineDataset({ label: "Output", data: items.map((item) => item.output), color: chartColors.output }),
+        lineDataset({ label: "Cache", data: items.map((item) => item.cache), color: chartColors.cache }),
+      ],
+    },
+    options: chartBaseOptions(),
+  });
 }
 
 function renderTraces(body) {
