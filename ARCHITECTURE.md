@@ -60,7 +60,7 @@ new-api-gateway/
 | `headers.go` | 请求/响应头序列化为 JSON，脱敏敏感头 |
 | `stream.go` | SSE 流式响应处理，并发写入客户端与证据存储 |
 | `multipart.go` | multipart 请求解析，每个 part 单独存为证据 |
-| `minimal.go` | 从请求/响应提取模型名称和 token 用量（支持 OpenAI/Anthropic/Gemini 格式） |
+| `minimal.go` | 从请求/响应提取模型名称和 token 用量，记录 input/output/total 以及上游明确报告的 cached/reasoning token（支持 OpenAI/Anthropic/Gemini 格式） |
 | `websocket_log.go` | WebSocket 双向日志（1MB 上限），正则脱敏 API Key |
 | `spool.go` | 证据存储失败时的降级文件落盘 |
 
@@ -120,7 +120,7 @@ Redis 缓存 → PostgreSQL 缓存 → new-api 数据库直查
 
 ### `internal/traces/` — Trace 持久化
 
-`Trace` 结构体包含 50+ 字段：trace ID、方法、路径、状态码、耗时、token 用量、身份快照、模型信息、错误信息、所有证据引用。
+`Trace` 结构体包含 50+ 字段：trace ID、方法、路径、状态码、耗时、input/output/cached/total token 用量、身份快照、模型信息、错误信息、所有证据引用。
 
 ### `internal/jobs/` — 任务发布
 
