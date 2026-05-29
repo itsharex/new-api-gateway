@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/your-company/new-api-gateway/internal/authkeys"
@@ -147,7 +148,7 @@ func (h Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "password fields are required", http.StatusBadRequest)
 		return
 	}
-	if len(input.NewPassword) < 12 {
+	if utf8.RuneCountInString(input.NewPassword) < 12 {
 		http.Error(w, "new password must be at least 12 characters", http.StatusBadRequest)
 		return
 	}

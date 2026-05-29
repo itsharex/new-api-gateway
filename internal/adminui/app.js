@@ -49,6 +49,10 @@ function resetPasswordState() {
   state.password.success = "";
 }
 
+function passwordLength(value) {
+  return Array.from(value).length;
+}
+
 function csrfToken() {
   const match = document.cookie.split("; ").find((part) => part.startsWith("audit_admin_csrf="));
   return match ? decodeURIComponent(match.split("=")[1] || "") : "";
@@ -1140,8 +1144,8 @@ function renderPasswordChange() {
       renderPasswordChange();
       return;
     }
-    if (newPassword.length < 12) {
-      state.password.error = "新密码长度至少 12 位。";
+    if (passwordLength(newPassword) < 12) {
+      state.password.error = "新密码至少需要 12 位。";
       renderPasswordChange();
       return;
     }

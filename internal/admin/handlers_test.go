@@ -194,6 +194,12 @@ func TestChangeCurrentUserPasswordRejectsInvalidInput(t *testing.T) {
 			wantText: "new password must be at least 12 characters",
 		},
 		{
+			name:     "non-ascii short new password",
+			body:     `{"current_password":"secret-password","new_password":"密码密码密码","confirm_password":"密码密码密码"}`,
+			wantCode: http.StatusBadRequest,
+			wantText: "new password must be at least 12 characters",
+		},
+		{
 			name:     "confirmation mismatch",
 			body:     `{"current_password":"secret-password","new_password":"new-secret-password","confirm_password":"different-password"}`,
 			wantCode: http.StatusBadRequest,
