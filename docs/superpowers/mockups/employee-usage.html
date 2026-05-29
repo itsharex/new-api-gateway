@@ -1,0 +1,529 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>员工用量示意</title>
+    <style>
+      :root {
+        --bg: #f5f7fa;
+        --panel: #ffffff;
+        --ink: #172033;
+        --muted: #667085;
+        --line: #d7dde8;
+        --accent: #2563eb;
+        --accent-soft: #eff6ff;
+        --accent-line: #93c5fd;
+        --green: #079455;
+        --green-soft: #ecfdf3;
+        --orange: #b54708;
+        --orange-soft: #fffaeb;
+        --violet: #7c3aed;
+        --sidebar: #111827;
+        --sidebar-soft: #1f2937;
+      }
+
+      * { box-sizing: border-box; }
+
+      html {
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: var(--ink);
+        background: var(--bg);
+      }
+
+      body { margin: 0; min-width: 320px; }
+
+      input, button {
+        font: inherit;
+      }
+
+      input {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #ffffff;
+        color: var(--ink);
+        padding: 9px 10px;
+      }
+
+      button {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: #ffffff;
+        color: #344054;
+        cursor: pointer;
+        padding: 7px 11px;
+        font-weight: 650;
+      }
+
+      button.active {
+        border-color: var(--accent-line);
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      .shell {
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: 220px minmax(0, 1fr);
+      }
+
+      .sidebar {
+        background: var(--sidebar);
+        color: #d1d5db;
+        padding: 18px 14px;
+      }
+
+      .brand {
+        color: #ffffff;
+        font-size: 18px;
+        font-weight: 750;
+        line-height: 1.25;
+        margin-bottom: 18px;
+      }
+
+      .nav {
+        display: grid;
+        gap: 6px;
+      }
+
+      .nav div {
+        border: 1px solid transparent;
+        border-radius: 6px;
+        padding: 9px 12px;
+      }
+
+      .nav .active {
+        background: var(--sidebar-soft);
+        border-color: #374151;
+        color: #ffffff;
+      }
+
+      .main {
+        min-width: 0;
+        padding: 24px;
+      }
+
+      .toolbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 16px;
+        margin-bottom: 18px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 24px;
+      }
+
+      h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 16px;
+        margin-bottom: 16px;
+        overflow: auto;
+      }
+
+      .employee-search {
+        display: grid;
+        grid-template-columns: minmax(220px, 360px) auto;
+        gap: 12px;
+        align-items: end;
+      }
+
+      .field {
+        display: grid;
+        gap: 6px;
+      }
+
+      label {
+        color: #344054;
+        font-size: 13px;
+        font-weight: 650;
+      }
+
+      .primary {
+        border-color: var(--accent);
+        border-radius: 6px;
+        background: var(--accent);
+        color: #ffffff;
+        padding: 9px 14px;
+      }
+
+      .summary {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .metric {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 16px;
+      }
+
+      .metric .label {
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 650;
+      }
+
+      .metric .value {
+        margin-top: 8px;
+        font-size: 27px;
+        font-weight: 760;
+      }
+
+      .metric .hint {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .chart-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 12px;
+      }
+
+      .model-tabs {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+
+      .range-tabs {
+        display: inline-flex;
+        gap: 6px;
+        margin-top: 10px;
+      }
+
+      .range-tabs button {
+        min-width: 46px;
+        border-radius: 6px;
+      }
+
+      .chart-wrap {
+        min-width: 720px;
+      }
+
+      svg {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+
+      .axis {
+        stroke: #98a2b3;
+        stroke-width: 1;
+      }
+
+      .grid {
+        stroke: #e4e7ec;
+        stroke-width: 1;
+      }
+
+      .series-total {
+        fill: none;
+        stroke: var(--accent);
+        stroke-width: 4;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .series-input {
+        fill: none;
+        stroke: var(--green);
+        stroke-width: 3;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-dasharray: 8 7;
+      }
+
+      .series-output {
+        fill: none;
+        stroke: var(--orange);
+        stroke-width: 3;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-dasharray: 8 7;
+      }
+
+      .series-cache {
+        fill: none;
+        stroke: var(--violet);
+        stroke-width: 3;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-dasharray: 4 8;
+      }
+
+      .area {
+        fill: #dbeafe;
+        opacity: 0.55;
+      }
+
+      .dot {
+        fill: #ffffff;
+        stroke: var(--accent);
+        stroke-width: 3;
+      }
+
+      .legend {
+        display: flex;
+        gap: 14px;
+        color: var(--muted);
+        font-size: 13px;
+        margin-top: 10px;
+      }
+
+      .legend span {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .swatch {
+        width: 18px;
+        height: 3px;
+        border-radius: 999px;
+        background: var(--accent);
+      }
+
+      .swatch.input {
+        background: var(--green);
+      }
+
+      .swatch.output {
+        background: var(--orange);
+      }
+
+      .swatch.cache {
+        background: var(--violet);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+
+      th, td {
+        border-bottom: 1px solid var(--line);
+        padding: 9px 8px;
+        text-align: left;
+        vertical-align: top;
+        overflow-wrap: anywhere;
+      }
+
+      th {
+        color: #344054;
+        font-size: 12px;
+        letter-spacing: 0;
+        text-transform: uppercase;
+      }
+
+      tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .number {
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+
+      @media (max-width: 900px) {
+        .shell { grid-template-columns: 1fr; }
+        .sidebar { display: none; }
+        .main { padding: 16px; }
+        .toolbar, .chart-head { flex-direction: column; }
+        .employee-search, .summary { grid-template-columns: 1fr; }
+        .model-tabs { justify-content: flex-start; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">审计网关管理后台</div>
+        <nav class="nav" aria-label="管理视图">
+          <div>概览</div>
+          <div class="active">用量</div>
+          <div>Trace</div>
+          <div>员工目录</div>
+          <div>异常</div>
+          <div>覆盖</div>
+          <div>API Key 查询</div>
+          <div>系统设置</div>
+        </nav>
+      </aside>
+      <main class="main">
+        <div class="toolbar">
+          <div>
+            <h1>用量</h1>
+            <div class="muted">选择员工后查看最近 30 天 token 与 model 使用趋势</div>
+          </div>
+          <div class="muted">默认 30d · 按天聚合 · UTC+8</div>
+        </div>
+
+        <section class="panel">
+          <form class="employee-search">
+            <div class="field">
+              <label for="employee">员工</label>
+              <input id="employee" value="E10001" aria-label="员工">
+            </div>
+            <button class="primary" type="button">查看</button>
+          </form>
+        </section>
+
+        <section class="summary" aria-label="最近 30 天员工汇总">
+          <article class="metric">
+            <div class="label">30 天请求数</div>
+            <div class="value number">2,418</div>
+            <div class="hint">成功 2,377，错误 41</div>
+          </article>
+          <article class="metric">
+            <div class="label">Total Tokens</div>
+            <div class="value number">18.6M</div>
+            <div class="hint">日均 619K</div>
+          </article>
+          <article class="metric">
+            <div class="label">Input / Output</div>
+            <div class="value number">12.4M / 5.1M</div>
+            <div class="hint">Input 占 66.7%</div>
+          </article>
+          <article class="metric">
+            <div class="label">Cache</div>
+            <div class="value number">1.1M</div>
+            <div class="hint">占 Input 8.9%</div>
+          </article>
+        </section>
+
+        <section class="panel">
+          <div class="chart-head">
+            <div>
+              <h2>E10001 最近 30 天用量趋势</h2>
+              <div class="muted">按天聚合；蓝色实线为 total_tokens，虚线分别为 input/output/cache。</div>
+              <div class="range-tabs" aria-label="时间范围">
+                <button type="button">1d</button>
+                <button type="button">7d</button>
+                <button class="active" type="button">30d</button>
+              </div>
+            </div>
+            <div class="model-tabs" aria-label="模型筛选">
+              <button class="active" type="button">全部</button>
+              <button type="button">gpt-5.2</button>
+              <button type="button">claude-4-sonnet</button>
+              <button type="button">gpt-5.2-mini</button>
+              <button type="button">o4-mini</button>
+            </div>
+          </div>
+          <div class="chart-wrap">
+            <svg viewBox="0 0 1120 430" role="img" aria-label="最近 30 天 token 用量曲线图">
+              <line class="grid" x1="72" y1="64" x2="1088" y2="64"></line>
+              <line class="grid" x1="72" y1="134" x2="1088" y2="134"></line>
+              <line class="grid" x1="72" y1="204" x2="1088" y2="204"></line>
+              <line class="grid" x1="72" y1="274" x2="1088" y2="274"></line>
+              <line class="axis" x1="72" y1="344" x2="1088" y2="344"></line>
+              <line class="axis" x1="72" y1="48" x2="72" y2="344"></line>
+
+              <text x="28" y="68" fill="#667085" font-size="12">900K</text>
+              <text x="28" y="138" fill="#667085" font-size="12">675K</text>
+              <text x="28" y="208" fill="#667085" font-size="12">450K</text>
+              <text x="28" y="278" fill="#667085" font-size="12">225K</text>
+              <text x="39" y="348" fill="#667085" font-size="12">0</text>
+
+              <path class="area" d="M72,272 L107,250 L142,261 L177,228 L212,240 L247,218 L282,198 L317,210 L352,176 L387,184 L422,160 L457,170 L492,148 L527,154 L562,128 L597,138 L632,118 L667,132 L702,96 L737,104 L772,86 L807,112 L842,78 L877,92 L912,68 L947,82 L982,74 L1017,58 L1052,94 L1088,72 L1088,344 L72,344 Z"></path>
+              <path class="series-total" d="M72,272 L107,250 L142,261 L177,228 L212,240 L247,218 L282,198 L317,210 L352,176 L387,184 L422,160 L457,170 L492,148 L527,154 L562,128 L597,138 L632,118 L667,132 L702,96 L737,104 L772,86 L807,112 L842,78 L877,92 L912,68 L947,82 L982,74 L1017,58 L1052,94 L1088,72"></path>
+              <path class="series-input" d="M72,292 L107,276 L142,282 L177,258 L212,264 L247,250 L282,234 L317,242 L352,214 L387,220 L422,202 L457,210 L492,190 L527,196 L562,174 L597,184 L632,166 L667,178 L702,146 L737,154 L772,136 L807,160 L842,126 L877,140 L912,112 L947,126 L982,118 L1017,104 L1052,138 L1088,120"></path>
+              <path class="series-output" d="M72,316 L107,302 L142,308 L177,288 L212,294 L247,280 L282,266 L317,272 L352,252 L387,256 L422,236 L457,242 L492,224 L527,230 L562,208 L597,216 L632,198 L667,210 L702,182 L737,188 L772,170 L807,194 L842,164 L877,176 L912,150 L947,162 L982,154 L1017,140 L1052,172 L1088,154"></path>
+              <path class="series-cache" d="M72,326 L107,318 L142,320 L177,308 L212,312 L247,304 L282,296 L317,300 L352,288 L387,290 L422,282 L457,286 L492,276 L527,278 L562,270 L597,274 L632,266 L667,272 L702,258 L737,262 L772,254 L807,266 L842,250 L877,256 L912,244 L947,250 L982,246 L1017,238 L1052,258 L1088,248"></path>
+
+              <circle class="dot" cx="912" cy="68" r="5"></circle>
+              <circle class="dot" cx="1017" cy="58" r="5"></circle>
+              <text x="940" y="42" fill="#172033" font-size="13" font-weight="700">峰值 918K</text>
+
+              <text x="72" y="386" fill="#667085" font-size="12">04-30</text>
+              <text x="282" y="386" fill="#667085" font-size="12">05-06</text>
+              <text x="492" y="386" fill="#667085" font-size="12">05-12</text>
+              <text x="702" y="386" fill="#667085" font-size="12">05-18</text>
+              <text x="912" y="386" fill="#667085" font-size="12">05-24</text>
+              <text x="1048" y="386" fill="#667085" font-size="12">05-29</text>
+            </svg>
+          </div>
+          <div class="legend">
+            <span><i class="swatch"></i>Total Tokens</span>
+            <span><i class="swatch input"></i>Input Tokens</span>
+            <span><i class="swatch output"></i>Output Tokens</span>
+            <span><i class="swatch cache"></i>Cache Tokens</span>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Model 汇总</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>请求数</th>
+                <th>Input</th>
+                <th>Output</th>
+                <th>Cache</th>
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>gpt-5.2</td>
+                <td class="number">1,184</td>
+                <td class="number">7,240,320</td>
+                <td class="number">3,128,900</td>
+                <td class="number">712,450</td>
+                <td class="number">10,369,220</td>
+              </tr>
+              <tr>
+                <td>claude-4-sonnet</td>
+                <td class="number">742</td>
+                <td class="number">3,510,640</td>
+                <td class="number">1,364,020</td>
+                <td class="number">301,800</td>
+                <td class="number">4,874,660</td>
+              </tr>
+              <tr>
+                <td>gpt-5.2-mini</td>
+                <td class="number">383</td>
+                <td class="number">1,214,300</td>
+                <td class="number">421,780</td>
+                <td class="number">78,240</td>
+                <td class="number">1,636,080</td>
+              </tr>
+              <tr>
+                <td>o4-mini</td>
+                <td class="number">109</td>
+                <td class="number">438,120</td>
+                <td class="number">187,260</td>
+                <td class="number">14,930</td>
+                <td class="number">625,380</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>
