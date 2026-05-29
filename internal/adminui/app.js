@@ -309,7 +309,80 @@ function renderOverview(body) {
       `,
     )
     .join("");
-  renderShell(page("概览", `<section class="cards">${cards}</section>`));
+  renderShell(page("概览", `
+    <div class="overview-layout">
+      <section class="cards">${cards}</section>
+      ${tokenUsageChart(overview.token_usage_daily)}
+    </div>
+  `));
+}
+
+function tokenUsageChart(points) {
+  const items = arrayValue(points).map((item) => ({
+    date: String(item.date || ""),
+    totalTokens: Number(item.total_tokens || 0),
+  }));
+  const width = 760;
+  const height = 240;
+  const left = 44;
+  const right = 16;
+  const top = 24;
+  const bottom = 42;
+  const chartWidth = width - left - right;
+  const chartHeight = height - top - bottom;
+  const maxTokens = Math.max(0, ...items.map((item) => item.totalTokens));
+  const divisor = maxTokens > 0 ? maxTokens : 1;
+  const lastIndex = Math.max(items.length - 1, 1);
+  const coords = items.map((item, index) => {
+    const x = left + (chartWidth * index) / lastIndex;
+    const y = top + chartHeight - (chartHeight * item.totalTokens) / divisor;
+    return { x, y, item };
+  });
+  const linePath = coords
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`)
+    .join(" ");
+  const areaPath = coords.length
+    ? `M ${coords[0].x.toFixed(1)} ${top + chartHeight} ${coords
+        .map((point) => `L ${point.x.toFixed(1)} ${point.y.toFixed(1)}`)
+        .join(" ")} L ${coords[coords.length - 1].x.toFixed(1)} ${top + chartHeight} Z`
+    : "";
+  const firstDate = items[0]?.date || "";
+  const lastDate = items[items.length - 1]?.date || "";
+  const hasData = maxTokens > 0;
+
+  return `
+    <section class="panel usage-chart">
+      <div class="chart-meta">
+        <div>
+          <h2>最近 30 天 Token 使用趋势</h2>
+          <div class="muted">按天汇总 Total Token</div>
+        </div>
+        <strong>${formatNumber(maxTokens)}</strong>
+      </div>
+      <div class="chart-frame">
+        ${hasData ? "" : `<div class="chart-empty">暂无 token 使用数据</div>`}
+        <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="最近 30 天 Token 使用趋势">
+          <line class="chart-grid" x1="${left}" y1="${top}" x2="${left}" y2="${top + chartHeight}"></line>
+          <line class="chart-grid" x1="${left}" y1="${top + chartHeight}" x2="${width - right}" y2="${top + chartHeight}"></line>
+          ${areaPath ? `<path class="chart-area" d="${areaPath}"></path>` : ""}
+          ${linePath ? `<path class="chart-line" d="${linePath}"></path>` : ""}
+          ${coords
+            .filter((_, index) => index === 0 || index === coords.length - 1 || index % 7 === 0)
+            .map(
+              (point) => `
+                <circle class="chart-point" cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="3">
+                  <title>${escapeHTML(point.item.date)}: ${formatNumber(point.item.totalTokens)}</title>
+                </circle>
+              `,
+            )
+            .join("")}
+          <text class="chart-axis" x="${left}" y="${height - 12}">${escapeHTML(firstDate)}</text>
+          <text class="chart-axis chart-axis-end" x="${width - right}" y="${height - 12}">${escapeHTML(lastDate)}</text>
+          <text class="chart-axis" x="${left}" y="16">${formatNumber(maxTokens)}</text>
+        </svg>
+      </div>
+    </section>
+  `;
 }
 
 function renderUsage(body) {

@@ -706,6 +706,28 @@ func TestOverviewRequiresAggregatePermission(t *testing.T) {
 	}
 }
 
+func TestOverviewReturnsThirtyDayTokenUsage(t *testing.T) {
+	handler, _, cookie := newAuthenticatedAdminHandler(t, RoleViewer, "", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Overview OverviewSummary `json:"overview"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode overview body: %v", err)
+	}
+	if len(body.Overview.TokenUsageDaily) != 30 {
+		t.Fatalf("token_usage_daily length = %d, want 30; body = %s", len(body.Overview.TokenUsageDaily), rec.Body.String())
+	}
+}
+
 func TestProductCompletionRoutesReturnJSON(t *testing.T) {
 	tests := []struct {
 		name    string

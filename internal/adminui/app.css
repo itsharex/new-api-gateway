@@ -227,6 +227,11 @@ textarea {
   font-size: 18px;
 }
 
+.overview-layout {
+  display: grid;
+  gap: 16px;
+}
+
 .cards {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -250,6 +255,82 @@ textarea {
   margin-top: 8px;
   font-size: 28px;
   font-weight: 750;
+}
+
+.usage-chart {
+  overflow: hidden;
+}
+
+.chart-meta {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
+.chart-meta h2 {
+  margin-bottom: 4px;
+}
+
+.chart-meta strong {
+  font-size: 20px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.chart-frame {
+  position: relative;
+  min-height: 240px;
+}
+
+.chart-frame svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 220px;
+}
+
+.chart-grid {
+  stroke: #d7dde8;
+  stroke-width: 1;
+}
+
+.chart-area {
+  fill: rgba(37, 99, 235, 0.1);
+}
+
+.chart-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 3;
+}
+
+.chart-point {
+  fill: #ffffff;
+  stroke: var(--accent-strong);
+  stroke-width: 2;
+}
+
+.chart-axis {
+  fill: var(--muted);
+  font-size: 12px;
+}
+
+.chart-axis-end {
+  text-anchor: end;
+}
+
+.chart-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-weight: 650;
+  pointer-events: none;
 }
 
 table {
@@ -394,5 +475,9 @@ tr:last-child td {
   .cards,
   .meta-grid {
     grid-template-columns: 1fr;
+  }
+
+  .chart-meta {
+    display: grid;
   }
 }

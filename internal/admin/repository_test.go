@@ -202,14 +202,71 @@ func TestRepositoryOverviewSummaryUsesBoundedWindows(t *testing.T) {
 	if summary.RequestCount24h != 12 || summary.TotalTokens24h != 3400 || summary.OpenCoverageAlerts != 4 {
 		t.Fatalf("summary = %#v", summary)
 	}
-	if !strings.Contains(db.querySQL, "created_at >= $1") {
-		t.Fatalf("overview query missing bounded window: %s", db.querySQL)
+	overviewSQL := db.querySQLs[0]
+	if !strings.Contains(overviewSQL, "created_at >= $1") {
+		t.Fatalf("overview query missing bounded window: %s", overviewSQL)
 	}
-	if !strings.Contains(db.querySQL, "capture_mode = 'raw_only'") {
-		t.Fatalf("overview query missing raw-only capture mode filter: %s", db.querySQL)
+	if !strings.Contains(overviewSQL, "capture_mode = 'raw_only'") {
+		t.Fatalf("overview query missing raw-only capture mode filter: %s", overviewSQL)
 	}
-	if strings.Contains(db.querySQL, "route_support_level") {
-		t.Fatalf("overview query used non-schema route_support_level column: %s", db.querySQL)
+	if strings.Contains(overviewSQL, "route_support_level") {
+		t.Fatalf("overview query used non-schema route_support_level column: %s", overviewSQL)
+	}
+}
+
+func TestRepositoryOverviewSummaryIncludesThirtyDayTokenUsage(t *testing.T) {
+	db := &recordingAdminDB{
+		rowQueue: []pgx.Row{
+			scanFuncRow{scan: func(dest ...any) error {
+				*(dest[0].(*int64)) = 12
+				*(dest[1].(*int64)) = 10
+				*(dest[2].(*int64)) = 2
+				*(dest[3].(*int64)) = 3400
+				*(dest[4].(*int64)) = 3
+				*(dest[5].(*int64)) = 4
+				*(dest[6].(*int64)) = 1
+				return nil
+			}},
+		},
+		rowsQueue: []pgx.Rows{
+			&scanRows{scans: []func(dest ...any) error{
+				func(dest ...any) error {
+					*(dest[0].(*string)) = "2026-05-01"
+					*(dest[1].(*int64)) = 1000
+					return nil
+				},
+				func(dest ...any) error {
+					*(dest[0].(*string)) = "2026-05-29"
+					*(dest[1].(*int64)) = 2500
+					return nil
+				},
+			}},
+		},
+	}
+	repo := NewRepository(db)
+
+	summary, err := repo.OverviewSummary(context.Background(), time.Date(2026, 5, 29, 10, 0, 0, 0, time.UTC))
+
+	if err != nil {
+		t.Fatalf("OverviewSummary error: %v", err)
+	}
+	if len(summary.TokenUsageDaily) != 30 {
+		t.Fatalf("daily token points = %d, want 30: %#v", len(summary.TokenUsageDaily), summary.TokenUsageDaily)
+	}
+	if summary.TokenUsageDaily[0].Date != "2026-04-30" || summary.TokenUsageDaily[0].TotalTokens != 0 {
+		t.Fatalf("first daily token point = %#v, want 2026-04-30 zero", summary.TokenUsageDaily[0])
+	}
+	if summary.TokenUsageDaily[1].Date != "2026-05-01" || summary.TokenUsageDaily[1].TotalTokens != 1000 {
+		t.Fatalf("second daily token point = %#v, want 2026-05-01 total 1000", summary.TokenUsageDaily[1])
+	}
+	if summary.TokenUsageDaily[29].Date != "2026-05-29" || summary.TokenUsageDaily[29].TotalTokens != 2500 {
+		t.Fatalf("last daily token point = %#v, want 2026-05-29 total 2500", summary.TokenUsageDaily[29])
+	}
+	if !db.queried("FROM usage_aggregates") {
+		t.Fatalf("expected daily usage query, got %#v", db.querySQLs)
+	}
+	if !strings.Contains(db.querySQLs[len(db.querySQLs)-1], "bucket_size = 'day'") {
+		t.Fatalf("daily usage query missing day bucket filter: %s", db.querySQLs[len(db.querySQLs)-1])
 	}
 }
 
@@ -512,6 +569,7 @@ func (db *recordingAdminDB) Query(ctx context.Context, sql string, args ...any) 
 
 func (db *recordingAdminDB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
 	db.querySQL = sql
+	db.querySQLs = append(db.querySQLs, sql)
 	db.queryArgs = append([]any(nil), args...)
 	if len(db.rowQueue) > 0 {
 		row := db.rowQueue[0]
