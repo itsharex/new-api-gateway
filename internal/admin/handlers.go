@@ -228,10 +228,11 @@ func usageRangeWindow(value string, now time.Time) (string, time.Time, time.Time
 
 func (h Handler) listUsage(w http.ResponseWriter, r *http.Request) {
 	username := strings.TrimSpace(r.URL.Query().Get("username"))
+	model := strings.TrimSpace(r.URL.Query().Get("model"))
 	filter := UsageFilter{
 		Username:         username,
 		TokenFingerprint: r.URL.Query().Get("token_fingerprint"),
-		Model:            r.URL.Query().Get("model"),
+		Model:            model,
 		RoutePattern:     r.URL.Query().Get("route_pattern"),
 		BucketSize:       r.URL.Query().Get("bucket_size"),
 		Limit:            100,
@@ -247,7 +248,7 @@ func (h Handler) listUsage(w http.ResponseWriter, r *http.Request) {
 		trend, err := h.repo.EmployeeUsageTrend(r.Context(), EmployeeUsageFilter{
 			Username: username,
 			Range:    rangeValue,
-			Model:    strings.TrimSpace(r.URL.Query().Get("model")),
+			Model:    model,
 			Start:    start,
 			End:      end,
 		})

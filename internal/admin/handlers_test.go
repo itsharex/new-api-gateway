@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -711,7 +712,7 @@ func TestUsageWithUsernameReturnsEmployeeUsage(t *testing.T) {
 	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleViewer, "", nil)
 	handler.auth.Now = func() time.Time { return now }
 	db.session.ExpiresAt = now.Add(time.Hour)
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/usage?username=E10001&range=bad&model=gpt-5.2", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/usage?username=E10001&range=bad&model=%20gpt-5.2%20", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 
@@ -719,6 +720,9 @@ func TestUsageWithUsernameReturnsEmployeeUsage(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	if db.usageModelFilter != "gpt-5.2" {
+		t.Fatalf("usage model filter = %q, want trimmed gpt-5.2", db.usageModelFilter)
 	}
 	if db.employeeUsageFilter.Username != "E10001" || db.employeeUsageFilter.Model != "gpt-5.2" {
 		t.Fatalf("filter = %#v", db.employeeUsageFilter)
@@ -1098,6 +1102,7 @@ type memoryAdminDB struct {
 	findUserErr            error
 	revokeErr              error
 	traceDetail            TraceDetail
+	usageModelFilter       string
 	employeeUsageFilter    EmployeeUsageFilter
 	employeeUsageCalled    bool
 }
@@ -1168,6 +1173,17 @@ func (m *memoryAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgco
 }
 
 func (m *memoryAdminDB) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	if strings.Contains(sql, "FROM usage_aggregates") &&
+		!strings.Contains(sql, "SELECT DISTINCT model") &&
+		!strings.Contains(sql, "GROUP BY bucket_start") &&
+		!strings.Contains(sql, "GROUP BY model") {
+		for i, arg := range args {
+			if strings.Contains(sql, fmt.Sprintf("model = $%d", i+1)) {
+				m.usageModelFilter = arg.(string)
+				break
+			}
+		}
+	}
 	if strings.Contains(sql, "SELECT DISTINCT model") && strings.Contains(sql, "FROM usage_aggregates") {
 		m.employeeUsageCalled = true
 		m.employeeUsageFilter = EmployeeUsageFilter{Username: args[0].(string), Start: args[1].(time.Time), End: args[2].(time.Time)}
