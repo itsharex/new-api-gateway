@@ -304,43 +304,25 @@ textarea {
   min-height: 240px;
 }
 
-.chart-frame svg {
+.chart-frame canvas,
+.chart-wrap canvas {
   display: block;
   width: 100%;
-  height: auto;
-  min-height: 220px;
+  height: 100%;
 }
 
-.chart-grid {
-  stroke: #d7dde8;
-  stroke-width: 1;
+.chart-frame-overview {
+  height: 260px;
 }
 
-.chart-area {
-  fill: rgba(37, 99, 235, 0.1);
-}
-
-.chart-line {
-  fill: none;
-  stroke: var(--accent);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 3;
-}
-
-.chart-point {
-  fill: #ffffff;
-  stroke: var(--accent-strong);
-  stroke-width: 2;
-}
-
-.chart-axis {
-  fill: var(--muted);
-  font-size: 12px;
-}
-
-.chart-axis-end {
-  text-anchor: end;
+.chart-fallback {
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  color: var(--danger);
+  font-weight: 650;
+  text-align: center;
+  padding: 20px;
 }
 
 .chart-empty {
@@ -412,78 +394,11 @@ textarea {
 
 .chart-wrap {
   position: relative;
-  min-height: 260px;
+  height: 300px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #ffffff;
   overflow: hidden;
-}
-
-.chart-wrap svg {
-  display: block;
-  width: 100%;
-  height: auto;
-  min-height: 260px;
-}
-
-.usage-chart-axis,
-.usage-chart-grid {
-  stroke: #d7dde8;
-  stroke-width: 1;
-}
-
-.usage-chart-grid {
-  stroke-dasharray: 4 4;
-}
-
-.series-total,
-.series-input,
-.series-output,
-.series-cache {
-  fill: none;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 2.5;
-}
-
-.series-total {
-  stroke: #2563eb;
-}
-
-.series-input {
-  stroke: #16a34a;
-  stroke-dasharray: 8 6;
-}
-
-.series-output {
-  stroke: #f97316;
-  stroke-dasharray: 8 6;
-}
-
-.series-cache {
-  stroke: #7c3aed;
-  stroke-dasharray: 8 6;
-}
-
-.chart-dot {
-  fill: #ffffff;
-  stroke-width: 2;
-}
-
-.chart-dot.total {
-  stroke: #2563eb;
-}
-
-.chart-dot.input {
-  stroke: #16a34a;
-}
-
-.chart-dot.output {
-  stroke: #f97316;
-}
-
-.chart-dot.cache {
-  stroke: #7c3aed;
 }
 
 .swatch {
@@ -674,5 +589,10 @@ tr:last-child td {
   .model-tabs button {
     max-width: 100%;
     overflow-wrap: anywhere;
+  }
+
+  .chart-frame-overview,
+  .chart-wrap {
+    height: 240px;
   }
 }
