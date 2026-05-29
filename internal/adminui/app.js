@@ -320,10 +320,13 @@ function renderUsage(body) {
     item.model,
     item.route_pattern,
     formatNumber(item.request_count),
+    formatNumber(item.prompt_tokens),
+    formatNumber(item.completion_tokens),
+    formatNumber(item.cached_tokens),
     formatNumber(item.total_tokens),
     money(item.estimated_cost),
   ]);
-  renderShell(page("用量", `<section class="panel">${table(["时间 (UTC+8)", "员工", "Model", "Route", "请求数", "Token", "费用"], rows)}</section>`));
+  renderShell(page("用量", `<section class="panel">${table(["时间 (UTC+8)", "员工", "Model", "Route", "请求数", "Input", "Output", "Cached", "Total", "费用"], rows)}</section>`));
 }
 
 function renderTraces(body) {
@@ -335,9 +338,12 @@ function renderTraces(body) {
     trace.model_requested,
     trace.route_pattern || trace.path,
     trace.status_code,
+    formatNumber(trace.usage_prompt_tokens),
+    formatNumber(trace.usage_completion_tokens),
+    formatNumber(trace.usage_cached_tokens),
     formatNumber(trace.usage_total_tokens),
   ]);
-  renderShell(page("Trace", `<section class="panel">${table(["Trace", "时间 (UTC+8)", "员工", "Model", "Route", "Status", "Token"], rows)}</section>`));
+  renderShell(page("Trace", `<section class="panel">${table(["Trace", "时间 (UTC+8)", "员工", "Model", "Route", "Status", "Input", "Output", "Cached", "Total"], rows)}</section>`));
   document.querySelectorAll("[data-trace-id]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
@@ -389,7 +395,10 @@ function renderTraceDetail(body) {
     ["Model", trace.model_requested],
     ["Route", trace.route_pattern || trace.path],
     ["Status", trace.status_code],
-    ["Token", formatNumber(trace.usage_total_tokens)],
+    ["Input Token", formatNumber(trace.usage_prompt_tokens)],
+    ["Output Token", formatNumber(trace.usage_completion_tokens)],
+    ["Cached Token", formatNumber(trace.usage_cached_tokens)],
+    ["Total Token", formatNumber(trace.usage_total_tokens)],
     ["身份", trace.identity_resolution_status],
     ["分析", trace.analysis_status],
     ["原始证据", evidenceLinks || "无"],
