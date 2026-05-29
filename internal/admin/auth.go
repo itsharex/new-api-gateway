@@ -153,6 +153,7 @@ func (a Auth) Middleware(next http.Handler) http.Handler {
 			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 			return
 		}
+		principal.SessionID = sessionID
 		next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), principal)))
 	})
 }

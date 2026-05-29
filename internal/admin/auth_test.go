@@ -42,3 +42,48 @@ func TestRequirePermissionRejectsMissingPermission(t *testing.T) {
 		t.Fatal("handler was called despite missing permission")
 	}
 }
+
+func TestMiddlewareStoresSessionIDInPrincipal(t *testing.T) {
+	passwordHash, err := HashPassword("secret-password")
+	if err != nil {
+		t.Fatalf("HashPassword error: %v", err)
+	}
+	db := &memoryAdminDB{
+		user: User{ID: 1, Username: "alice", PasswordHash: passwordHash, DisplayName: "Alice", Role: RoleAuditor, Status: "active"},
+		session: Session{
+			SessionID: "sess_123",
+			UserID:    1,
+			ExpiresAt: time.Unix(2000, 0).UTC(),
+			CSRFToken: "csrf_123",
+		},
+	}
+	repo := NewRepository(db)
+	auth := Auth{
+		Repo:          repo,
+		SessionSecret: "session-secret-0123456789abcdef",
+		CookieName:    "audit_admin_session",
+		Now: func() time.Time {
+			return time.Unix(1000, 0).UTC()
+		},
+	}
+	cookie := auth.sessionCookie("sess_123", time.Unix(2000, 0).UTC())
+	handler := auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := PrincipalFromContext(r.Context())
+		if !ok {
+			t.Fatal("principal missing from request context")
+		}
+		if principal.SessionID != "sess_123" {
+			t.Fatalf("SessionID = %q, want sess_123", principal.SessionID)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/me", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+}
