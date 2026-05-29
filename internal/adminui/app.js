@@ -44,6 +44,11 @@ const views = [
   { id: "audit", label: "审计日志" },
 ];
 
+function resetPasswordState() {
+  state.password.error = "";
+  state.password.success = "";
+}
+
 function csrfToken() {
   const match = document.cookie.split("; ").find((part) => part.startsWith("audit_admin_csrf="));
   return match ? decodeURIComponent(match.split("=")[1] || "") : "";
@@ -339,6 +344,8 @@ function renderLogin() {
         }),
       });
       state.user = body.user;
+      state.view = "overview";
+      resetPasswordState();
       renderShell(`<section class="loading-panel">正在加载${escapeHTML(currentView().label)}...</section>`);
       await loadView();
     } catch (error) {
@@ -392,8 +399,7 @@ function renderShell(content) {
     button.addEventListener("click", async () => {
       state.view = button.dataset.view;
       state.error = "";
-      state.password.error = "";
-      state.password.success = "";
+      resetPasswordState();
       renderShell(`<section class="loading-panel">正在加载${escapeHTML(currentView().label)}...</section>`);
       await loadView();
     });
@@ -402,8 +408,7 @@ function renderShell(content) {
   document.querySelector("#change-password-button").addEventListener("click", () => {
     state.view = "password";
     state.error = "";
-    state.password.error = "";
-    state.password.success = "";
+    resetPasswordState();
     renderPasswordChange();
   });
 
@@ -413,6 +418,8 @@ function renderShell(content) {
     } finally {
       state.user = null;
       state.error = "";
+      state.view = "overview";
+      resetPasswordState();
       renderLogin();
     }
   });
@@ -1185,6 +1192,8 @@ async function boot() {
   } catch (error) {
     state.user = null;
     state.error = "";
+    state.view = "overview";
+    resetPasswordState();
     renderLogin();
   }
 }
