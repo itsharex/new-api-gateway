@@ -150,13 +150,19 @@ type EvidenceObjectSummary struct {
 }
 
 type OverviewSummary struct {
-	RequestCount24h      int64 `json:"request_count_24h"`
-	SuccessCount24h      int64 `json:"success_count_24h"`
-	ErrorCount24h        int64 `json:"error_count_24h"`
-	TotalTokens24h       int64 `json:"total_tokens_24h"`
-	OpenAnomalies        int64 `json:"open_anomalies"`
-	OpenCoverageAlerts   int64 `json:"open_coverage_alerts"`
-	RawOnlyTraceCount24h int64 `json:"raw_only_trace_count_24h"`
+	RequestCount24h      int64           `json:"request_count_24h"`
+	SuccessCount24h      int64           `json:"success_count_24h"`
+	ErrorCount24h        int64           `json:"error_count_24h"`
+	TotalTokens24h       int64           `json:"total_tokens_24h"`
+	OpenAnomalies        int64           `json:"open_anomalies"`
+	OpenCoverageAlerts   int64           `json:"open_coverage_alerts"`
+	RawOnlyTraceCount24h int64           `json:"raw_only_trace_count_24h"`
+	TokenUsageDaily      []TokenUsageDay `json:"token_usage_daily"`
+}
+
+type TokenUsageDay struct {
+	Date        string `json:"date"`
+	TotalTokens int64  `json:"total_tokens"`
 }
 
 type UsageFilter struct {

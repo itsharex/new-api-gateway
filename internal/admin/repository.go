@@ -330,7 +330,50 @@ FROM traces`, since).Scan(
 		&summary.OpenCoverageAlerts,
 		&summary.RawOnlyTraceCount24h,
 	)
+	if err != nil {
+		return summary, err
+	}
+	summary.TokenUsageDaily, err = r.dailyTokenUsage(ctx, now, 30)
 	return summary, err
+}
+
+func (r Repository) dailyTokenUsage(ctx context.Context, now time.Time, days int) ([]TokenUsageDay, error) {
+	if days <= 0 {
+		days = 30
+	}
+	endDay := now.UTC().Truncate(24 * time.Hour)
+	startDay := endDay.AddDate(0, 0, -(days - 1))
+	points := make([]TokenUsageDay, 0, days)
+	byDate := make(map[string]int64, days)
+
+	rows, err := r.db.Query(ctx, `
+SELECT (bucket_start AT TIME ZONE 'UTC')::date::text, COALESCE(SUM(total_tokens), 0)
+FROM usage_aggregates
+WHERE bucket_size = 'day'
+  AND bucket_start >= $1
+  AND bucket_start < $2
+GROUP BY (bucket_start AT TIME ZONE 'UTC')::date
+ORDER BY (bucket_start AT TIME ZONE 'UTC')::date`, startDay, endDay.AddDate(0, 0, 1))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var date string
+		var totalTokens int64
+		if err := rows.Scan(&date, &totalTokens); err != nil {
+			return nil, err
+		}
+		byDate[date] = totalTokens
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for day := startDay; !day.After(endDay); day = day.AddDate(0, 0, 1) {
+		date := day.Format("2006-01-02")
+		points = append(points, TokenUsageDay{Date: date, TotalTokens: byDate[date]})
+	}
+	return points, nil
 }
 
 func (r Repository) ListUsageAggregates(ctx context.Context, filter UsageFilter) ([]UsageBucket, error) {
