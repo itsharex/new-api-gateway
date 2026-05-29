@@ -120,7 +120,7 @@ Redis 缓存 → PostgreSQL 缓存 → new-api 数据库直查
 
 ### `internal/traces/` — Trace 持久化
 
-`Trace` 结构体包含 50+ 字段：trace ID、方法、路径、状态码、耗时、input/output/cached/total token 用量、身份快照、模型信息、错误信息、所有证据引用。
+`Trace` 结构体包含 50+ 字段：trace ID、方法、路径、状态码、耗时、input/output/cached/reasoning/total token 用量、身份快照、模型信息、错误信息、所有证据引用。
 
 ### `internal/jobs/` — 任务发布
 

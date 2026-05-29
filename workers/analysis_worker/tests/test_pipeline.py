@@ -114,6 +114,7 @@ def test_process_job_line_reads_evidence_normalizes_and_persists(tmp_path: Path)
     assert repo.aggregates[0].prompt_tokens == 11
     assert repo.aggregates[0].completion_tokens == 7
     assert repo.aggregates[0].cached_tokens == 3
+    assert repo.aggregates[0].reasoning_tokens == 2
     assert repo.aggregates[0].total_tokens == 18
     assert repo.aggregates[0].request_body_bytes == 128
     assert repo.aggregates[0].response_body_bytes == 256
