@@ -205,14 +205,11 @@ NEW_API_POSTGRES_DSN=postgres://root:123456@192.168.1.100:5432/new-api?sslmode=d
 
 ### Embedding 服务
 
-Embedding 服务（语义工作相关性分类）使用本地构建的 Python 服务（FastAPI + sentence-transformers，模型 BAAI/bge-m3）。
+Embedding 服务（语义工作相关性分类）使用本地构建的 Python 服务（FastAPI + sentence-transformers）。Docker Compose 部署默认使用代码中的模型默认值 `BAAI/bge-m3`。
 
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `HF_ENDPOINT` | HuggingFace 镜像地址 | `https://hf-mirror.com` |
-| `EMBEDDING_MODEL` | 嵌入模型名 | `BAAI/bge-m3` |
+模型权重缓存到 Docker 命名卷 `embedding-model-cache`（容器内路径 `/data`，同时作为 `HF_HOME` 和 `TRANSFORMERS_CACHE`）。首次启动需等待模型下载完成（约 2-5 分钟）；后续只要该 volume 未被删除，会复用已有缓存，不会每次重新下载。分析 Worker 依赖 embedding 服务，模型未就绪时 Worker 会等待重试。
 
-中国区部署默认使用 `hf-mirror.com` 下载模型，无需额外配置。模型权重缓存到 Docker volume，首次启动需等待下载完成（约 2-5 分钟）。分析 Worker 依赖 embedding 服务，模型未就绪时 Worker 会等待重试。
+当前 `deploy/docker-compose.yml` 未透传 `.env.local` 中的 `HF_ENDPOINT` 或 `EMBEDDING_MODEL`。如需使用 HuggingFace 镜像站或替换模型，请在 `embedding` 服务的 `environment` 中显式添加对应变量，或使用 compose override 文件。
 
 OSS 后端额外变量（`EVIDENCE_STORAGE_BACKEND=oss` 时必需）：`OSS_ENDPOINT`、`OSS_BUCKET`、`OSS_ACCESS_KEY_ID`、`OSS_ACCESS_KEY_SECRET`。
 
