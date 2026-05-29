@@ -72,6 +72,20 @@ func TestGenericExtractorExtractResponsePromptCompletionDetails(t *testing.T) {
 	}
 }
 
+func TestGenericExtractorPrimaryZeroValuesDoNotFallback(t *testing.T) {
+	g := newGenericExtractor()
+	u, _ := g.extractResponse([]byte(`{"model":"x","usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0,"input_tokens":5,"output_tokens":3,"prompt_tokens_details":{"cached_tokens":0},"input_tokens_details":{"cached_tokens":4},"completion_tokens_details":{"reasoning_tokens":0},"output_tokens_details":{"reasoning_tokens":2}}}`))
+	if u.PromptTokens != 0 || u.CompletionTokens != 0 || u.TotalTokens != 0 {
+		t.Fatalf("usage=%+v", u)
+	}
+	if u.CachedTokens != 0 {
+		t.Fatalf("CachedTokens=%d, want explicit primary zero", u.CachedTokens)
+	}
+	if u.ReasoningTokens != 0 {
+		t.Fatalf("ReasoningTokens=%d, want explicit primary zero", u.ReasoningTokens)
+	}
+}
+
 func TestGenericExtractorExtractResponseEmpty(t *testing.T) {
 	g := newGenericExtractor()
 	u, m := g.extractResponse([]byte(`{}`))
