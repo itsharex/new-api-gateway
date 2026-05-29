@@ -136,6 +136,9 @@ func TestChangeCurrentUserPasswordSucceedsAndRevokesOtherSessions(t *testing.T) 
 	if len(db.auditMetadata) == 0 || db.auditMetadata[len(db.auditMetadata)-1] != `{"revoked_other_sessions":true}` {
 		t.Fatalf("auditMetadata = %#v", db.auditMetadata)
 	}
+	if got := strings.Join(db.passwordChangeOps, ","); got != "revoke_other_sessions,update_password,audit_log" {
+		t.Fatalf("passwordChangeOps = %s, want revoke_other_sessions,update_password,audit_log", got)
+	}
 
 	meReq := httptest.NewRequest(http.MethodGet, "/admin/api/me", nil)
 	meReq.AddCookie(cookie)
@@ -143,6 +146,25 @@ func TestChangeCurrentUserPasswordSucceedsAndRevokesOtherSessions(t *testing.T) 
 	handler.ServeHTTP(meRec, meReq)
 	if meRec.Code != http.StatusOK {
 		t.Fatalf("me status after password change = %d, body = %s", meRec.Code, meRec.Body.String())
+	}
+}
+
+func TestChangeCurrentUserPasswordPreservesNewPasswordSpaces(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleViewer, "", nil)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/me/password", strings.NewReader(`{"current_password":"secret-password","new_password":" new-secret-password ","confirm_password":" new-secret-password "}`))
+	addAuthenticatedCookies(req, cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if err := CheckPassword(db.updatedPasswordHash, " new-secret-password "); err != nil {
+		t.Fatalf("new password with spaces does not verify: %v", err)
+	}
+	if err := CheckPassword(db.updatedPasswordHash, "new-secret-password"); err == nil {
+		t.Fatal("trimmed new password verifies")
 	}
 }
 
@@ -156,6 +178,12 @@ func TestChangeCurrentUserPasswordRejectsInvalidInput(t *testing.T) {
 		{
 			name:     "wrong current password",
 			body:     `{"current_password":"wrong-password","new_password":"new-secret-password","confirm_password":"new-secret-password"}`,
+			wantCode: http.StatusUnauthorized,
+			wantText: "current password is incorrect",
+		},
+		{
+			name:     "current password with extra spaces",
+			body:     `{"current_password":" secret-password ","new_password":"new-secret-password","confirm_password":"new-secret-password"}`,
 			wantCode: http.StatusUnauthorized,
 			wantText: "current password is incorrect",
 		},
@@ -214,6 +242,87 @@ func TestChangeCurrentUserPasswordRejectsInvalidInput(t *testing.T) {
 				t.Fatalf("revokedOtherUserID = %d, want 0", db.revokedOtherUserID)
 			}
 		})
+	}
+}
+
+func TestChangeCurrentUserPasswordRevokeFailureDoesNotUpdatePassword(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleAuditor, "", nil)
+	oldHash := db.user.PasswordHash
+	db.revokeOtherErr = errors.New("revoke failed")
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/me/password", strings.NewReader(`{"current_password":"secret-password","new_password":"new-secret-password","confirm_password":"new-secret-password"}`))
+	addAuthenticatedCookies(req, cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500, body = %s", rec.Code, rec.Body.String())
+	}
+	if db.user.PasswordHash != oldHash {
+		t.Fatal("password hash changed despite session revocation failure")
+	}
+	if db.updatedPasswordUserID != 0 {
+		t.Fatalf("updatedPasswordUserID = %d, want 0", db.updatedPasswordUserID)
+	}
+	if len(db.auditActions) != 1 || db.auditActions[0] != "login" {
+		t.Fatalf("auditActions = %#v, want only login audit", db.auditActions)
+	}
+	if got := strings.Join(db.passwordChangeOps, ","); got != "revoke_other_sessions" {
+		t.Fatalf("passwordChangeOps = %s, want revoke_other_sessions", got)
+	}
+}
+
+func TestChangeCurrentUserPasswordUpdateFailureKeepsRevocationVisible(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleAuditor, "", nil)
+	oldHash := db.user.PasswordHash
+	db.updatePasswordErr = errors.New("update failed")
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/me/password", strings.NewReader(`{"current_password":"secret-password","new_password":"new-secret-password","confirm_password":"new-secret-password"}`))
+	addAuthenticatedCookies(req, cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500, body = %s", rec.Code, rec.Body.String())
+	}
+	if db.revokedOtherUserID != int64(1) {
+		t.Fatalf("revokedOtherUserID = %d, want 1", db.revokedOtherUserID)
+	}
+	if db.user.PasswordHash != oldHash {
+		t.Fatal("password hash changed despite update failure")
+	}
+	if len(db.auditActions) != 1 || db.auditActions[0] != "login" {
+		t.Fatalf("auditActions = %#v, want only login audit", db.auditActions)
+	}
+	if got := strings.Join(db.passwordChangeOps, ","); got != "revoke_other_sessions,update_password" {
+		t.Fatalf("passwordChangeOps = %s, want revoke_other_sessions,update_password", got)
+	}
+}
+
+func TestChangeCurrentUserPasswordAuditFailureIsVisibleAfterPasswordUpdate(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleAuditor, "", nil)
+	oldHash := db.user.PasswordHash
+	db.auditErr = errors.New("audit failed")
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/me/password", strings.NewReader(`{"current_password":"secret-password","new_password":"new-secret-password","confirm_password":"new-secret-password"}`))
+	addAuthenticatedCookies(req, cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500, body = %s", rec.Code, rec.Body.String())
+	}
+	if db.revokedOtherUserID != int64(1) {
+		t.Fatalf("revokedOtherUserID = %d, want 1", db.revokedOtherUserID)
+	}
+	if db.updatedPasswordHash == "" || db.updatedPasswordHash == oldHash {
+		t.Fatal("password hash was not updated before audit failure became visible")
+	}
+	if err := CheckPassword(db.updatedPasswordHash, "new-secret-password"); err != nil {
+		t.Fatalf("new password does not verify: %v", err)
+	}
+	if got := strings.Join(db.passwordChangeOps, ","); got != "revoke_other_sessions,update_password,audit_log" {
+		t.Fatalf("passwordChangeOps = %s, want revoke_other_sessions,update_password,audit_log", got)
 	}
 }
 
@@ -1243,6 +1352,7 @@ type memoryAdminDB struct {
 	revokedOtherAt          time.Time
 	updatePasswordErr       error
 	revokeOtherErr          error
+	passwordChangeOps       []string
 	traceDetail             TraceDetail
 	usageModelFilter        string
 	employeeUsageFilter     EmployeeUsageFilter
@@ -1261,6 +1371,7 @@ func (m *memoryAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgco
 			m.session.CSRFToken = args[3].(string)
 		}
 	case strings.Contains(sql, "UPDATE audit_users") && strings.Contains(sql, "password_hash"):
+		m.passwordChangeOps = append(m.passwordChangeOps, "update_password")
 		if m.updatePasswordErr != nil {
 			return pgconn.CommandTag{}, m.updatePasswordErr
 		}
@@ -1268,6 +1379,7 @@ func (m *memoryAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgco
 		m.updatedPasswordHash = args[1].(string)
 		m.user.PasswordHash = args[1].(string)
 	case strings.Contains(sql, "UPDATE audit_sessions") && strings.Contains(sql, "session_id <>"):
+		m.passwordChangeOps = append(m.passwordChangeOps, "revoke_other_sessions")
 		if m.revokeOtherErr != nil {
 			return pgconn.CommandTag{}, m.revokeOtherErr
 		}
@@ -1280,10 +1392,14 @@ func (m *memoryAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgco
 		}
 		m.revokedSessionID = args[0].(string)
 	case strings.Contains(sql, "INSERT INTO audit_action_logs"):
+		action := args[2].(string)
+		if action == "password_changed" {
+			m.passwordChangeOps = append(m.passwordChangeOps, "audit_log")
+		}
 		if m.auditErr != nil {
 			return pgconn.CommandTag{}, m.auditErr
 		}
-		m.auditActions = append(m.auditActions, args[2].(string))
+		m.auditActions = append(m.auditActions, action)
 		m.auditMetadata = append(m.auditMetadata, args[10].(string))
 		m.auditLogs = append(m.auditLogs, AuditActionLog{
 			ActorUserID:        args[0].(int64),

@@ -143,9 +143,6 @@ func (h Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	input.CurrentPassword = strings.TrimSpace(input.CurrentPassword)
-	input.NewPassword = strings.TrimSpace(input.NewPassword)
-	input.ConfirmPassword = strings.TrimSpace(input.ConfirmPassword)
 	if input.CurrentPassword == "" || input.NewPassword == "" || input.ConfirmPassword == "" {
 		http.Error(w, "password fields are required", http.StatusBadRequest)
 		return
@@ -186,15 +183,15 @@ func (h Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := h.auth.now()
-	if err := h.repo.UpdateUserPassword(r.Context(), user.ID, newHash, now); err != nil {
-		http.Error(w, "failed to change password", http.StatusInternalServerError)
-		return
-	}
 	if err := h.repo.RevokeOtherSessions(r.Context(), user.ID, principal.SessionID, now); err != nil {
 		http.Error(w, "failed to change password", http.StatusInternalServerError)
 		return
 	}
-	_ = h.repo.InsertAuditActionLog(r.Context(), AuditActionLog{
+	if err := h.repo.UpdateUserPassword(r.Context(), user.ID, newHash, now); err != nil {
+		http.Error(w, "failed to change password", http.StatusInternalServerError)
+		return
+	}
+	if err := h.repo.InsertAuditActionLog(r.Context(), AuditActionLog{
 		ActorUserID:   user.ID,
 		ActorUsername: user.Username,
 		Action:        "password_changed",
@@ -202,7 +199,10 @@ func (h Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 		TargetID:      user.Username,
 		MetadataJSON:  `{"revoked_other_sessions":true}`,
 		CreatedAt:     now,
-	})
+	}); err != nil {
+		http.Error(w, "failed to change password", http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
