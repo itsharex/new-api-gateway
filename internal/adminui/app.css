@@ -254,7 +254,8 @@ textarea {
 }
 
 .password-panel {
-  max-width: 520px;
+  width: min(520px, 100%);
+  margin: 0 auto 16px;
 }
 
 .stacked-form {
