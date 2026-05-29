@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-//go:embed index.html app.css app.js
+//go:embed index.html app.css app.js vendor/chartjs/chart.umd.min.js vendor/chartjs/LICENSE.md
 var assets embed.FS
 
 func Handler() http.Handler {
