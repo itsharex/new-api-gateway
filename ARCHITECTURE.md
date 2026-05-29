@@ -135,6 +135,7 @@ Redis 缓存 → PostgreSQL 缓存 → new-api 数据库直查
 | `/login` | POST | 公开 |
 | `/logout` | POST | 已认证 |
 | `/me` | GET | 已认证 |
+| `/me/password` | POST | 已认证 + CSRF |
 | `/overview` | GET | `view_aggregates` |
 | `/usage` | GET | `view_aggregates` |
 | `/traces` | GET | `view_normalized_traces` |
@@ -148,7 +149,7 @@ Redis 缓存 → PostgreSQL 缓存 → new-api 数据库直查
 
 RBAC 角色：`viewer` → `auditor` → `raw_access` → `admin`，权限逐级递增。
 
-安全特性：HMAC 签名 Cookie、CSRF 防护、频率限制、bcrypt 密码哈希、全量审计日志。
+安全特性：HMAC 签名 Cookie、CSRF 防护、频率限制、bcrypt 密码哈希、自助密码轮换、全量审计日志。
 
 ### `internal/alerts/` — 覆盖告警
 
