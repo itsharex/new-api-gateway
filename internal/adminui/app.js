@@ -1,6 +1,15 @@
 const app = document.querySelector("#app");
 
-const state = { user: null, view: "overview", error: "" };
+const state = {
+  user: null,
+  view: "overview",
+  error: "",
+  usage: {
+    username: "",
+    range: "30d",
+    model: "",
+  },
+};
 
 const views = [
   { id: "overview", label: "概览" },
@@ -70,6 +79,23 @@ function table(headers, rows) {
 
 function formatNumber(value) {
   return Number(value || 0).toLocaleString();
+}
+
+function compactNumber(value) {
+  const number = Number(value || 0);
+  if (number >= 1_000_000) return `${(number / 1_000_000).toFixed(1)}M`;
+  if (number >= 1_000) return `${(number / 1_000).toFixed(1)}K`;
+  return formatNumber(number);
+}
+
+function queryString(params) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      query.set(key, value);
+    }
+  });
+  return query.toString();
 }
 
 function formatTime(value) {
@@ -254,8 +280,7 @@ async function loadView() {
       const body = await api("/overview");
       renderOverview(body);
     } else if (state.view === "usage") {
-      const body = await api("/usage?bucket_size=hour");
-      renderUsage(body);
+      await loadUsage();
     } else if (state.view === "traces") {
       const body = await api("/traces");
       renderTraces(body);
@@ -286,6 +311,22 @@ async function loadView() {
   } catch (error) {
     renderShell(page(currentView().label, `<section class="panel error">${escapeHTML(error.message)}</section>`));
   }
+}
+
+async function loadUsage() {
+  const username = String(state.usage.username || "").trim();
+  if (!username) {
+    renderUsage({});
+    return;
+  }
+  const params = queryString({
+    username,
+    range: state.usage.range || "30d",
+    model: state.usage.model || "",
+    bucket_size: "day",
+  });
+  const body = await api(`/usage?${params}`);
+  renderUsage(body);
 }
 
 function renderOverview(body) {
@@ -385,21 +426,215 @@ function tokenUsageChart(points) {
   `;
 }
 
-function renderUsage(body) {
-  body = body || {};
-  const rows = arrayValue(body.usage).map((item) => [
-    formatTime(item.bucket_start),
-    item.username || item.fingerprint_display,
-    item.model,
-    item.route_pattern,
+function renderUsage(body = {}) {
+  const trend = body.employee_usage || null;
+  const summary = trend ? trend.summary || {} : {};
+  const username = trend?.username || state.usage.username || "";
+  const range = trend?.range || state.usage.range || "30d";
+  const selectedModel = trend?.selected_model || state.usage.model || "";
+  const models = arrayValue(trend?.models);
+  const daily = arrayValue(trend?.daily);
+  const modelSummary = arrayValue(trend?.model_summary);
+  const ranges = ["1d", "7d", "30d"];
+  const rangeTabs = ranges
+    .map(
+      (item) => `
+        <button type="button" data-usage-range="${escapeHTML(item)}" class="${item === range ? "active" : ""}">
+          ${escapeHTML(item)}
+        </button>
+      `,
+    )
+    .join("");
+  const modelTabs = [
+    `<button type="button" data-usage-model="" class="${selectedModel ? "" : "active"}">全部</button>`,
+    ...models.map((model) => {
+      const value = String(model || "");
+      return `
+        <button type="button" data-usage-model="${escapeHTML(value)}" class="${value === selectedModel ? "active" : ""}">
+          ${escapeHTML(value || "unknown")}
+        </button>
+      `;
+    }),
+  ].join("");
+  const searchPanel = `
+    <section class="panel">
+      <form id="usage-search" class="employee-search">
+        <div class="field">
+          <label for="usage-username">员工</label>
+          <input id="usage-username" name="username" value="${escapeHTML(username)}" placeholder="输入员工用户名" autocomplete="off">
+        </div>
+        <button class="primary" type="submit">查询</button>
+      </form>
+    </section>
+  `;
+
+  if (!username || !trend) {
+    renderShell(
+      page(
+        "用量",
+        `
+          ${searchPanel}
+          <section class="panel empty-chart">选择员工后查看最近 30 天 token 与 model 使用趋势。</section>
+        `,
+      ),
+    );
+    bindUsageSearch();
+    return;
+  }
+
+  const cards = [
+    ["请求数", summary.request_count],
+    ["Input", summary.prompt_tokens],
+    ["Output", summary.completion_tokens],
+    ["Cache", summary.cached_tokens],
+    ["Total", summary.total_tokens],
+  ]
+    .map(
+      ([label, value]) => `
+        <article class="metric">
+          <div class="label">${escapeHTML(label)}</div>
+          <div class="value">${compactNumber(value)}</div>
+        </article>
+      `,
+    )
+    .join("");
+  const rows = modelSummary.map((item) => [
+    item.model || "unknown",
     formatNumber(item.request_count),
     formatNumber(item.prompt_tokens),
     formatNumber(item.completion_tokens),
     formatNumber(item.cached_tokens),
     formatNumber(item.total_tokens),
-    money(item.estimated_cost),
   ]);
-  renderShell(page("用量", `<section class="panel">${table(["时间 (UTC+8)", "员工", "Model", "Route", "请求数", "Input", "Output", "Cached", "Total", "费用"], rows)}</section>`));
+
+  renderShell(
+    page(
+      "用量",
+      `
+        ${searchPanel}
+        <section class="cards usage-summary">${cards}</section>
+        <section class="panel usage-chart">
+          <div class="chart-head">
+            <div>
+              <h2>${escapeHTML(username)} Token 使用趋势</h2>
+              <div class="muted">按天汇总，默认展示最近 30 天</div>
+            </div>
+            <div class="range-tabs" aria-label="时间范围">${rangeTabs}</div>
+          </div>
+          <div class="model-tabs" aria-label="Model 筛选">${modelTabs}</div>
+          ${usageChart(daily)}
+        </section>
+        <section class="panel">
+          <h2>Model 汇总</h2>
+          ${table(["Model", "请求数", "Input", "Output", "Cache", "Total"], rows)}
+        </section>
+      `,
+    ),
+  );
+  bindUsageSearch();
+  bindUsageControls();
+}
+
+function bindUsageSearch() {
+  const form = document.querySelector("#usage-search");
+  if (!form) return;
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const username = String(new FormData(event.currentTarget).get("username") || "").trim();
+    state.usage.username = username;
+    state.usage.model = "";
+    await loadUsage();
+  });
+}
+
+function bindUsageControls() {
+  document.querySelectorAll("[data-usage-range]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      state.usage.range = button.dataset.usageRange || "30d";
+      await loadUsage();
+    });
+  });
+  document.querySelectorAll("[data-usage-model]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      state.usage.model = button.dataset.usageModel || "";
+      await loadUsage();
+    });
+  });
+}
+
+function usageChart(points) {
+  const items = arrayValue(points).map((item) => ({
+    label: String(item.date || item.bucket_start || ""),
+    total: Number(item.total_tokens || 0),
+    input: Number(item.prompt_tokens || 0),
+    output: Number(item.completion_tokens || 0),
+    cache: Number(item.cached_tokens || 0),
+  }));
+  if (!items.length) {
+    return `<div class="chart-wrap"><div class="empty-chart">暂无 token 使用数据</div></div>`;
+  }
+
+  const width = 760;
+  const height = 280;
+  const left = 48;
+  const right = 18;
+  const top = 22;
+  const bottom = 44;
+  const chartWidth = width - left - right;
+  const chartHeight = height - top - bottom;
+  const maxValue = Math.max(0, ...items.flatMap((item) => [item.total, item.input, item.output, item.cache]));
+  const divisor = maxValue > 0 ? maxValue : 1;
+  const lastIndex = Math.max(items.length - 1, 1);
+  const xFor = (index) => left + (chartWidth * index) / lastIndex;
+  const yFor = (value) => top + chartHeight - (chartHeight * value) / divisor;
+  const series = [
+    ["total", "Total", "total"],
+    ["input", "Input", "input"],
+    ["output", "Output", "output"],
+    ["cache", "Cache", "cache"],
+  ];
+  const pathFor = (key) =>
+    items
+      .map((item, index) => `${index === 0 ? "M" : "L"} ${xFor(index).toFixed(1)} ${yFor(item[key]).toFixed(1)}`)
+      .join(" ");
+  const dotsFor = (key, className) =>
+    items
+      .map(
+        (item, index) => `
+          <circle class="chart-dot ${escapeHTML(className)}" cx="${xFor(index).toFixed(1)}" cy="${yFor(item[key]).toFixed(1)}" r="3">
+            <title>${escapeHTML(item.label)} ${escapeHTML(className)}: ${formatNumber(item[key])}</title>
+          </circle>
+        `,
+      )
+      .join("");
+  const firstLabel = items[0]?.label || "";
+  const lastLabel = items[items.length - 1]?.label || "";
+
+  return `
+    <div class="legend" aria-label="Token 类型图例">
+      <span><i class="swatch"></i>Total</span>
+      <span><i class="swatch input"></i>Input</span>
+      <span><i class="swatch output"></i>Output</span>
+      <span><i class="swatch cache"></i>Cache</span>
+    </div>
+    <div class="chart-wrap">
+      <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="员工 token 使用趋势">
+        <line class="grid" x1="${left}" y1="${top}" x2="${width - right}" y2="${top}"></line>
+        <line class="grid" x1="${left}" y1="${top + chartHeight / 2}" x2="${width - right}" y2="${top + chartHeight / 2}"></line>
+        <line class="grid" x1="${left}" y1="${top + chartHeight}" x2="${width - right}" y2="${top + chartHeight}"></line>
+        <line class="axis" x1="${left}" y1="${top}" x2="${left}" y2="${top + chartHeight}"></line>
+        <line class="axis" x1="${left}" y1="${top + chartHeight}" x2="${width - right}" y2="${top + chartHeight}"></line>
+        ${series
+          .map(([key, label, className]) => `<path class="series-${className}" d="${pathFor(key)}"><title>${escapeHTML(label)}</title></path>`)
+          .join("")}
+        ${series.map(([key, , className]) => dotsFor(key, className)).join("")}
+        <text class="chart-axis" x="${left}" y="${height - 12}">${escapeHTML(firstLabel)}</text>
+        <text class="chart-axis chart-axis-end" x="${width - right}" y="${height - 12}">${escapeHTML(lastLabel)}</text>
+        <text class="chart-axis" x="${left}" y="16">${compactNumber(maxValue)}</text>
+        <text class="chart-axis" x="${left}" y="${top + chartHeight / 2 - 6}">${compactNumber(maxValue / 2)}</text>
+      </svg>
+    </div>
+  `;
 }
 
 function renderTraces(body) {
