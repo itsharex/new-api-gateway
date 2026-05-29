@@ -13,6 +13,19 @@ const state = {
 
 let usageRequestSeq = 0;
 
+const activeCharts = [];
+
+const chartColors = {
+  total: "#2563eb",
+  totalFill: "rgba(37, 99, 235, 0.12)",
+  input: "#16a34a",
+  output: "#f97316",
+  cache: "#7c3aed",
+  grid: "#e4e9f2",
+  muted: "#667085",
+  ink: "#172033",
+};
+
 const views = [
   { id: "overview", label: "概览" },
   { id: "usage", label: "用量" },
@@ -90,6 +103,138 @@ function compactNumber(value) {
   return formatNumber(number);
 }
 
+function destroyCharts() {
+  while (activeCharts.length) {
+    const chart = activeCharts.pop();
+    try {
+      chart.destroy();
+    } catch (_) {
+      // Ignore stale canvas cleanup errors after view swaps.
+    }
+  }
+}
+
+function chartAvailable() {
+  return typeof window !== "undefined" && typeof window.Chart === "function";
+}
+
+function chartErrorHTML(message = "图表组件加载失败") {
+  return `<div class="chart-fallback">${escapeHTML(message)}</div>`;
+}
+
+function hasPositiveValue(items, keys) {
+  return items.some((item) => keys.some((key) => finiteNumber(item[key]) > 0));
+}
+
+function registerChart(canvasID, config) {
+  const canvas = document.getElementById(canvasID);
+  if (!canvas) return null;
+  const frame = canvas.closest(".chart-frame, .chart-wrap");
+  if (!chartAvailable()) {
+    if (frame) frame.innerHTML = chartErrorHTML();
+    return null;
+  }
+  try {
+    const chart = new window.Chart(canvas, config);
+    activeCharts.push(chart);
+    return chart;
+  } catch (error) {
+    console.warn("failed to render admin chart", error);
+    if (frame) frame.innerHTML = chartErrorHTML();
+    return null;
+  }
+}
+
+function chartAxisTicks(value) {
+  return compactNumber(value);
+}
+
+function chartTooltipLabel(context) {
+  const label = context.dataset.label || "";
+  const value = context.parsed?.y ?? 0;
+  return `${label}: ${formatNumber(value)}`;
+}
+
+function chartBaseOptions() {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: {
+      duration: 450,
+      easing: "easeOutQuart",
+    },
+    interaction: {
+      mode: "index",
+      intersect: false,
+    },
+    plugins: {
+      legend: {
+        display: false,
+      },
+      tooltip: {
+        backgroundColor: "rgba(17, 24, 39, 0.94)",
+        titleColor: "#ffffff",
+        bodyColor: "#ffffff",
+        borderColor: "rgba(255, 255, 255, 0.12)",
+        borderWidth: 1,
+        displayColors: true,
+        padding: 10,
+        callbacks: {
+          label: chartTooltipLabel,
+        },
+      },
+    },
+    scales: {
+      x: {
+        grid: {
+          display: false,
+        },
+        border: {
+          color: chartColors.grid,
+        },
+        ticks: {
+          color: chartColors.muted,
+          maxRotation: 0,
+          autoSkip: true,
+          maxTicksLimit: 6,
+        },
+      },
+      y: {
+        beginAtZero: true,
+        grid: {
+          color: chartColors.grid,
+          drawBorder: false,
+        },
+        border: {
+          display: false,
+        },
+        ticks: {
+          color: chartColors.muted,
+          callback: chartAxisTicks,
+        },
+      },
+    },
+  };
+}
+
+function lineDataset({ label, data, color, backgroundColor, fill = false }) {
+  return {
+    label,
+    data,
+    borderColor: color,
+    backgroundColor: backgroundColor || color,
+    fill,
+    borderWidth: 2.5,
+    pointRadius: 0,
+    pointHoverRadius: 4,
+    pointHitRadius: 12,
+    pointBackgroundColor: "#ffffff",
+    pointBorderColor: color,
+    pointBorderWidth: 2,
+    tension: 0.35,
+  };
+}
+
 function queryString(params) {
   const query = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
@@ -155,6 +300,7 @@ function page(title, content, action = "") {
 }
 
 function renderLogin() {
+  destroyCharts();
   app.innerHTML = `
     <section class="login">
       <form id="login-form">
@@ -203,6 +349,7 @@ function currentView() {
 }
 
 function renderShell(content) {
+  destroyCharts();
   const user = state.user || {};
   app.innerHTML = `
     <div class="app-shell">
