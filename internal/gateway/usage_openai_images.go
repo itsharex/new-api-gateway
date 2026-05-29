@@ -17,6 +17,9 @@ func (e *openaiImagesExtractor) processSSE(payload []byte) {
 			InputTokens  int `json:"input_tokens"`
 			OutputTokens int `json:"output_tokens"`
 			TotalTokens  int `json:"total_tokens"`
+			InputDetails struct {
+				CachedTokens int `json:"cached_tokens"`
+			} `json:"input_tokens_details"`
 		} `json:"usage"`
 	}
 	if json.Unmarshal(payload, &v) != nil {
@@ -27,6 +30,7 @@ func (e *openaiImagesExtractor) processSSE(payload []byte) {
 			PromptTokens:     v.Usage.InputTokens,
 			CompletionTokens: v.Usage.OutputTokens,
 			TotalTokens:      v.Usage.TotalTokens,
+			CachedTokens:     v.Usage.InputDetails.CachedTokens,
 		}
 	}
 }
@@ -41,6 +45,9 @@ func (e *openaiImagesExtractor) extractResponse(body []byte) (minimalUsage, stri
 			InputTokens  int `json:"input_tokens"`
 			OutputTokens int `json:"output_tokens"`
 			TotalTokens  int `json:"total_tokens"`
+			InputDetails struct {
+				CachedTokens int `json:"cached_tokens"`
+			} `json:"input_tokens_details"`
 		} `json:"usage"`
 	}
 	if json.Unmarshal(body, &v) != nil {
@@ -50,6 +57,7 @@ func (e *openaiImagesExtractor) extractResponse(body []byte) (minimalUsage, stri
 		PromptTokens:     v.Usage.InputTokens,
 		CompletionTokens: v.Usage.OutputTokens,
 		TotalTokens:      v.Usage.TotalTokens,
+		CachedTokens:     v.Usage.InputDetails.CachedTokens,
 	}, ""
 }
 
