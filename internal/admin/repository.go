@@ -449,10 +449,11 @@ func (r Repository) EmployeeUsageTrend(ctx context.Context, filter EmployeeUsage
 	if r.db == nil {
 		return EmployeeUsageTrend{}, ErrAdminDBRequired
 	}
+	selectedModel := strings.TrimSpace(filter.Model)
 	trend := EmployeeUsageTrend{
 		Username:      filter.Username,
 		Range:         filter.Range,
-		SelectedModel: filter.Model,
+		SelectedModel: selectedModel,
 		Models:        []string{},
 		Daily:         []UsageDailyPoint{},
 		ModelSummary:  []UsageModelSummary{},
@@ -492,8 +493,8 @@ ORDER BY model`, filter.Username, filter.Start, filter.End)
 		"bucket_start < $3",
 	}
 	dailyArgs := []any{filter.Username, filter.Start, filter.End}
-	if filter.Model != "" {
-		dailyArgs = append(dailyArgs, filter.Model)
+	if selectedModel != "" {
+		dailyArgs = append(dailyArgs, selectedModel)
 		dailyWhere = append(dailyWhere, fmt.Sprintf("model = $%d", len(dailyArgs)))
 	}
 	rows, err = r.db.Query(ctx, fmt.Sprintf(`
@@ -545,11 +546,10 @@ ORDER BY bucket_start`, strings.Join(dailyWhere, " AND ")), dailyArgs...)
 		"username = $1",
 		"bucket_start >= $2",
 		"bucket_start < $3",
-		"model <> ''",
 	}
 	summaryArgs := []any{filter.Username, filter.Start, filter.End}
-	if filter.Model != "" {
-		summaryArgs = append(summaryArgs, filter.Model)
+	if selectedModel != "" {
+		summaryArgs = append(summaryArgs, selectedModel)
 		summaryWhere = append(summaryWhere, fmt.Sprintf("model = $%d", len(summaryArgs)))
 	}
 	rows, err = r.db.Query(ctx, fmt.Sprintf(`

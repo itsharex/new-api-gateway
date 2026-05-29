@@ -422,6 +422,95 @@ func TestRepositoryEmployeeUsageTrendScansModelsDailyAndSummary(t *testing.T) {
 	}
 }
 
+func TestRepositoryEmployeeUsageTrendIncludesBlankModelSummary(t *testing.T) {
+	db := &recordingAdminDB{rowsQueue: []pgx.Rows{
+		&scanRows{scans: []func(dest ...any) error{
+			func(dest ...any) error {
+				*(dest[0].(*string)) = "gpt-5.2"
+				return nil
+			},
+		}},
+		&scanRows{scans: []func(dest ...any) error{
+			func(dest ...any) error {
+				*(dest[0].(*string)) = "2026-05-29 00:00:00+00"
+				*(dest[1].(*int64)) = int64(3)
+				*(dest[2].(*int64)) = int64(3)
+				*(dest[3].(*int64)) = int64(0)
+				*(dest[4].(*int64)) = int64(30)
+				*(dest[5].(*int64)) = int64(15)
+				*(dest[6].(*int64)) = int64(5)
+				*(dest[7].(*int64)) = int64(45)
+				return nil
+			},
+		}},
+		&scanRows{scans: []func(dest ...any) error{
+			func(dest ...any) error {
+				*(dest[0].(*string)) = ""
+				*(dest[1].(*int64)) = int64(1)
+				*(dest[2].(*int64)) = int64(1)
+				*(dest[3].(*int64)) = int64(0)
+				*(dest[4].(*int64)) = int64(10)
+				*(dest[5].(*int64)) = int64(5)
+				*(dest[6].(*int64)) = int64(2)
+				*(dest[7].(*int64)) = int64(15)
+				return nil
+			},
+			func(dest ...any) error {
+				*(dest[0].(*string)) = "gpt-5.2"
+				*(dest[1].(*int64)) = int64(2)
+				*(dest[2].(*int64)) = int64(2)
+				*(dest[3].(*int64)) = int64(0)
+				*(dest[4].(*int64)) = int64(20)
+				*(dest[5].(*int64)) = int64(10)
+				*(dest[6].(*int64)) = int64(3)
+				*(dest[7].(*int64)) = int64(30)
+				return nil
+			},
+		}},
+	}}
+	repo := NewRepository(db)
+
+	trend, err := repo.EmployeeUsageTrend(context.Background(), EmployeeUsageFilter{
+		Username: "E10001",
+		Range:    "30d",
+		Model:    "   ",
+		Start:    time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		End:      time.Date(2026, 5, 31, 0, 0, 0, 0, time.UTC),
+	})
+
+	if err != nil {
+		t.Fatalf("EmployeeUsageTrend error: %v", err)
+	}
+	if trend.SelectedModel != "" {
+		t.Fatalf("SelectedModel = %q, want empty", trend.SelectedModel)
+	}
+	if got := strings.Join(trend.Models, ","); got != "gpt-5.2" {
+		t.Fatalf("models = %q", got)
+	}
+	if len(db.queryLog) != 3 {
+		t.Fatalf("queryLog len = %d, want 3", len(db.queryLog))
+	}
+	if !strings.Contains(db.queryLog[0], "model <> ''") {
+		t.Fatalf("distinct model query should exclude blank models:\n%s", db.queryLog[0])
+	}
+	if strings.Contains(db.queryLog[2], "model <> ''") {
+		t.Fatalf("model summary query should include blank models:\n%s", db.queryLog[2])
+	}
+	if len(trend.ModelSummary) != 2 {
+		t.Fatalf("model summary = %#v", trend.ModelSummary)
+	}
+	if trend.ModelSummary[0].Model != "" {
+		t.Fatalf("first model summary model = %q, want blank unknown bucket", trend.ModelSummary[0].Model)
+	}
+	var total int64
+	for _, item := range trend.ModelSummary {
+		total += item.TotalTokens
+	}
+	if total != trend.Summary.TotalTokens {
+		t.Fatalf("model summary total = %d, summary total = %d", total, trend.Summary.TotalTokens)
+	}
+}
+
 func TestListTokenIdentitiesQueryUsesCacheAndSubjects(t *testing.T) {
 	db := &recordingAdminDB{}
 	repo := NewRepository(db)
