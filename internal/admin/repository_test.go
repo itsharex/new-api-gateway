@@ -37,6 +37,124 @@ func TestRepositoryCreateSessionStoresOnlySessionID(t *testing.T) {
 	}
 }
 
+func TestRepositoryFindActiveUserByID(t *testing.T) {
+	db := &recordingAdminDB{
+		row: scanFuncRow{scan: func(dest ...any) error {
+			*(dest[0].(*int64)) = int64(7)
+			*(dest[1].(*string)) = "alice"
+			*(dest[2].(*string)) = "$2a$10$abcdefghijklmnopqrstuu"
+			*(dest[3].(*string)) = "Alice"
+			*(dest[4].(*string)) = "alice@example.com"
+			*(dest[5].(*Role)) = RoleAuditor
+			*(dest[6].(*string)) = "active"
+			*(dest[7].(*time.Time)) = time.Unix(100, 0).UTC()
+			*(dest[8].(*time.Time)) = time.Unix(200, 0).UTC()
+			return nil
+		}},
+	}
+	repo := NewRepository(db)
+
+	user, err := repo.FindActiveUserByID(context.Background(), 7)
+
+	if err != nil {
+		t.Fatalf("FindActiveUserByID error: %v", err)
+	}
+	if user.ID != 7 || user.Username != "alice" || user.Role != RoleAuditor {
+		t.Fatalf("user = %#v", user)
+	}
+	if !strings.Contains(db.querySQL, "FROM audit_users") {
+		t.Fatalf("querySQL = %s", db.querySQL)
+	}
+	if !strings.Contains(db.querySQL, "WHERE id = $1 AND status = 'active'") {
+		t.Fatalf("querySQL missing active id predicate: %s", db.querySQL)
+	}
+	if len(db.queryArgs) != 1 || db.queryArgs[0] != int64(7) {
+		t.Fatalf("queryArgs = %#v", db.queryArgs)
+	}
+}
+
+func TestRepositoryFindActiveUserByIDRequiresDB(t *testing.T) {
+	repo := NewRepository(nil)
+
+	_, err := repo.FindActiveUserByID(context.Background(), 7)
+
+	if !errors.Is(err, ErrAdminDBRequired) {
+		t.Fatalf("FindActiveUserByID error = %v, want ErrAdminDBRequired", err)
+	}
+}
+
+func TestRepositoryUpdateUserPassword(t *testing.T) {
+	db := &recordingAdminDB{}
+	repo := NewRepository(db)
+	now := time.Unix(3000, 0).UTC()
+
+	err := repo.UpdateUserPassword(context.Background(), 7, "$2a$10$newhashabcdefghijkl", now)
+
+	if err != nil {
+		t.Fatalf("UpdateUserPassword error: %v", err)
+	}
+	if !strings.Contains(db.sql, "UPDATE audit_users") {
+		t.Fatalf("sql = %s", db.sql)
+	}
+	if !strings.Contains(db.sql, "SET password_hash = $2, updated_at = $3") {
+		t.Fatalf("sql missing password update assignment: %s", db.sql)
+	}
+	if !strings.Contains(db.sql, "WHERE id = $1") {
+		t.Fatalf("sql missing user id predicate: %s", db.sql)
+	}
+	if len(db.args) != 3 || db.args[0] != int64(7) || db.args[1] != "$2a$10$newhashabcdefghijkl" || db.args[2] != now {
+		t.Fatalf("args = %#v", db.args)
+	}
+}
+
+func TestRepositoryUpdateUserPasswordRequiresDB(t *testing.T) {
+	repo := NewRepository(nil)
+
+	err := repo.UpdateUserPassword(context.Background(), 7, "$2a$10$newhashabcdefghijkl", time.Unix(3000, 0).UTC())
+
+	if !errors.Is(err, ErrAdminDBRequired) {
+		t.Fatalf("UpdateUserPassword error = %v, want ErrAdminDBRequired", err)
+	}
+}
+
+func TestRepositoryRevokeOtherSessions(t *testing.T) {
+	db := &recordingAdminDB{}
+	repo := NewRepository(db)
+	now := time.Unix(3000, 0).UTC()
+
+	err := repo.RevokeOtherSessions(context.Background(), 7, "sess_keep", now)
+
+	if err != nil {
+		t.Fatalf("RevokeOtherSessions error: %v", err)
+	}
+	if !strings.Contains(db.sql, "UPDATE audit_sessions") {
+		t.Fatalf("sql = %s", db.sql)
+	}
+	for _, fragment := range []string{
+		"user_id = $1",
+		"session_id <> $2",
+		"revoked_at IS NULL",
+		"expires_at > $3",
+	} {
+		if !strings.Contains(db.sql, fragment) {
+			t.Fatalf("sql missing %q: %s", fragment, db.sql)
+		}
+	}
+	if len(db.args) != 3 || db.args[0] != int64(7) || db.args[1] != "sess_keep" || db.args[2] != now {
+		t.Fatalf("args = %#v", db.args)
+	}
+}
+
+func TestRepositoryRevokeOtherSessionsRequiresDB(t *testing.T) {
+	repo := NewRepository(nil)
+
+	err := repo.RevokeOtherSessions(context.Background(), 7, "sess_keep", time.Unix(3000, 0).UTC())
+
+	if !errors.Is(err, ErrAdminDBRequired) {
+		t.Fatalf("RevokeOtherSessions error = %v, want ErrAdminDBRequired", err)
+	}
+}
+
 func TestRepositoryInsertAuditActionLogWritesMetadataJSON(t *testing.T) {
 	execer := &recordingAdminDB{}
 	repo := NewRepository(execer)

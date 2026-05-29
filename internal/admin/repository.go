@@ -44,6 +44,22 @@ LIMIT 1`, username).Scan(
 	return user, err
 }
 
+func (r Repository) FindActiveUserByID(ctx context.Context, userID int64) (User, error) {
+	if r.db == nil {
+		return User{}, ErrAdminDBRequired
+	}
+	var user User
+	err := r.db.QueryRow(ctx, `
+SELECT id, username, password_hash, display_name, email, role, status, created_at, updated_at
+FROM audit_users
+WHERE id = $1 AND status = 'active'
+LIMIT 1`, userID).Scan(
+		&user.ID, &user.Username, &user.PasswordHash, &user.DisplayName, &user.Email,
+		&user.Role, &user.Status, &user.CreatedAt, &user.UpdatedAt,
+	)
+	return user, err
+}
+
 func (r Repository) CreateSession(ctx context.Context, session Session) error {
 	if r.db == nil {
 		return ErrAdminDBRequired
@@ -82,6 +98,31 @@ func (r Repository) RevokeSession(ctx context.Context, sessionID string, now tim
 		return ErrAdminDBRequired
 	}
 	_, err := r.db.Exec(ctx, `UPDATE audit_sessions SET revoked_at = $2 WHERE session_id = $1`, sessionID, now)
+	return err
+}
+
+func (r Repository) UpdateUserPassword(ctx context.Context, userID int64, passwordHash string, now time.Time) error {
+	if r.db == nil {
+		return ErrAdminDBRequired
+	}
+	_, err := r.db.Exec(ctx, `
+UPDATE audit_users
+SET password_hash = $2, updated_at = $3
+WHERE id = $1`, userID, passwordHash, now)
+	return err
+}
+
+func (r Repository) RevokeOtherSessions(ctx context.Context, userID int64, keepSessionID string, now time.Time) error {
+	if r.db == nil {
+		return ErrAdminDBRequired
+	}
+	_, err := r.db.Exec(ctx, `
+UPDATE audit_sessions
+SET revoked_at = $3
+WHERE user_id = $1
+  AND session_id <> $2
+  AND revoked_at IS NULL
+  AND expires_at > $3`, userID, keepSessionID, now)
 	return err
 }
 
