@@ -191,6 +191,56 @@ type UsageBucket struct {
 	EstimatedCost      string `json:"estimated_cost"`
 }
 
+type EmployeeUsageFilter struct {
+	Username string
+	Range    string
+	Model    string
+	Start    time.Time
+	End      time.Time
+}
+
+type UsageTokenSummary struct {
+	RequestCount     int64 `json:"request_count"`
+	SuccessCount     int64 `json:"success_count"`
+	ErrorCount       int64 `json:"error_count"`
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
+	CachedTokens     int64 `json:"cached_tokens"`
+	TotalTokens      int64 `json:"total_tokens"`
+}
+
+type UsageDailyPoint struct {
+	BucketStart      string `json:"bucket_start"`
+	RequestCount     int64  `json:"request_count"`
+	SuccessCount     int64  `json:"success_count"`
+	ErrorCount       int64  `json:"error_count"`
+	PromptTokens     int64  `json:"prompt_tokens"`
+	CompletionTokens int64  `json:"completion_tokens"`
+	CachedTokens     int64  `json:"cached_tokens"`
+	TotalTokens      int64  `json:"total_tokens"`
+}
+
+type UsageModelSummary struct {
+	Model            string `json:"model"`
+	RequestCount     int64  `json:"request_count"`
+	SuccessCount     int64  `json:"success_count"`
+	ErrorCount       int64  `json:"error_count"`
+	PromptTokens     int64  `json:"prompt_tokens"`
+	CompletionTokens int64  `json:"completion_tokens"`
+	CachedTokens     int64  `json:"cached_tokens"`
+	TotalTokens      int64  `json:"total_tokens"`
+}
+
+type EmployeeUsageTrend struct {
+	Username      string              `json:"username"`
+	Range         string              `json:"range"`
+	SelectedModel string              `json:"selected_model"`
+	Models        []string            `json:"models"`
+	Summary       UsageTokenSummary   `json:"summary"`
+	Daily         []UsageDailyPoint   `json:"daily"`
+	ModelSummary  []UsageModelSummary `json:"model_summary"`
+}
+
 type TokenIdentityFilter struct {
 	Username         string
 	TokenFingerprint string

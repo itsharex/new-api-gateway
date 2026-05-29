@@ -300,6 +300,128 @@ func TestRepositoryListUsageAggregatesCapsLimitAndBindsFilters(t *testing.T) {
 	}
 }
 
+func TestRepositoryEmployeeUsageTrendBuildsBoundedDailyQueries(t *testing.T) {
+	db := &recordingAdminDB{rowsQueue: []pgx.Rows{&scanRows{}, &scanRows{}, &scanRows{}}}
+	repo := NewRepository(db)
+	start := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 5, 31, 0, 0, 0, 0, time.UTC)
+
+	_, err := repo.EmployeeUsageTrend(context.Background(), EmployeeUsageFilter{
+		Username: "E10001",
+		Range:    "30d",
+		Model:    "gpt-5.2",
+		Start:    start,
+		End:      end,
+	})
+
+	if err != nil {
+		t.Fatalf("EmployeeUsageTrend error: %v", err)
+	}
+	joined := strings.Join(db.queryLog, "\n")
+	if strings.Count(joined, "FROM usage_aggregates") != 3 {
+		t.Fatalf("expected 3 usage_aggregates queries, got:\n%s", joined)
+	}
+	for _, required := range []string{
+		"bucket_size = 'day'",
+		"username = $1",
+		"bucket_start >= $2",
+		"bucket_start < $3",
+		"SELECT DISTINCT model",
+		"GROUP BY bucket_start",
+		"GROUP BY model",
+		"prompt_tokens",
+		"completion_tokens",
+		"cached_tokens",
+		"total_tokens",
+	} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("query log missing %q:\n%s", required, joined)
+		}
+	}
+	if len(db.queryArgsLog) != 3 {
+		t.Fatalf("queryArgsLog len = %d, want 3", len(db.queryArgsLog))
+	}
+	for i, args := range db.queryArgsLog {
+		if args[0] != "E10001" || args[1] != start || args[2] != end {
+			t.Fatalf("args[%d] = %#v", i, args)
+		}
+	}
+	if got := db.queryArgsLog[1][3]; got != "gpt-5.2" {
+		t.Fatalf("daily model arg = %#v, want gpt-5.2", got)
+	}
+	if got := db.queryArgsLog[2][3]; got != "gpt-5.2" {
+		t.Fatalf("model summary arg = %#v, want gpt-5.2", got)
+	}
+}
+
+func TestRepositoryEmployeeUsageTrendScansModelsDailyAndSummary(t *testing.T) {
+	db := &recordingAdminDB{rowsQueue: []pgx.Rows{
+		&scanRows{scans: []func(dest ...any) error{
+			func(dest ...any) error {
+				*(dest[0].(*string)) = "gpt-5.2"
+				return nil
+			},
+			func(dest ...any) error {
+				*(dest[0].(*string)) = "claude-4-sonnet"
+				return nil
+			},
+		}},
+		&scanRows{scans: []func(dest ...any) error{
+			func(dest ...any) error {
+				*(dest[0].(*string)) = "2026-05-29 00:00:00+00"
+				*(dest[1].(*int64)) = 12
+				*(dest[2].(*int64)) = 11
+				*(dest[3].(*int64)) = 1
+				*(dest[4].(*int64)) = 1200
+				*(dest[5].(*int64)) = 340
+				*(dest[6].(*int64)) = 90
+				*(dest[7].(*int64)) = 1540
+				return nil
+			},
+		}},
+		&scanRows{scans: []func(dest ...any) error{
+			func(dest ...any) error {
+				*(dest[0].(*string)) = "gpt-5.2"
+				*(dest[1].(*int64)) = 12
+				*(dest[2].(*int64)) = 11
+				*(dest[3].(*int64)) = 1
+				*(dest[4].(*int64)) = 1200
+				*(dest[5].(*int64)) = 340
+				*(dest[6].(*int64)) = 90
+				*(dest[7].(*int64)) = 1540
+				return nil
+			},
+		}},
+	}}
+	repo := NewRepository(db)
+
+	trend, err := repo.EmployeeUsageTrend(context.Background(), EmployeeUsageFilter{
+		Username: "E10001",
+		Range:    "30d",
+		Start:    time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		End:      time.Date(2026, 5, 31, 0, 0, 0, 0, time.UTC),
+	})
+
+	if err != nil {
+		t.Fatalf("EmployeeUsageTrend error: %v", err)
+	}
+	if trend.Username != "E10001" || trend.Range != "30d" {
+		t.Fatalf("trend identity = %#v", trend)
+	}
+	if got := strings.Join(trend.Models, ","); got != "gpt-5.2,claude-4-sonnet" {
+		t.Fatalf("models = %q", got)
+	}
+	if len(trend.Daily) != 1 || trend.Daily[0].PromptTokens != 1200 || trend.Daily[0].TotalTokens != 1540 {
+		t.Fatalf("daily = %#v", trend.Daily)
+	}
+	if len(trend.ModelSummary) != 1 || trend.ModelSummary[0].Model != "gpt-5.2" {
+		t.Fatalf("model summary = %#v", trend.ModelSummary)
+	}
+	if trend.Summary.RequestCount != 12 || trend.Summary.PromptTokens != 1200 || trend.Summary.TotalTokens != 1540 {
+		t.Fatalf("summary = %#v", trend.Summary)
+	}
+}
+
 func TestListTokenIdentitiesQueryUsesCacheAndSubjects(t *testing.T) {
 	db := &recordingAdminDB{}
 	repo := NewRepository(db)
@@ -535,15 +657,17 @@ func TestRepositoryDetailHelpersRequireDB(t *testing.T) {
 }
 
 type recordingAdminDB struct {
-	sql       string
-	args      []any
-	querySQL  string
-	querySQLs []string
-	queryArgs []any
-	rows      pgx.Rows
-	rowsQueue []pgx.Rows
-	row       pgx.Row
-	rowQueue  []pgx.Row
+	sql          string
+	args         []any
+	querySQL     string
+	queryArgs    []any
+	queryLog     []string
+	queryArgsLog [][]any
+	querySQLs    []string
+	rows         pgx.Rows
+	rowsQueue    []pgx.Rows
+	row          pgx.Row
+	rowQueue     []pgx.Row
 }
 
 func (db *recordingAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -556,6 +680,8 @@ func (db *recordingAdminDB) Query(ctx context.Context, sql string, args ...any) 
 	db.querySQL = sql
 	db.querySQLs = append(db.querySQLs, sql)
 	db.queryArgs = append([]any(nil), args...)
+	db.queryLog = append(db.queryLog, sql)
+	db.queryArgsLog = append(db.queryArgsLog, append([]any(nil), args...))
 	if len(db.rowsQueue) > 0 {
 		rows := db.rowsQueue[0]
 		db.rowsQueue = db.rowsQueue[1:]

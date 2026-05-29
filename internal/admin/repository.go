@@ -445,6 +445,149 @@ LIMIT $%d`, strings.Join(where, " AND "), len(args))
 	return items, rows.Err()
 }
 
+func (r Repository) EmployeeUsageTrend(ctx context.Context, filter EmployeeUsageFilter) (EmployeeUsageTrend, error) {
+	if r.db == nil {
+		return EmployeeUsageTrend{}, ErrAdminDBRequired
+	}
+	trend := EmployeeUsageTrend{
+		Username:      filter.Username,
+		Range:         filter.Range,
+		SelectedModel: filter.Model,
+		Models:        []string{},
+		Daily:         []UsageDailyPoint{},
+		ModelSummary:  []UsageModelSummary{},
+	}
+	if strings.TrimSpace(filter.Username) == "" {
+		return trend, nil
+	}
+
+	rows, err := r.db.Query(ctx, `
+SELECT DISTINCT model
+FROM usage_aggregates
+WHERE bucket_size = 'day'
+  AND username = $1
+  AND bucket_start >= $2
+  AND bucket_start < $3
+  AND model <> ''
+ORDER BY model`, filter.Username, filter.Start, filter.End)
+	if err != nil {
+		return trend, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var model string
+		if err := rows.Scan(&model); err != nil {
+			return trend, err
+		}
+		trend.Models = append(trend.Models, model)
+	}
+	if err := rows.Err(); err != nil {
+		return trend, err
+	}
+
+	dailyWhere := []string{
+		"bucket_size = 'day'",
+		"username = $1",
+		"bucket_start >= $2",
+		"bucket_start < $3",
+	}
+	dailyArgs := []any{filter.Username, filter.Start, filter.End}
+	if filter.Model != "" {
+		dailyArgs = append(dailyArgs, filter.Model)
+		dailyWhere = append(dailyWhere, fmt.Sprintf("model = $%d", len(dailyArgs)))
+	}
+	rows, err = r.db.Query(ctx, fmt.Sprintf(`
+SELECT bucket_start::text,
+       COALESCE(SUM(request_count), 0) AS request_count,
+       COALESCE(SUM(success_count), 0) AS success_count,
+       COALESCE(SUM(error_count), 0) AS error_count,
+       COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+       COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+       COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+       COALESCE(SUM(total_tokens), 0) AS total_tokens
+FROM usage_aggregates
+WHERE %s
+GROUP BY bucket_start
+ORDER BY bucket_start`, strings.Join(dailyWhere, " AND ")), dailyArgs...)
+	if err != nil {
+		return trend, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var point UsageDailyPoint
+		if err := rows.Scan(
+			&point.BucketStart,
+			&point.RequestCount,
+			&point.SuccessCount,
+			&point.ErrorCount,
+			&point.PromptTokens,
+			&point.CompletionTokens,
+			&point.CachedTokens,
+			&point.TotalTokens,
+		); err != nil {
+			return trend, err
+		}
+		trend.Daily = append(trend.Daily, point)
+		trend.Summary.RequestCount += point.RequestCount
+		trend.Summary.SuccessCount += point.SuccessCount
+		trend.Summary.ErrorCount += point.ErrorCount
+		trend.Summary.PromptTokens += point.PromptTokens
+		trend.Summary.CompletionTokens += point.CompletionTokens
+		trend.Summary.CachedTokens += point.CachedTokens
+		trend.Summary.TotalTokens += point.TotalTokens
+	}
+	if err := rows.Err(); err != nil {
+		return trend, err
+	}
+
+	summaryWhere := []string{
+		"bucket_size = 'day'",
+		"username = $1",
+		"bucket_start >= $2",
+		"bucket_start < $3",
+		"model <> ''",
+	}
+	summaryArgs := []any{filter.Username, filter.Start, filter.End}
+	if filter.Model != "" {
+		summaryArgs = append(summaryArgs, filter.Model)
+		summaryWhere = append(summaryWhere, fmt.Sprintf("model = $%d", len(summaryArgs)))
+	}
+	rows, err = r.db.Query(ctx, fmt.Sprintf(`
+SELECT model,
+       COALESCE(SUM(request_count), 0) AS request_count,
+       COALESCE(SUM(success_count), 0) AS success_count,
+       COALESCE(SUM(error_count), 0) AS error_count,
+       COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+       COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+       COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+       COALESCE(SUM(total_tokens), 0) AS total_tokens
+FROM usage_aggregates
+WHERE %s
+GROUP BY model
+ORDER BY total_tokens DESC`, strings.Join(summaryWhere, " AND ")), summaryArgs...)
+	if err != nil {
+		return trend, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var summary UsageModelSummary
+		if err := rows.Scan(
+			&summary.Model,
+			&summary.RequestCount,
+			&summary.SuccessCount,
+			&summary.ErrorCount,
+			&summary.PromptTokens,
+			&summary.CompletionTokens,
+			&summary.CachedTokens,
+			&summary.TotalTokens,
+		); err != nil {
+			return trend, err
+		}
+		trend.ModelSummary = append(trend.ModelSummary, summary)
+	}
+	return trend, rows.Err()
+}
+
 func (r Repository) ListTokenIdentities(ctx context.Context, filter TokenIdentityFilter) ([]TokenIdentitySummary, error) {
 	if r.db == nil {
 		return nil, ErrAdminDBRequired
