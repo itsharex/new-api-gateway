@@ -121,6 +121,11 @@ def test_embedding_match_overrides_keyword_classification():
     assert result.task_category == "coding"
     assert result.work_related_score >= 0.7
     assert result.confidence >= 0.7
+    assert result.decision == "work_related"
+    assert result.recommended_action == "allow"
+    assert result.needs_review is False
+    assert result.score_breakdown["work"] >= 0.8
+    assert result.evidence[0]["source"] == "embedding"
 
 
 def test_embedding_falls_back_to_keywords_when_no_match():

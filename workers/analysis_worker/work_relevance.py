@@ -272,21 +272,39 @@ def classify_work_relevance_with_embeddings(
     if matches and matches[0][2] > 0.75:
         context_type, name, similarity, categories, models = matches[0]
         category = categories[0] if categories else "unknown"
+        work_score = min(float(similarity), 1.0)
+        score = {
+            "work": round(work_score, 3),
+            "non_work": 0.0,
+            "risk": 0.0,
+            "conflict": 0.0,
+            "uncertainty": round(max(0.0, 1.0 - work_score), 3),
+        }
         return WorkRelevanceAssessment(
             trace_id=job.trace_id,
             task_category=category,
-            work_related_score=min(similarity, 1.0),
-            personal_use_score=max(1.0 - similarity, 0.0),
-            confidence=min(similarity, 1.0),
+            work_related_score=score["work"],
+            personal_use_score=0.0,
+            confidence=score["work"],
             matched_context=[{
                 "type": context_type,
                 "name": name,
                 "similarity": similarity,
                 "source": "embedding",
             }],
-            evidence=[f"Semantic match with catalog entry '{name}' (similarity={similarity:.3f})."],
+            evidence=[{
+                "kind": "work_context",
+                "category": "context_catalog",
+                "weight": score["work"],
+                "source": "embedding",
+                "snippet": name,
+                "reason": f"Semantic match with catalog entry '{name}' (similarity={similarity:.3f}).",
+            }],
             needs_review=False,
             analyzer_version=ANALYZER_VERSION + "+emb",
+            decision=DECISION_WORK_RELATED,
+            recommended_action=ACTION_ALLOW,
+            score_breakdown=score,
         )
 
     return classify_work_relevance(job, messages, contexts)
