@@ -206,7 +206,9 @@ def test_process_job_line_persists_work_relevance_result(tmp_path: Path):
     work_results = [result for result in repo.results if result.category == "work_relevance"]
     assert len(work_results) == 1
     assert work_results[0].label == "debugging"
-    assert work_results[0].result["work_related_score"] == 0.9
+    assert work_results[0].result["work_related_score"] >= 0.9
+    assert work_results[0].result["decision"] == "work_related"
+    assert work_results[0].result["recommended_action"] == "allow"
 
 
 def test_process_job_line_persists_anomaly_and_coverage_alert(tmp_path: Path):
@@ -245,13 +247,14 @@ def test_process_job_line_persists_anomaly_and_coverage_alert(tmp_path: Path):
 
     assert response["worker_status"] == "processed"
     assert response["work_relevance_count"] == 1
-    assert response["anomaly_count"] == 4
+    assert response["anomaly_count"] == 5
     assert response["coverage_alert_count"] == 1
     assert [alert.anomaly_type for alert in repo.anomalies] == [
         "identity_unresolved_success",
         "high_trace_tokens",
         "short_window_token_spike",
         "off_hours_high_usage",
+        "unknown_high_cost",
     ]
     assert [alert.alert_code for alert in repo.coverage_alerts] == ["normalization_gap"]
 
@@ -338,7 +341,7 @@ def test_process_job_line_handles_malformed_timestamp_with_fallback_anomaly_wind
     assert daily_alerts[0].window_end == "1970-01-01T00:01:00+00:00"
 
 
-def test_process_job_line_detects_low_work_relevance_high_cost(tmp_path: Path):
+def test_process_job_line_detects_non_work_personal_use_high_cost(tmp_path: Path):
     evidence_dir = tmp_path / "raw" / "2026" / "04" / "28" / "trace_personal"
     evidence_dir.mkdir(parents=True)
     (evidence_dir / "request_body.bin").write_text(json.dumps({
@@ -375,8 +378,47 @@ def test_process_job_line_detects_low_work_relevance_high_cost(tmp_path: Path):
         "high_trace_tokens",
         "short_window_token_spike",
         "off_hours_high_usage",
-        "low_work_relevance_high_cost",
+        "non_work_personal_use",
     ]
+
+
+def test_process_job_line_persists_low_token_non_work_alert(tmp_path: Path):
+    evidence_dir = tmp_path / "raw" / "2026" / "04" / "28" / "trace_low_personal"
+    evidence_dir.mkdir(parents=True)
+    (evidence_dir / "request_body.bin").write_text(json.dumps({
+        "model": "gpt-4.1",
+        "messages": [{"role": "user", "content": "Write a birthday toast for my friend."}]
+    }), encoding="utf-8")
+    (evidence_dir / "response_body.bin").write_text(json.dumps({
+        "choices": [{"message": {"role": "assistant", "content": "Here is a toast."}}],
+        "usage": {"total_tokens": 120}
+    }), encoding="utf-8")
+    repo = RecordingRepository()
+    line = json.dumps({
+        "type": "trace_captured",
+        "trace_id": "trace_low_personal",
+        "route_pattern": "/v1/chat/completions",
+        "protocol_family": "openai_chat",
+        "capture_mode": "raw_and_normalized",
+        "username": "alice",
+        "request_raw_ref": "file:///raw/2026/04/28/trace_low_personal/request_body.bin",
+        "response_raw_ref": "file:///raw/2026/04/28/trace_low_personal/response_body.bin",
+        "model_requested": "gpt-4.1",
+        "usage_total_tokens": 120,
+        "token_fingerprint": "tkfp_raw",
+        "status_code": 200,
+        "upstream_status_code": 200,
+        "request_started_at": "2026-04-28T02:45:22Z",
+    })
+
+    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo, RecordingContextRepository(),
+                                embedding_client=MockEmbeddingClient(), pg_connection=MockConnection())
+
+    assert response["anomaly_count"] == 1
+    work_results = [r for r in repo.results if r.category == "work_relevance"]
+    assert work_results[0].result["decision"] == "non_work_related"
+    assert work_results[0].result["recommended_action"] == "alert_non_work"
+    assert repo.anomalies[0].anomaly_type == "non_work_personal_use"
 
 
 def test_contract_example_processes_from_stdin_without_services(monkeypatch):
@@ -656,7 +698,10 @@ def test_process_job_line_uses_embedding_match_when_similarity_above_threshold(t
     work_results = [r for r in repo.results if r.category == "work_relevance"]
     assert len(work_results) == 1
     assert work_results[0].result["work_related_score"] == 0.92
-    assert any("Semantic match" in e for e in work_results[0].result["evidence"])
+    assert any(
+        evidence.get("source") == "embedding" and "Semantic match" in evidence.get("reason", "")
+        for evidence in work_results[0].result["evidence"]
+    )
 
 
 def test_process_job_line_falls_back_to_keyword_when_embedding_no_match(tmp_path: Path):
