@@ -146,6 +146,46 @@ def test_work_relevance_assessment_converts_to_analysis_result():
     assert result.result["matched_context"][0]["name"] == "new-api-gateway"
 
 
+def test_work_relevance_assessment_serializes_v2_decision_fields():
+    assessment = WorkRelevanceAssessment(
+        trace_id="trace_non_work",
+        task_category="job_search",
+        work_related_score=0.05,
+        personal_use_score=0.92,
+        confidence=0.88,
+        matched_context=[],
+        evidence=[{
+            "kind": "non_work",
+            "category": "job_search",
+            "weight": 0.9,
+            "source": "keyword",
+            "snippet": "resume interview",
+            "reason": "Matched job-search terms: resume, interview.",
+        }],
+        needs_review=True,
+        analyzer_version="work_relevance_mvp_2026_04_28",
+        decision="non_work_related",
+        recommended_action="alert_non_work",
+        score_breakdown={
+            "work": 0.0,
+            "non_work": 0.9,
+            "risk": 0.0,
+            "conflict": 0.0,
+            "uncertainty": 0.1,
+        },
+    )
+
+    result = assessment.to_analysis_result()
+
+    assert result.category == "work_relevance"
+    assert result.label == "job_search"
+    assert result.severity == "review"
+    assert result.result["decision"] == "non_work_related"
+    assert result.result["recommended_action"] == "alert_non_work"
+    assert result.result["score_breakdown"]["non_work"] == 0.9
+    assert result.result["evidence"][0]["category"] == "job_search"
+
+
 def test_analysis_context_accepts_baseline_fields():
     ctx = AnalysisContext(
         hourly_tokens_baseline=5000.0,

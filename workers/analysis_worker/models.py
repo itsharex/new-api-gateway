@@ -199,11 +199,21 @@ class WorkRelevanceAssessment:
     personal_use_score: float
     confidence: float
     matched_context: list[dict[str, Any]]
-    evidence: list[str]
+    evidence: list[Any]
     needs_review: bool
     analyzer_version: str
+    decision: str = "unknown"
+    recommended_action: str = "record_only"
+    score_breakdown: dict[str, float] | None = None
 
     def to_analysis_result(self) -> AnalysisResult:
+        score_breakdown = self.score_breakdown or {
+            "work": self.work_related_score,
+            "non_work": self.personal_use_score,
+            "risk": 0.0,
+            "conflict": 0.0,
+            "uncertainty": max(0.0, 1.0 - self.confidence),
+        }
         return AnalysisResult(
             trace_id=self.trace_id,
             analyzer_name="work_relevance",
@@ -222,6 +232,9 @@ class WorkRelevanceAssessment:
                 "matched_context": self.matched_context,
                 "evidence": self.evidence,
                 "needs_review": self.needs_review,
+                "decision": self.decision,
+                "recommended_action": self.recommended_action,
+                "score_breakdown": score_breakdown,
             },
         )
 
