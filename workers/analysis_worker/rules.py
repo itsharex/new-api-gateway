@@ -240,10 +240,63 @@ def detect_work_relevance_anomalies(
     job: TraceCapturedJob,
     assessment: WorkRelevanceAssessment,
 ) -> list[AnomalyAlert]:
-    if job.usage_total_tokens < LOW_WORK_RELEVANCE_TOKEN_THRESHOLD:
+    action = getattr(assessment, "recommended_action", "")
+    decision = getattr(assessment, "decision", "")
+    category = assessment.task_category
+
+    if decision == "work_related":
         return []
-    if assessment.personal_use_score < LOW_WORK_RELEVANCE_PERSONAL_SCORE_THRESHOLD:
+
+    is_legacy_assessment = getattr(assessment, "score_breakdown", None) is None
+    if action == "record_only" and not is_legacy_assessment:
         return []
+
+    if action == "review_high_cost_unknown":
+        return [_anomaly(
+            job,
+            "unknown_high_cost",
+            "medium",
+            observed_value=job.usage_total_tokens,
+            threshold_value=LOW_WORK_RELEVANCE_TOKEN_THRESHOLD,
+            reason=_work_relevance_reason(
+                assessment,
+                "trace has high token usage but insufficient work relevance evidence",
+            ),
+        )]
+
+    if action == "review_conflict":
+        return [_anomaly(
+            job,
+            "work_nonwork_conflict",
+            "medium",
+            observed_value=assessment.personal_use_score,
+            threshold_value=0.0,
+            reason=_work_relevance_reason(
+                assessment,
+                "trace contains both work and non-work evidence",
+            ),
+        )]
+
+    if action != "alert_non_work" and not (
+        assessment.personal_use_score >= LOW_WORK_RELEVANCE_PERSONAL_SCORE_THRESHOLD
+        and job.usage_total_tokens >= LOW_WORK_RELEVANCE_TOKEN_THRESHOLD
+    ):
+        return []
+
+    if action == "alert_non_work":
+        anomaly_type, severity = _non_work_alert_type_and_severity(category, job.usage_total_tokens)
+        return [_anomaly(
+            job,
+            anomaly_type,
+            severity,
+            observed_value=job.usage_total_tokens,
+            threshold_value=LOW_WORK_RELEVANCE_TOKEN_THRESHOLD,
+            reason=_work_relevance_reason(
+                assessment,
+                f"trace classified as {category} with personal use score {assessment.personal_use_score:.2f}",
+            ),
+        )]
+
     return [_anomaly(
         job,
         "low_work_relevance_high_cost",
@@ -255,6 +308,31 @@ def detect_work_relevance_anomalies(
             f"{assessment.personal_use_score:.2f}"
         ),
     )]
+
+
+def _non_work_alert_type_and_severity(category: str, total_tokens: int) -> tuple[str, str]:
+    if category == "policy_violation":
+        return "non_work_high_risk", "high"
+    if category == "job_search":
+        return "non_work_job_search", "high"
+    if category == "side_business":
+        return "non_work_side_business", "high"
+    severity = "high" if total_tokens >= LOW_WORK_RELEVANCE_TOKEN_THRESHOLD else "medium"
+    return "non_work_personal_use", severity
+
+
+def _work_relevance_reason(assessment: WorkRelevanceAssessment, fallback: str) -> str:
+    evidence = getattr(assessment, "evidence", []) or []
+    reasons: list[str] = []
+    for item in evidence:
+        if isinstance(item, dict) and item.get("reason"):
+            reasons.append(str(item["reason"]))
+        elif isinstance(item, str):
+            reasons.append(item)
+    detail = "; ".join(reasons[:3])
+    if detail:
+        return f"{fallback}: {detail}"
+    return fallback
 
 
 def detect_coverage_alerts(job: TraceCapturedJob, messages: list[NormalizedMessage]) -> list[CoverageAlert]:

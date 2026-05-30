@@ -163,7 +163,7 @@ def test_detects_low_work_relevance_high_cost_anomaly():
     assert "personal use score" in alerts[0].reason
 
 
-def test_does_not_detect_low_work_relevance_high_cost_for_low_tokens():
+def test_detects_low_token_non_work_personal_use():
     assessment = WorkRelevanceAssessment(
         trace_id="trace_personal",
         task_category="personal_chat",
@@ -171,12 +171,83 @@ def test_does_not_detect_low_work_relevance_high_cost_for_low_tokens():
         personal_use_score=0.8,
         confidence=0.8,
         matched_context=[],
-        evidence=[],
+        evidence=[{"category": "personal_chat", "reason": "Matched personal terms."}],
         needs_review=True,
         analyzer_version="work_relevance_mvp_2026_04_28",
+        decision="non_work_related",
+        recommended_action="alert_non_work",
+        score_breakdown={"work": 0.0, "non_work": 0.8, "risk": 0.0, "conflict": 0.0, "uncertainty": 0.2},
     )
 
-    assert detect_work_relevance_anomalies(job(usage_total_tokens=100), assessment) == []
+    alerts = detect_work_relevance_anomalies(job(usage_total_tokens=100), assessment)
+
+    assert [alert.anomaly_type for alert in alerts] == ["non_work_personal_use"]
+    assert alerts[0].severity == "medium"
+    assert alerts[0].observed_value == 100
+    assert "personal_chat" in alerts[0].reason
+
+
+def test_detects_job_search_non_work_alert():
+    assessment = WorkRelevanceAssessment(
+        trace_id="trace_job_search",
+        task_category="job_search",
+        work_related_score=0.0,
+        personal_use_score=0.9,
+        confidence=0.9,
+        matched_context=[],
+        evidence=[{"category": "job_search", "reason": "Matched resume terms."}],
+        needs_review=True,
+        analyzer_version="work_relevance_mvp_2026_04_28",
+        decision="non_work_related",
+        recommended_action="alert_non_work",
+        score_breakdown={"work": 0.0, "non_work": 0.9, "risk": 0.0, "conflict": 0.0, "uncertainty": 0.1},
+    )
+
+    alerts = detect_work_relevance_anomalies(job(usage_total_tokens=300), assessment)
+
+    assert [alert.anomaly_type for alert in alerts] == ["non_work_job_search"]
+    assert alerts[0].severity == "high"
+
+
+def test_detects_unknown_high_cost_review_alert():
+    assessment = WorkRelevanceAssessment(
+        trace_id="trace_unknown",
+        task_category="unknown",
+        work_related_score=0.0,
+        personal_use_score=0.0,
+        confidence=0.35,
+        matched_context=[],
+        evidence=[{"category": "no_match", "reason": "No context matched."}],
+        needs_review=True,
+        analyzer_version="work_relevance_mvp_2026_04_28",
+        decision="unknown",
+        recommended_action="review_high_cost_unknown",
+        score_breakdown={"work": 0.0, "non_work": 0.0, "risk": 0.0, "conflict": 0.0, "uncertainty": 1.0},
+    )
+
+    alerts = detect_work_relevance_anomalies(job(usage_total_tokens=25000), assessment)
+
+    assert [alert.anomaly_type for alert in alerts] == ["unknown_high_cost"]
+    assert alerts[0].severity == "medium"
+
+
+def test_record_only_unknown_does_not_alert():
+    assessment = WorkRelevanceAssessment(
+        trace_id="trace_unknown",
+        task_category="unknown",
+        work_related_score=0.0,
+        personal_use_score=0.0,
+        confidence=0.25,
+        matched_context=[],
+        evidence=[],
+        needs_review=False,
+        analyzer_version="work_relevance_mvp_2026_04_28",
+        decision="unknown",
+        recommended_action="record_only",
+        score_breakdown={"work": 0.0, "non_work": 0.0, "risk": 0.0, "conflict": 0.0, "uncertainty": 1.0},
+    )
+
+    assert detect_work_relevance_anomalies(job(usage_total_tokens=500), assessment) == []
 
 
 def test_detects_missing_username():
