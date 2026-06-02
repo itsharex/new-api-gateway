@@ -143,13 +143,13 @@ def process_contract_validation_line(line: str) -> dict:
 def llm_judge_metadata(work_relevance) -> dict:
     fallback_items = [
         item for item in work_relevance.evidence
-        if isinstance(item, dict) and item.get("category") == "llm_unavailable"
+        if isinstance(item, dict) and item.get("kind") == "llm_unavailable"
     ]
     if not fallback_items:
         return {}
     return {
         "llm_judge_status": "degraded",
-        "llm_judge_error_type": str(fallback_items[0].get("snippet") or "unknown"),
+        "llm_judge_error_type": str(fallback_items[0].get("category") or "unknown"),
         "llm_judge_fallback_count": len(fallback_items),
     }
 

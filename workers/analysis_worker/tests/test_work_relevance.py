@@ -312,7 +312,14 @@ def test_llm_unavailable_on_conflict_uses_conservative_fallback():
     assert len(judge.calls) == 1
     assert assessment.decision == "needs_review"
     assert assessment.recommended_action == "review_conflict"
-    assert any(item["category"] == "llm_unavailable" for item in assessment.evidence)
+    assert assessment.evidence[-1] == {
+        "kind": "llm_unavailable",
+        "category": "timeout",
+        "weight": 0.0,
+        "source": "llm_judge",
+        "snippet": "timeout",
+        "reason": "LLM judge unavailable due to timeout.",
+    }
 
 
 def test_llm_unavailable_on_high_cost_unknown_uses_unknown_review_fallback():
@@ -329,7 +336,9 @@ def test_llm_unavailable_on_high_cost_unknown_uses_unknown_review_fallback():
     assert assessment.decision == "unknown"
     assert assessment.recommended_action == "review_high_cost_unknown"
     assert assessment.needs_review is True
-    assert any(item["category"] == "llm_unavailable" for item in assessment.evidence)
+    assert assessment.evidence[-1]["kind"] == "llm_unavailable"
+    assert assessment.evidence[-1]["category"] == "http_error"
+    assert assessment.evidence[-1]["source"] == "llm_judge"
 
 
 def test_malformed_llm_payload_on_conflict_uses_conservative_fallback():
@@ -350,7 +359,9 @@ def test_malformed_llm_payload_on_conflict_uses_conservative_fallback():
     assert assessment.decision == "needs_review"
     assert assessment.recommended_action == "review_conflict"
     assert assessment.needs_review is True
-    assert any(item["category"] == "llm_unavailable" for item in assessment.evidence)
+    assert assessment.evidence[-1]["kind"] == "llm_unavailable"
+    assert assessment.evidence[-1]["category"] == "invalid_result"
+    assert assessment.evidence[-1]["source"] == "llm_judge"
 
 
 def test_contradictory_llm_decision_and_action_use_conservative_fallback():
@@ -372,7 +383,9 @@ def test_contradictory_llm_decision_and_action_use_conservative_fallback():
     assert assessment.decision == "needs_review"
     assert assessment.recommended_action == "review_conflict"
     assert assessment.needs_review is True
-    assert any(item["category"] == "llm_unavailable" for item in assessment.evidence)
+    assert assessment.evidence[-1]["kind"] == "llm_unavailable"
+    assert assessment.evidence[-1]["category"] == "invalid_result"
+    assert assessment.evidence[-1]["source"] == "llm_judge"
 
 
 def test_weak_match_with_non_work_and_llm_unavailable_uses_review_conflict_fallback():
@@ -389,4 +402,6 @@ def test_weak_match_with_non_work_and_llm_unavailable_uses_review_conflict_fallb
     assert assessment.decision == "needs_review"
     assert assessment.recommended_action == "review_conflict"
     assert assessment.needs_review is True
-    assert any(item["category"] == "llm_unavailable" for item in assessment.evidence)
+    assert assessment.evidence[-1]["kind"] == "llm_unavailable"
+    assert assessment.evidence[-1]["category"] == "timeout"
+    assert assessment.evidence[-1]["source"] == "llm_judge"

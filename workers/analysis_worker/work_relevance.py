@@ -524,10 +524,10 @@ def _adapt_llm_result(raw: Any) -> dict[str, Any]:
 
 def _llm_unavailable_evidence(error_type: str) -> dict[str, object]:
     return {
-        "kind": "llm_judge",
-        "category": "llm_unavailable",
+        "kind": "llm_unavailable",
+        "category": error_type,
         "weight": 0.0,
-        "source": "llm_unavailable",
+        "source": "llm_judge",
         "snippet": error_type,
         "reason": f"LLM judge unavailable due to {error_type}.",
     }

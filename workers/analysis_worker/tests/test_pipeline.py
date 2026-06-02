@@ -5,7 +5,7 @@ from pathlib import Path
 
 from evidence import FilesystemEvidenceStore
 from llm_judge import LLMJudgeUnavailable
-from main import process_job_line
+from main import llm_judge_metadata, process_job_line
 from models import AnalysisContext, ContextCatalogEntry
 
 
@@ -315,6 +315,32 @@ def test_process_job_line_returns_degraded_llm_fallback_metadata(tmp_path: Path)
     assert response["llm_judge_fallback_count"] == 1
     work_result = next(result for result in repo.results if result.category == "work_relevance")
     assert work_result.result["recommended_action"] == "review_conflict"
+    assert work_result.result["evidence"][-1] == {
+        "kind": "llm_unavailable",
+        "category": "timeout",
+        "weight": 0.0,
+        "source": "llm_judge",
+        "snippet": "timeout",
+        "reason": "LLM judge unavailable due to timeout.",
+    }
+
+
+def test_llm_judge_metadata_reads_kind_and_category_contract():
+    class FakeWorkRelevance:
+        evidence = [
+            {
+                "kind": "llm_unavailable",
+                "category": "timeout",
+                "source": "llm_judge",
+                "snippet": "should-not-be-used",
+            }
+        ]
+
+    assert llm_judge_metadata(FakeWorkRelevance()) == {
+        "llm_judge_status": "degraded",
+        "llm_judge_error_type": "timeout",
+        "llm_judge_fallback_count": 1,
+    }
 
 
 def test_process_job_line_persists_anomaly_and_coverage_alert(tmp_path: Path):
