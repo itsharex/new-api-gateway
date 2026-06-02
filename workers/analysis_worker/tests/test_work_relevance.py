@@ -332,22 +332,61 @@ def test_llm_unavailable_on_high_cost_unknown_uses_unknown_review_fallback():
     assert any(item["category"] == "llm_unavailable" for item in assessment.evidence)
 
 
-def test_invalid_llm_decision_falls_back_to_unknown_record_only_for_medium_weak_signal():
+def test_malformed_llm_payload_on_conflict_uses_conservative_fallback():
     judge = StubJudge({
         "decision": "definitely_allow",
         "recommended_action": "ship_it",
-        "task_category": "documentation",
         "confidence": 0.99,
     })
 
     assessment = classify_work_relevance(
-        job(usage_total_tokens=5000),
-        [message("Please update the gateway docs and guide wording.")],
+        job(usage_total_tokens=1200),
+        [message("In relay, rewrite my resume bullet about debugging this route.")],
         [context()],
         llm_judge=judge,
     )
 
     assert len(judge.calls) == 1
-    assert assessment.decision == "unknown"
-    assert assessment.recommended_action == "record_only"
-    assert assessment.needs_review is False
+    assert assessment.decision == "needs_review"
+    assert assessment.recommended_action == "review_conflict"
+    assert assessment.needs_review is True
+    assert any(item["category"] == "llm_unavailable" for item in assessment.evidence)
+
+
+def test_contradictory_llm_decision_and_action_use_conservative_fallback():
+    judge = StubJudge({
+        "decision": "work_related",
+        "recommended_action": "alert_non_work",
+        "task_category": "debugging",
+        "confidence": 0.91,
+    })
+
+    assessment = classify_work_relevance(
+        job(usage_total_tokens=1200),
+        [message("In relay, rewrite my resume bullet about debugging this route.")],
+        [context()],
+        llm_judge=judge,
+    )
+
+    assert len(judge.calls) == 1
+    assert assessment.decision == "needs_review"
+    assert assessment.recommended_action == "review_conflict"
+    assert assessment.needs_review is True
+    assert any(item["category"] == "llm_unavailable" for item in assessment.evidence)
+
+
+def test_weak_match_with_non_work_and_llm_unavailable_uses_review_conflict_fallback():
+    judge = StubJudge(error=LLMJudgeUnavailable("timeout", "judge timed out"))
+
+    assessment = classify_work_relevance(
+        job(usage_total_tokens=1200),
+        [message("In the gateway repo, rewrite my resume bullet and interview summary.")],
+        [context()],
+        llm_judge=judge,
+    )
+
+    assert len(judge.calls) == 1
+    assert assessment.decision == "needs_review"
+    assert assessment.recommended_action == "review_conflict"
+    assert assessment.needs_review is True
+    assert any(item["category"] == "llm_unavailable" for item in assessment.evidence)

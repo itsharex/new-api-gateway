@@ -34,6 +34,12 @@ VALID_ACTIONS = {
     ACTION_REVIEW_CONFLICT,
     ACTION_RECORD_ONLY,
 }
+VALID_DECISION_ACTIONS = {
+    DECISION_WORK_RELATED: {ACTION_ALLOW},
+    DECISION_NON_WORK_RELATED: {ACTION_ALERT_NON_WORK},
+    DECISION_NEEDS_REVIEW: {ACTION_REVIEW_CONFLICT},
+    DECISION_UNKNOWN: {ACTION_RECORD_ONLY, ACTION_REVIEW_HIGH_COST_UNKNOWN},
+}
 
 UNKNOWN_HIGH_COST_THRESHOLD = 20_000
 
@@ -90,13 +96,18 @@ class CatalogMatch:
     strength: str
 
 
+class InvalidLLMResult(Exception):
+    def __init__(self, error_type: str) -> None:
+        super().__init__(error_type)
+        self.error_type = error_type
+
+
 def classify_work_relevance(
     job: TraceCapturedJob,
     messages: list[NormalizedMessage],
     contexts: list[ContextCatalogEntry],
     llm_judge=None,
 ) -> WorkRelevanceAssessment:
-    text = _combined_text(messages)
     intent = extract_user_intent(messages)
     if not intent.text:
         score = {
@@ -167,10 +178,11 @@ def classify_work_relevance(
             score_breakdown=score,
         )
 
-    if llm_judge is not None and _should_call_llm(job, strong_matches, weak_matches, non_work_evidence + risk_evidence):
+    llm_reason = _llm_invocation_reason(job, strong_matches, weak_matches, non_work_evidence + risk_evidence)
+    if llm_judge is not None and llm_reason is not None:
         bundle = _build_llm_bundle(job, intent, strong_matches, weak_matches, non_work_evidence + risk_evidence)
         try:
-            adapted = _adapt_llm_result(job, llm_judge.judge(bundle))
+            adapted = _adapt_llm_result(llm_judge.judge(bundle))
             evidence.append({
                 "kind": "llm_judge",
                 "category": adapted["decision"],
@@ -199,8 +211,7 @@ def classify_work_relevance(
                 job,
                 messages,
                 contexts,
-                strong_matches,
-                non_work_evidence + risk_evidence,
+                llm_reason,
                 error_type,
             )
 
@@ -441,13 +452,22 @@ def _should_call_llm(
     weak_matches: list[CatalogMatch],
     non_work_evidence: list[dict[str, object]],
 ) -> bool:
+    return _llm_invocation_reason(job, strong_matches, weak_matches, non_work_evidence) is not None
+
+
+def _llm_invocation_reason(
+    job: TraceCapturedJob,
+    strong_matches: list[CatalogMatch],
+    weak_matches: list[CatalogMatch],
+    non_work_evidence: list[dict[str, object]],
+) -> str | None:
     if non_work_evidence and (strong_matches or weak_matches):
-        return True
+        return "mixed_signals"
     if token_tier(job.usage_total_tokens) == "high" and not strong_matches:
-        return True
+        return "high_cost_unknown"
     if token_tier(job.usage_total_tokens) == "medium" and weak_matches:
-        return True
-    return False
+        return "medium_weak_signals"
+    return None
 
 
 def _clamp_float(value: Any, lower: float, upper: float) -> float:
@@ -458,30 +478,16 @@ def _clamp_float(value: Any, lower: float, upper: float) -> float:
     return max(lower, min(upper, numeric))
 
 
-def _adapt_llm_result(job: TraceCapturedJob, raw: dict[str, Any]) -> dict[str, Any]:
+def _adapt_llm_result(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise InvalidLLMResult("invalid_result")
+
     decision = raw.get("decision")
     action = raw.get("recommended_action")
     if decision not in VALID_DECISIONS or action not in VALID_ACTIONS:
-        fallback_decision, fallback_action, fallback_review, fallback_confidence = _decision_from_scores(
-            job,
-            {"work": 0.0, "non_work": 0.0, "risk": 0.0, "conflict": 0.0, "uncertainty": 1.0},
-        )
-        return {
-            "task_category": "unknown",
-            "decision": fallback_decision,
-            "recommended_action": fallback_action,
-            "needs_review": fallback_review,
-            "confidence": fallback_confidence,
-            "work_related_score": 0.0,
-            "personal_use_score": 0.0,
-            "score_breakdown": {
-                "work": 0.0,
-                "non_work": 0.0,
-                "risk": 0.0,
-                "conflict": 0.0,
-                "uncertainty": 1.0,
-            },
-        }
+        raise InvalidLLMResult("invalid_result")
+    if action not in VALID_DECISION_ACTIONS.get(decision, set()):
+        raise InvalidLLMResult("invalid_result")
 
     confidence = _clamp_float(raw.get("confidence", 0.7), 0.0, 1.0)
     work_score = 0.0
@@ -531,14 +537,13 @@ def _conservative_llm_fallback(
     job: TraceCapturedJob,
     messages: list[NormalizedMessage],
     contexts: list[ContextCatalogEntry],
-    strong_matches: list[CatalogMatch],
-    non_work_evidence: list[dict[str, object]],
+    llm_reason: str,
     error_type: str,
 ) -> WorkRelevanceAssessment:
     assessment = classify_work_relevance(job, messages, contexts, llm_judge=None)
     evidence = list(assessment.evidence)
     evidence.append(_llm_unavailable_evidence(error_type))
-    if non_work_evidence and strong_matches:
+    if llm_reason == "mixed_signals":
         return WorkRelevanceAssessment(
             trace_id=assessment.trace_id,
             task_category=assessment.task_category,
@@ -553,7 +558,7 @@ def _conservative_llm_fallback(
             recommended_action=ACTION_REVIEW_CONFLICT,
             score_breakdown=assessment.score_breakdown,
         )
-    if token_tier(job.usage_total_tokens) == "high" and assessment.decision == DECISION_UNKNOWN:
+    if llm_reason == "high_cost_unknown":
         return WorkRelevanceAssessment(
             trace_id=assessment.trace_id,
             task_category=assessment.task_category,
