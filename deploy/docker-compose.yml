@@ -59,8 +59,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      embedding:
-        condition: service_started
     working_dir: /workspace/workers/analysis_worker
     environment:
       EVIDENCE_STORAGE_BACKEND: filesystem
@@ -71,8 +69,6 @@ services:
       UV_CACHE_DIR: /tmp/uv-cache
       UV_PROJECT_ENVIRONMENT: /tmp/analysis-worker-venv
       UV_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
-      UV_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
-      EMBEDDING_URL: http://embedding:8000
       UV_INDEX_STRATEGY: unsafe-best-match
     volumes:
       - ..:/workspace
@@ -121,21 +117,6 @@ services:
         echo "0 * * * * cd /workspace/workers/analysis_worker && uv run python main.py --offline-batch" > /etc/crontabs/root &&
         crond -f
       '
-  embedding:
-    build:
-      context: ./embedding
-    environment:
-      HF_HOME: /data
-      TRANSFORMERS_CACHE: /data
-    volumes:
-      - embedding-model-cache:/data
-    healthcheck:
-      test: ["CMD", "python", "/app/healthcheck.py"]
-      interval: 5s
-      timeout: 3s
-      retries: 30
-      start_period: 30s
 volumes:
   audit-postgres:
   audit-redis:
-  embedding-model-cache:

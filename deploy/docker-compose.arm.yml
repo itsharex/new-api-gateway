@@ -1,7 +1,3 @@
 # ARM Mac local development override.
 # Stacks on top of docker-compose.yml via: make dev
-services:
-  embedding:
-    healthcheck:
-      start_period: 120s
-      retries: 60
+services: {}
