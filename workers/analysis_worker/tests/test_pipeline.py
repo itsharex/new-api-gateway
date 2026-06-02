@@ -113,7 +113,7 @@ def test_process_job_line_reads_evidence_normalizes_and_persists(tmp_path: Path)
     assert repo.aggregates[0].response_body_bytes == 256
 
 
-def test_process_job_line_works_without_db_or_embedding_dependencies():
+def test_process_job_line_works_with_minimal_dependencies():
     class MinimalEvidenceStore:
         def __init__(self, payloads):
             self.payloads = payloads

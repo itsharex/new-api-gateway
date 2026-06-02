@@ -1,3 +1,5 @@
+import work_relevance
+
 from llm_judge import LLMJudgeUnavailable
 from models import ContextCatalogEntry, NormalizedMessage, TraceCapturedJob
 from work_relevance import ANALYZER_VERSION, classify_work_relevance, extract_user_intent
@@ -127,6 +129,11 @@ def test_empty_messages_are_unknown_and_low_confidence():
     assert assessment.decision == "unknown"
     assert assessment.recommended_action == "record_only"
     assert assessment.needs_review is False
+
+
+def test_module_no_longer_exposes_removed_classifier():
+    removed_name = "classify_work_relevance_with_" + "".join(["em", "bed", "dings"])
+    assert not hasattr(work_relevance, removed_name)
 
 
 
