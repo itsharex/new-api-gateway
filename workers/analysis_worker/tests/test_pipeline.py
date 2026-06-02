@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from evidence import FilesystemEvidenceStore
 from llm_judge import LLMJudgeClient
 from llm_judge import LLMJudgeUnavailable
@@ -344,7 +346,7 @@ def test_llm_judge_metadata_reads_kind_and_category_contract():
     }
 
 
-def test_create_llm_judge_from_env_returns_none_when_required_env_missing(monkeypatch):
+def test_create_llm_judge_from_env_returns_none_when_config_absent(monkeypatch):
     monkeypatch.delenv("LLM_JUDGE_BASE_URL", raising=False)
     monkeypatch.delenv("LLM_JUDGE_MODEL", raising=False)
     monkeypatch.delenv("LLM_JUDGE_API_KEY", raising=False)
@@ -352,12 +354,29 @@ def test_create_llm_judge_from_env_returns_none_when_required_env_missing(monkey
 
     assert create_llm_judge_from_env() is None
 
-    monkeypatch.setenv("LLM_JUDGE_BASE_URL", "https://judge.example.com")
-    assert create_llm_judge_from_env() is None
 
+def test_create_llm_judge_from_env_rejects_base_url_without_model(monkeypatch):
+    monkeypatch.setenv("LLM_JUDGE_BASE_URL", "https://judge.example.com")
+
+    with pytest.raises(SystemExit, match="LLM_JUDGE_BASE_URL and LLM_JUDGE_MODEL must be set together"):
+        create_llm_judge_from_env()
+
+
+def test_create_llm_judge_from_env_rejects_model_without_base_url(monkeypatch):
     monkeypatch.delenv("LLM_JUDGE_BASE_URL", raising=False)
     monkeypatch.setenv("LLM_JUDGE_MODEL", "judge-model")
-    assert create_llm_judge_from_env() is None
+
+    with pytest.raises(SystemExit, match="LLM_JUDGE_BASE_URL and LLM_JUDGE_MODEL must be set together"):
+        create_llm_judge_from_env()
+
+
+def test_create_llm_judge_from_env_rejects_invalid_timeout(monkeypatch):
+    monkeypatch.setenv("LLM_JUDGE_BASE_URL", "https://judge.example.com")
+    monkeypatch.setenv("LLM_JUDGE_MODEL", "judge-model")
+    monkeypatch.setenv("LLM_JUDGE_TIMEOUT_SECONDS", "not-a-number")
+
+    with pytest.raises(SystemExit, match="LLM_JUDGE_TIMEOUT_SECONDS must be a valid number"):
+        create_llm_judge_from_env()
 
 
 def test_create_llm_judge_from_env_builds_expected_client(monkeypatch):

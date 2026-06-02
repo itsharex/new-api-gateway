@@ -70,10 +70,16 @@ def create_evidence_store() -> EvidenceStore:
 def create_llm_judge_from_env() -> LLMJudgeClient | None:
     base_url = os.environ.get("LLM_JUDGE_BASE_URL", "").strip()
     model = os.environ.get("LLM_JUDGE_MODEL", "").strip()
-    if not base_url or not model:
+    if not base_url and not model:
         return None
+    if not base_url or not model:
+        raise SystemExit("LLM_JUDGE_BASE_URL and LLM_JUDGE_MODEL must be set together")
     api_key = os.environ.get("LLM_JUDGE_API_KEY", "").strip() or None
-    timeout_seconds = float(os.environ.get("LLM_JUDGE_TIMEOUT_SECONDS", "20"))
+    timeout_raw = os.environ.get("LLM_JUDGE_TIMEOUT_SECONDS", "20").strip()
+    try:
+        timeout_seconds = float(timeout_raw)
+    except ValueError as exc:
+        raise SystemExit("LLM_JUDGE_TIMEOUT_SECONDS must be a valid number") from exc
     return LLMJudgeClient(
         base_url=base_url,
         model=model,
