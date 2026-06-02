@@ -71,12 +71,19 @@ def create_evidence_store() -> EvidenceStore:
 def create_llm_judge_from_env() -> LLMJudgeClient | None:
     base_url = os.environ.get("LLM_JUDGE_BASE_URL", "").strip()
     model = os.environ.get("LLM_JUDGE_MODEL", "").strip()
-    if not base_url and not model:
+    api_key_raw = os.environ.get("LLM_JUDGE_API_KEY")
+    timeout_raw_env = os.environ.get("LLM_JUDGE_TIMEOUT_SECONDS")
+    if not any((base_url, model, api_key_raw is not None, timeout_raw_env is not None)):
         return None
     if not base_url or not model:
-        raise SystemExit("LLM_JUDGE_BASE_URL and LLM_JUDGE_MODEL must be set together")
-    api_key = os.environ.get("LLM_JUDGE_API_KEY", "").strip() or None
-    timeout_raw = os.environ.get("LLM_JUDGE_TIMEOUT_SECONDS", "20").strip()
+        raise SystemExit(
+            "LLM_JUDGE_BASE_URL and LLM_JUDGE_MODEL must be set when any LLM_JUDGE_* variable is configured"
+        )
+    if api_key_raw is None:
+        api_key = None
+    else:
+        api_key = api_key_raw.strip() or None
+    timeout_raw = (timeout_raw_env if timeout_raw_env is not None else "20").strip()
     try:
         timeout_seconds = float(timeout_raw)
     except ValueError as exc:

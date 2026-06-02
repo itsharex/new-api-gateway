@@ -356,10 +356,30 @@ def test_create_llm_judge_from_env_returns_none_when_config_absent(monkeypatch):
     assert create_llm_judge_from_env() is None
 
 
+@pytest.mark.parametrize(
+    "env_overrides",
+    [
+        {"LLM_JUDGE_API_KEY": "secret-key"},
+        {"LLM_JUDGE_TIMEOUT_SECONDS": "12.5"},
+        {"LLM_JUDGE_API_KEY": "secret-key", "LLM_JUDGE_TIMEOUT_SECONDS": "12.5"},
+    ],
+)
+def test_create_llm_judge_from_env_rejects_partial_configuration(monkeypatch, env_overrides):
+    monkeypatch.delenv("LLM_JUDGE_BASE_URL", raising=False)
+    monkeypatch.delenv("LLM_JUDGE_MODEL", raising=False)
+    monkeypatch.delenv("LLM_JUDGE_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_JUDGE_TIMEOUT_SECONDS", raising=False)
+    for key, value in env_overrides.items():
+        monkeypatch.setenv(key, value)
+
+    with pytest.raises(SystemExit, match="LLM_JUDGE"):
+        create_llm_judge_from_env()
+
+
 def test_create_llm_judge_from_env_rejects_base_url_without_model(monkeypatch):
     monkeypatch.setenv("LLM_JUDGE_BASE_URL", "https://judge.example.com")
 
-    with pytest.raises(SystemExit, match="LLM_JUDGE_BASE_URL and LLM_JUDGE_MODEL must be set together"):
+    with pytest.raises(SystemExit, match="LLM_JUDGE_BASE_URL and LLM_JUDGE_MODEL must be set when any LLM_JUDGE_\\* variable is configured"):
         create_llm_judge_from_env()
 
 
@@ -367,7 +387,7 @@ def test_create_llm_judge_from_env_rejects_model_without_base_url(monkeypatch):
     monkeypatch.delenv("LLM_JUDGE_BASE_URL", raising=False)
     monkeypatch.setenv("LLM_JUDGE_MODEL", "judge-model")
 
-    with pytest.raises(SystemExit, match="LLM_JUDGE_BASE_URL and LLM_JUDGE_MODEL must be set together"):
+    with pytest.raises(SystemExit, match="LLM_JUDGE_BASE_URL and LLM_JUDGE_MODEL must be set when any LLM_JUDGE_\\* variable is configured"):
         create_llm_judge_from_env()
 
 
@@ -769,7 +789,10 @@ def test_process_redis_once_records_degraded_llm_metadata_in_heartbeat(monkeypat
         def __exit__(self, exc_type, exc, tb):
             return False
 
+    sentinel_judge = object()
+
     def fake_process_job_line(*args, **kwargs):
+        assert kwargs["llm_judge"] is sentinel_judge
         return {
             "accepted_trace_id": "trace-conflict",
             "worker_status": "processed",
@@ -790,6 +813,7 @@ def test_process_redis_once_records_degraded_llm_metadata_in_heartbeat(monkeypat
         "postgres://unused",
         1,
         connection_factory=lambda dsn: FakeConnection(),
+        llm_judge=sentinel_judge,
     )
 
     assert exit_code == 0
@@ -842,7 +866,10 @@ def test_process_redis_loop_records_degraded_llm_metadata_in_heartbeat(monkeypat
     def fake_signal(sig, handler):
         handlers[sig.name] = handler
 
+    sentinel_judge = object()
+
     def fake_process_job_line(*args, **kwargs):
+        assert kwargs["llm_judge"] is sentinel_judge
         return {
             "accepted_trace_id": "trace-conflict",
             "worker_status": "processed",
@@ -864,6 +891,7 @@ def test_process_redis_loop_records_degraded_llm_metadata_in_heartbeat(monkeypat
         FilesystemEvidenceStore("/tmp/evidence-unused"),
         "postgres://unused",
         1,
+        llm_judge=sentinel_judge,
     )
 
     assert exit_code == 0
