@@ -1,4 +1,5 @@
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -379,6 +380,16 @@ def test_create_llm_judge_from_env_rejects_invalid_timeout(monkeypatch):
         create_llm_judge_from_env()
 
 
+@pytest.mark.parametrize("timeout_raw", ["0", "-1", str(math.inf), str(math.nan)])
+def test_create_llm_judge_from_env_rejects_non_positive_or_non_finite_timeout(monkeypatch, timeout_raw):
+    monkeypatch.setenv("LLM_JUDGE_BASE_URL", "https://judge.example.com")
+    monkeypatch.setenv("LLM_JUDGE_MODEL", "judge-model")
+    monkeypatch.setenv("LLM_JUDGE_TIMEOUT_SECONDS", timeout_raw)
+
+    with pytest.raises(SystemExit, match="LLM_JUDGE_TIMEOUT_SECONDS must be a finite positive number"):
+        create_llm_judge_from_env()
+
+
 def test_create_llm_judge_from_env_builds_expected_client(monkeypatch):
     monkeypatch.setenv("LLM_JUDGE_BASE_URL", "https://judge.example.com/")
     monkeypatch.setenv("LLM_JUDGE_MODEL", "judge-model")
@@ -392,6 +403,17 @@ def test_create_llm_judge_from_env_builds_expected_client(monkeypatch):
     assert client.model == "judge-model"
     assert client.api_key == "secret-key"
     assert client.timeout_seconds == 12.5
+
+
+def test_create_llm_judge_from_env_accepts_valid_integer_timeout(monkeypatch):
+    monkeypatch.setenv("LLM_JUDGE_BASE_URL", "https://judge.example.com/")
+    monkeypatch.setenv("LLM_JUDGE_MODEL", "judge-model")
+    monkeypatch.setenv("LLM_JUDGE_TIMEOUT_SECONDS", "7")
+
+    client = create_llm_judge_from_env()
+
+    assert isinstance(client, LLMJudgeClient)
+    assert client.timeout_seconds == 7.0
 
 
 def test_process_job_line_persists_anomaly_and_coverage_alert(tmp_path: Path):

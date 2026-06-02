@@ -1,5 +1,6 @@
 import argparse
 import json
+import math
 import os
 import signal
 import socket
@@ -80,6 +81,8 @@ def create_llm_judge_from_env() -> LLMJudgeClient | None:
         timeout_seconds = float(timeout_raw)
     except ValueError as exc:
         raise SystemExit("LLM_JUDGE_TIMEOUT_SECONDS must be a valid number") from exc
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise SystemExit("LLM_JUDGE_TIMEOUT_SECONDS must be a finite positive number")
     return LLMJudgeClient(
         base_url=base_url,
         model=model,
