@@ -246,7 +246,7 @@ uv sync
 uv run python main.py
 ```
 
-`make dev` 会自动检测平台：ARM Mac 叠加 `docker-compose.arm.yml` 调整模型加载超时（ARM 较慢）。
+`make dev` 会自动检测平台：ARM Mac 会叠加 `docker-compose.arm.yml`。
 
 本地开发环境变量参考 `.env.example`。
 
