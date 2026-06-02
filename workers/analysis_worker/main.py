@@ -1,5 +1,6 @@
 import argparse
 import json
+import math
 import os
 import signal
 import socket
@@ -14,6 +15,7 @@ from context_repository import PostgresContextRepository
 from evidence import EvidenceStore, FilesystemEvidenceStore
 from media_extraction import MediaExtractionContext
 from heartbeat import HeartbeatRepository
+from llm_judge import LLMJudgeClient
 from models import (
     AnalysisContext,
     ContextCatalogEntry,
@@ -26,8 +28,7 @@ from models import (
 from normalizers import normalize_json_trace
 from repository import PostgresAnalysisRepository
 from rules import detect_anomalies, detect_coverage_alerts, detect_work_relevance_anomalies
-from work_relevance import classify_work_relevance, classify_work_relevance_with_embeddings
-from embedding_client import EmbeddingClient
+from work_relevance import classify_work_relevance
 
 
 class NoopAnalysisRepository:
@@ -67,6 +68,36 @@ def create_evidence_store() -> EvidenceStore:
     raise SystemExit(f"EVIDENCE_STORAGE_BACKEND must be 'filesystem' or 'oss', got {backend!r}")
 
 
+def create_llm_judge_from_env() -> LLMJudgeClient | None:
+    base_url = os.environ.get("LLM_JUDGE_BASE_URL", "").strip()
+    model = os.environ.get("LLM_JUDGE_MODEL", "").strip()
+    api_key_raw = os.environ.get("LLM_JUDGE_API_KEY")
+    timeout_raw_env = os.environ.get("LLM_JUDGE_TIMEOUT_SECONDS")
+    if not any((base_url, model, api_key_raw is not None, timeout_raw_env is not None)):
+        return None
+    if not base_url or not model:
+        raise SystemExit(
+            "LLM_JUDGE_BASE_URL and LLM_JUDGE_MODEL must be set when any LLM_JUDGE_* variable is configured"
+        )
+    if api_key_raw is None:
+        api_key = None
+    else:
+        api_key = api_key_raw.strip() or None
+    timeout_raw = (timeout_raw_env if timeout_raw_env is not None else "20").strip()
+    try:
+        timeout_seconds = float(timeout_raw)
+    except ValueError as exc:
+        raise SystemExit("LLM_JUDGE_TIMEOUT_SECONDS must be a valid number") from exc
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise SystemExit("LLM_JUDGE_TIMEOUT_SECONDS must be a finite positive number")
+    return LLMJudgeClient(
+        base_url=base_url,
+        model=model,
+        api_key=api_key,
+        timeout_seconds=timeout_seconds,
+    )
+
+
 def aggregate_deltas(job: TraceCapturedJob) -> list[UsageAggregateDelta]:
     success = 1 if 200 <= job.status_code < 400 or job.status_code == 0 else 0
     error = 0 if success else 1
@@ -96,17 +127,55 @@ def aggregate_deltas(job: TraceCapturedJob) -> list[UsageAggregateDelta]:
     ]
 
 
-def process_job_line(line: str, evidence_store: EvidenceStore, repository, context_repository=None, storage_backend: str = "filesystem", embedding_client=None, pg_connection=None) -> dict:
+def process_job_line(
+    line: str,
+    evidence_store: EvidenceStore,
+    repository,
+    context_repository=None,
+    storage_backend: str = "filesystem",
+    llm_judge=None,
+) -> dict:
     job = parse_job(line)
     request_body = evidence_store.read_text(job.request_raw_ref) if job.request_raw_ref else ""
     response_body = evidence_store.read_text(job.response_raw_ref) if job.response_raw_ref else ""
     contexts = context_repository.list_active_contexts() if context_repository else []
-    return process_trace(job, request_body, response_body, repository, contexts, evidence_store, storage_backend=storage_backend, embedding_client=embedding_client, pg_connection=pg_connection)
+    return process_trace(
+        job,
+        request_body,
+        response_body,
+        repository,
+        contexts,
+        evidence_store,
+        storage_backend=storage_backend,
+        llm_judge=llm_judge,
+    )
 
 
 def process_contract_validation_line(line: str) -> dict:
     job = parse_job(line)
     return process_trace(job, "", "", NoopAnalysisRepository(), [])
+
+
+def llm_judge_metadata(work_relevance) -> dict:
+    fallback_items = [
+        item for item in work_relevance.evidence
+        if isinstance(item, dict) and item.get("kind") == "llm_unavailable"
+    ]
+    if not fallback_items:
+        return {}
+    return {
+        "llm_judge_status": "degraded",
+        "llm_judge_error_type": str(fallback_items[0].get("category") or "unknown"),
+        "llm_judge_fallback_count": len(fallback_items),
+    }
+
+
+def processed_heartbeat_metadata(result: dict) -> dict:
+    metadata = {"trace_id": result.get("accepted_trace_id", "")}
+    for key in ("llm_judge_status", "llm_judge_error_type", "llm_judge_fallback_count"):
+        if key in result:
+            metadata[key] = result[key]
+    return metadata
 
 
 def process_trace(
@@ -117,21 +186,16 @@ def process_trace(
     contexts: list[ContextCatalogEntry] | None = None,
     evidence_store: EvidenceStore | None = None,
     storage_backend: str = "filesystem",
-    embedding_client=None,
-    pg_connection=None,
+    llm_judge=None,
 ) -> dict:
     extraction_context: MediaExtractionContext | None = None
     if evidence_store and job.request_raw_ref:
         evidence_dir = job.request_raw_ref.rsplit("/", 1)[0]
         extraction_context = MediaExtractionContext(evidence_store, evidence_dir, job.trace_id)
     messages, results = normalize_json_trace(job, request_body, response_body, extraction_context)
-    if embedding_client is not None and pg_connection is not None:
-        work_relevance = classify_work_relevance_with_embeddings(
-            job, messages, list(contexts or []), embedding_client, pg_connection,
-        )
-    else:
-        work_relevance = classify_work_relevance(job, messages, list(contexts or []))
+    work_relevance = classify_work_relevance(job, messages, list(contexts or []), llm_judge=llm_judge)
     results.append(work_relevance.to_analysis_result())
+    llm_metadata = llm_judge_metadata(work_relevance)
     aggregates = aggregate_deltas(job)
     load_analysis_context = getattr(repository, "analysis_context_for", None)
     analysis_context = load_analysis_context(job) if load_analysis_context else AnalysisContext()
@@ -160,6 +224,7 @@ def process_trace(
         "coverage_alert_count": len(coverage_alerts),
         "usage_total_tokens": job.usage_total_tokens,
         "media_assets_extracted": len(extraction_context.assets) if extraction_context else 0,
+        **llm_metadata,
     }
 
 
@@ -222,7 +287,7 @@ def process_redis_once(
     timeout_seconds: int,
     connection_factory=psycopg.connect,
     storage_backend: str = "filesystem",
-    embedding_client=None,
+    llm_judge=None,
 ) -> int:
     client = redis.Redis.from_url(redis_url, decode_responses=True)
     item = client.blpop(list_name, timeout=timeout_seconds)
@@ -248,8 +313,7 @@ def process_redis_once(
                 PostgresAnalysisRepository(connection),
                 PostgresContextRepository(connection),
                 storage_backend=storage_backend,
-                embedding_client=embedding_client,
-                pg_connection=connection,
+                llm_judge=llm_judge,
             )
         except Exception as exc:
             record_heartbeat_safely(
@@ -271,7 +335,7 @@ def process_redis_once(
             queue_name=list_name,
             processed_count=1,
             error_count=0,
-            metadata={"trace_id": result.get("accepted_trace_id", "")},
+            metadata=processed_heartbeat_metadata(result),
         )
     print(json.dumps(result, sort_keys=True))
     return 0
@@ -284,7 +348,7 @@ def process_redis_loop(
     postgres_dsn: str,
     timeout_seconds: int,
     storage_backend: str = "filesystem",
-    embedding_client=None,
+    llm_judge=None,
 ) -> int:
     client = redis.Redis.from_url(redis_url, decode_responses=True)
     wid = worker_id()
@@ -323,8 +387,7 @@ def process_redis_loop(
                     PostgresAnalysisRepository(connection),
                     PostgresContextRepository(connection),
                     storage_backend=storage_backend,
-                    embedding_client=embedding_client,
-                    pg_connection=connection,
+                    llm_judge=llm_judge,
                 )
             except Exception as exc:
                 record_heartbeat_safely(
@@ -347,7 +410,7 @@ def process_redis_loop(
                 queue_name=list_name,
                 processed_count=1,
                 error_count=0,
-                metadata={"trace_id": result.get("accepted_trace_id", "")},
+                metadata=processed_heartbeat_metadata(result),
             )
             print(json.dumps(result, sort_keys=True), flush=True)
 
@@ -382,9 +445,7 @@ def main() -> int:
 
     evidence_store = create_evidence_store()
     storage_backend = os.environ.get("EVIDENCE_STORAGE_BACKEND", "")
-
-    embedding_client = EmbeddingClient(os.environ.get("EMBEDDING_URL", "http://embedding:8000"))
-    embedding_client.wait_until_ready()
+    llm_judge = create_llm_judge_from_env()
 
     if not args.postgres_dsn:
         raise SystemExit("POSTGRES_DSN is required")
@@ -396,7 +457,7 @@ def main() -> int:
             args.postgres_dsn,
             args.redis_timeout_seconds,
             storage_backend=storage_backend,
-            embedding_client=embedding_client,
+            llm_judge=llm_judge,
         )
     return process_redis_loop(
         args.redis_url,
@@ -405,7 +466,7 @@ def main() -> int:
         args.postgres_dsn,
         args.redis_timeout_seconds,
         storage_backend=storage_backend,
-        embedding_client=embedding_client,
+        llm_judge=llm_judge,
     )
 
 

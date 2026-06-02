@@ -163,6 +163,46 @@ def test_detects_low_work_relevance_high_cost_anomaly():
     assert "personal use score" in alerts[0].reason
 
 
+def test_llm_judge_work_related_assessment_produces_no_work_relevance_anomaly():
+    assessment = WorkRelevanceAssessment(
+        trace_id="trace_llm_work",
+        task_category="coding",
+        work_related_score=0.92,
+        personal_use_score=0.0,
+        confidence=0.92,
+        matched_context=[{"type": "project", "name": "XWallet App", "source": "llm_judge"}],
+        evidence=[{"kind": "work_context", "source": "llm_judge", "reason": "project coding task"}],
+        needs_review=False,
+        analyzer_version="work_relevance_mvp_2026_04_28+llm",
+        decision="work_related",
+        recommended_action="allow",
+        score_breakdown={"work": 0.92, "non_work": 0.0, "risk": 0.0, "conflict": 0.0, "uncertainty": 0.08},
+    )
+
+    assert detect_work_relevance_anomalies(job(usage_total_tokens=25000), assessment) == []
+
+
+def test_llm_judge_conflict_assessment_uses_existing_conflict_anomaly_type():
+    assessment = WorkRelevanceAssessment(
+        trace_id="trace_llm_conflict",
+        task_category="job_search",
+        work_related_score=0.6,
+        personal_use_score=0.6,
+        confidence=0.74,
+        matched_context=[{"type": "repo", "name": "new-api-gateway", "source": "llm_judge"}],
+        evidence=[{"kind": "conflict", "source": "llm_judge", "reason": "project mention but resume intent"}],
+        needs_review=True,
+        analyzer_version="work_relevance_mvp_2026_04_28+llm",
+        decision="needs_review",
+        recommended_action="review_conflict",
+        score_breakdown={"work": 0.6, "non_work": 0.6, "risk": 0.0, "conflict": 0.6, "uncertainty": 0.26},
+    )
+
+    alerts = detect_work_relevance_anomalies(job(usage_total_tokens=5000), assessment)
+
+    assert [alert.anomaly_type for alert in alerts] == ["work_nonwork_conflict"]
+
+
 def test_detects_low_token_non_work_personal_use():
     assessment = WorkRelevanceAssessment(
         trace_id="trace_personal",

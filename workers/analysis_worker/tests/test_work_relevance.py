@@ -1,7 +1,8 @@
-from unittest.mock import MagicMock
+import work_relevance
 
+from llm_judge import LLMJudgeUnavailable
 from models import ContextCatalogEntry, NormalizedMessage, TraceCapturedJob
-from work_relevance import ANALYZER_VERSION, classify_work_relevance, classify_work_relevance_with_embeddings
+from work_relevance import ANALYZER_VERSION, classify_work_relevance, extract_user_intent
 
 
 def job(**overrides):
@@ -36,6 +37,23 @@ def message(text: str) -> NormalizedMessage:
     )
 
 
+def response_message(text: str) -> NormalizedMessage:
+    return NormalizedMessage(
+        trace_id="trace_1",
+        direction="response",
+        sequence_index=1,
+        role="assistant",
+        modality="text",
+        content_text=text,
+        content_text_hash="hash-response",
+        media_url="",
+        source_path="response.output[0]",
+        protocol_item_type="openai_chat_message",
+        token_count_estimate=10,
+        metadata={},
+    )
+
+
 def context() -> ContextCatalogEntry:
     return ContextCatalogEntry(
         id=1,
@@ -50,6 +68,19 @@ def context() -> ContextCatalogEntry:
         expected_usage_level="normal",
         active=True,
     )
+
+
+class StubJudge:
+    def __init__(self, result=None, error=None):
+        self.result = result or {}
+        self.error = error
+        self.calls = []
+
+    def judge(self, bundle):
+        self.calls.append(bundle)
+        if self.error is not None:
+            raise self.error
+        return self.result
 
 
 def test_classifies_context_matched_coding_as_work_related():
@@ -100,52 +131,11 @@ def test_empty_messages_are_unknown_and_low_confidence():
     assert assessment.needs_review is False
 
 
-def test_embedding_match_overrides_keyword_classification():
-    mock_embedding_client = MagicMock()
-    mock_embedding_client.embed.return_value = [0.1] * 1024
-
-    mock_connection = MagicMock()
-    mock_cursor = MagicMock()
-    mock_connection.cursor.return_value = mock_cursor
-    mock_cursor.fetchall.return_value = [
-        ("repo", "Backend API Development", 0.85, ["coding"], ["gpt-4.1"]),
-    ]
-
-    test_job = job()
-    messages = [message("Help me implement a REST API endpoint for user authentication")]
-
-    result = classify_work_relevance_with_embeddings(
-        test_job, messages, [], mock_embedding_client, mock_connection,
-    )
-
-    assert result.task_category == "coding"
-    assert result.work_related_score >= 0.7
-    assert result.confidence >= 0.7
-    assert result.decision == "work_related"
-    assert result.recommended_action == "allow"
-    assert result.needs_review is False
-    assert result.score_breakdown["work"] >= 0.8
-    assert result.evidence[0]["source"] == "embedding"
+def test_module_no_longer_exposes_removed_classifier():
+    removed_name = "classify_work_relevance_with_" + "".join(["em", "bed", "dings"])
+    assert not hasattr(work_relevance, removed_name)
 
 
-def test_embedding_falls_back_to_keywords_when_no_match():
-    mock_embedding_client = MagicMock()
-    mock_embedding_client.embed.return_value = [0.1] * 1024
-
-    mock_connection = MagicMock()
-    mock_cursor = MagicMock()
-    mock_connection.cursor.return_value = mock_cursor
-    mock_cursor.fetchall.return_value = []  # No matches
-
-    test_job = job()
-    messages = [message("Help me debug this error in my code")]
-
-    result = classify_work_relevance_with_embeddings(
-        test_job, messages, [], mock_embedding_client, mock_connection,
-    )
-
-    # Falls back to keyword classification
-    assert result.task_category == "debugging"
 
 
 def test_low_token_personal_use_decides_non_work():
@@ -238,3 +228,187 @@ def test_work_and_non_work_conflict_requires_review():
     assert assessment.decision == "needs_review"
     assert assessment.recommended_action == "review_conflict"
     assert assessment.score_breakdown["conflict"] > 0
+
+
+def test_extract_user_intent_excludes_assistant_response_text():
+    intent = extract_user_intent([
+        message("Debug the relay handler in new-api gateway."),
+        response_message("Here is a bedtime story about dragons."),
+    ])
+
+    assert "debug the relay handler" in intent.text
+    assert "bedtime story" not in intent.text
+
+
+def test_extract_user_intent_records_truncation():
+    intent = extract_user_intent([message("A" * 30)], max_chars=12)
+
+    assert intent.text == "a" * 12
+    assert intent.truncated is True
+    assert intent.original_length == 30
+
+
+def test_strong_alias_match_short_circuits_to_work_related_allow():
+    assessment = classify_work_relevance(
+        job(usage_total_tokens=800),
+        [message("Please inspect relay auth failures.")],
+        [context()],
+    )
+
+    assert assessment.decision == "work_related"
+    assert assessment.recommended_action == "allow"
+    assert assessment.matched_context[0]["source"] == "catalog_alias"
+    assert assessment.confidence >= 0.95
+
+
+def test_weak_keyword_medium_cost_calls_llm_and_adapts_work_related_result():
+    judge = StubJudge({
+        "decision": "work_related",
+        "recommended_action": "allow",
+        "task_category": "documentation",
+        "confidence": 0.82,
+    })
+
+    assessment = classify_work_relevance(
+        job(usage_total_tokens=6000),
+        [message("Please update the gateway docs and guide wording.")],
+        [context()],
+        llm_judge=judge,
+    )
+
+    assert len(judge.calls) == 1
+    assert assessment.decision == "work_related"
+    assert assessment.recommended_action == "allow"
+    assert assessment.task_category == "documentation"
+    assert assessment.work_related_score >= 0.7
+    assert assessment.evidence[-1]["source"] == "llm_judge"
+
+
+def test_conflict_calls_llm_and_adapts_review_conflict_result():
+    judge = StubJudge({
+        "decision": "needs_review",
+        "recommended_action": "review_conflict",
+        "task_category": "job_search",
+        "confidence": 0.74,
+    })
+
+    assessment = classify_work_relevance(
+        job(usage_total_tokens=1200),
+        [message("In relay, rewrite my resume bullet about debugging this route.")],
+        [context()],
+        llm_judge=judge,
+    )
+
+    assert len(judge.calls) == 1
+    assert assessment.decision == "needs_review"
+    assert assessment.recommended_action == "review_conflict"
+    assert assessment.needs_review is True
+    assert assessment.evidence[-1]["source"] == "llm_judge"
+
+
+def test_llm_unavailable_on_conflict_uses_conservative_fallback():
+    judge = StubJudge(error=LLMJudgeUnavailable("timeout", "judge timed out"))
+
+    assessment = classify_work_relevance(
+        job(usage_total_tokens=1200),
+        [message("In relay, rewrite my resume bullet about debugging this route.")],
+        [context()],
+        llm_judge=judge,
+    )
+
+    assert len(judge.calls) == 1
+    assert assessment.decision == "needs_review"
+    assert assessment.recommended_action == "review_conflict"
+    assert assessment.evidence[-1] == {
+        "kind": "llm_unavailable",
+        "category": "timeout",
+        "weight": 0.0,
+        "source": "llm_judge",
+        "snippet": "timeout",
+        "reason": "LLM judge unavailable due to timeout.",
+    }
+
+
+def test_llm_unavailable_on_high_cost_unknown_uses_unknown_review_fallback():
+    judge = StubJudge(error=LLMJudgeUnavailable("http_error", "503"))
+
+    assessment = classify_work_relevance(
+        job(usage_total_tokens=25000),
+        [message("Explain this idea in a clearer way.")],
+        [context()],
+        llm_judge=judge,
+    )
+
+    assert len(judge.calls) == 1
+    assert assessment.decision == "unknown"
+    assert assessment.recommended_action == "review_high_cost_unknown"
+    assert assessment.needs_review is True
+    assert assessment.evidence[-1]["kind"] == "llm_unavailable"
+    assert assessment.evidence[-1]["category"] == "http_error"
+    assert assessment.evidence[-1]["source"] == "llm_judge"
+
+
+def test_malformed_llm_payload_on_conflict_uses_conservative_fallback():
+    judge = StubJudge({
+        "decision": "definitely_allow",
+        "recommended_action": "ship_it",
+        "confidence": 0.99,
+    })
+
+    assessment = classify_work_relevance(
+        job(usage_total_tokens=1200),
+        [message("In relay, rewrite my resume bullet about debugging this route.")],
+        [context()],
+        llm_judge=judge,
+    )
+
+    assert len(judge.calls) == 1
+    assert assessment.decision == "needs_review"
+    assert assessment.recommended_action == "review_conflict"
+    assert assessment.needs_review is True
+    assert assessment.evidence[-1]["kind"] == "llm_unavailable"
+    assert assessment.evidence[-1]["category"] == "invalid_result"
+    assert assessment.evidence[-1]["source"] == "llm_judge"
+
+
+def test_contradictory_llm_decision_and_action_use_conservative_fallback():
+    judge = StubJudge({
+        "decision": "work_related",
+        "recommended_action": "alert_non_work",
+        "task_category": "debugging",
+        "confidence": 0.91,
+    })
+
+    assessment = classify_work_relevance(
+        job(usage_total_tokens=1200),
+        [message("In relay, rewrite my resume bullet about debugging this route.")],
+        [context()],
+        llm_judge=judge,
+    )
+
+    assert len(judge.calls) == 1
+    assert assessment.decision == "needs_review"
+    assert assessment.recommended_action == "review_conflict"
+    assert assessment.needs_review is True
+    assert assessment.evidence[-1]["kind"] == "llm_unavailable"
+    assert assessment.evidence[-1]["category"] == "invalid_result"
+    assert assessment.evidence[-1]["source"] == "llm_judge"
+
+
+def test_weak_match_with_non_work_and_llm_unavailable_uses_review_conflict_fallback():
+    judge = StubJudge(error=LLMJudgeUnavailable("timeout", "judge timed out"))
+
+    assessment = classify_work_relevance(
+        job(usage_total_tokens=1200),
+        [message("In the gateway repo, rewrite my resume bullet and interview summary.")],
+        [context()],
+        llm_judge=judge,
+    )
+
+    assert len(judge.calls) == 1
+    assert assessment.decision == "needs_review"
+    assert assessment.recommended_action == "review_conflict"
+    assert assessment.needs_review is True
+    assert assessment.evidence[-1]["kind"] == "llm_unavailable"
+    assert assessment.evidence[-1]["category"] == "timeout"
+    assert assessment.evidence[-1]["source"] == "llm_judge"

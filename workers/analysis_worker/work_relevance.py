@@ -1,7 +1,14 @@
+from dataclasses import dataclass
+from typing import Any
+
 from models import ContextCatalogEntry, NormalizedMessage, TraceCapturedJob, WorkRelevanceAssessment
 
 
 ANALYZER_VERSION = "work_relevance_mvp_2026_04_28"
+
+LOW_TOKEN_LIMIT = 2_000
+HIGH_TOKEN_LIMIT = 20_000
+MAX_INTENT_CHARS = 4_000
 
 DECISION_WORK_RELATED = "work_related"
 DECISION_NON_WORK_RELATED = "non_work_related"
@@ -13,6 +20,26 @@ ACTION_ALERT_NON_WORK = "alert_non_work"
 ACTION_REVIEW_HIGH_COST_UNKNOWN = "review_high_cost_unknown"
 ACTION_REVIEW_CONFLICT = "review_conflict"
 ACTION_RECORD_ONLY = "record_only"
+
+VALID_DECISIONS = {
+    DECISION_WORK_RELATED,
+    DECISION_NON_WORK_RELATED,
+    DECISION_NEEDS_REVIEW,
+    DECISION_UNKNOWN,
+}
+VALID_ACTIONS = {
+    ACTION_ALLOW,
+    ACTION_ALERT_NON_WORK,
+    ACTION_REVIEW_HIGH_COST_UNKNOWN,
+    ACTION_REVIEW_CONFLICT,
+    ACTION_RECORD_ONLY,
+}
+VALID_DECISION_ACTIONS = {
+    DECISION_WORK_RELATED: {ACTION_ALLOW},
+    DECISION_NON_WORK_RELATED: {ACTION_ALERT_NON_WORK},
+    DECISION_NEEDS_REVIEW: {ACTION_REVIEW_CONFLICT},
+    DECISION_UNKNOWN: {ACTION_RECORD_ONLY, ACTION_REVIEW_HIGH_COST_UNKNOWN},
+}
 
 UNKNOWN_HIGH_COST_THRESHOLD = 20_000
 
@@ -55,13 +82,34 @@ WORK_CATEGORIES = set(TASK_KEYWORDS)
 NON_WORK_CATEGORIES = set(NON_WORK_KEYWORDS)
 
 
+@dataclass(frozen=True)
+class ExtractedIntent:
+    text: str
+    original_length: int
+    truncated: bool
+
+
+@dataclass(frozen=True)
+class CatalogMatch:
+    context: ContextCatalogEntry
+    matched_terms: list[str]
+    strength: str
+
+
+class InvalidLLMResult(Exception):
+    def __init__(self, error_type: str) -> None:
+        super().__init__(error_type)
+        self.error_type = error_type
+
+
 def classify_work_relevance(
     job: TraceCapturedJob,
     messages: list[NormalizedMessage],
     contexts: list[ContextCatalogEntry],
+    llm_judge=None,
 ) -> WorkRelevanceAssessment:
-    text = _combined_text(messages)
-    if not text:
+    intent = extract_user_intent(messages)
+    if not intent.text:
         score = {
             "work": 0.0,
             "non_work": 0.0,
@@ -92,10 +140,80 @@ def classify_work_relevance(
             score_breakdown=score,
         )
 
-    matched_context, evidence = _context_evidence(text, contexts)
-    evidence.extend(_keyword_evidence(text, TASK_KEYWORDS, "work_task", 0.45))
-    evidence.extend(_keyword_evidence(text, NON_WORK_KEYWORDS, "non_work", 0.8))
-    evidence.extend(_keyword_evidence(text, HIGH_RISK_KEYWORDS, "high_risk", 1.0))
+    strong_matches, weak_matches = _catalog_matches(intent.text, contexts)
+    matched_context, evidence = _context_evidence(intent.text, contexts)
+    evidence.extend(_keyword_evidence(intent.text, TASK_KEYWORDS, "work_task", 0.45))
+    non_work_evidence = _keyword_evidence(intent.text, NON_WORK_KEYWORDS, "non_work", 0.8)
+    risk_evidence = _keyword_evidence(intent.text, HIGH_RISK_KEYWORDS, "high_risk", 1.0)
+    evidence.extend(non_work_evidence)
+    evidence.extend(risk_evidence)
+
+    if (
+        token_tier(job.usage_total_tokens) in {"low", "medium"}
+        and not non_work_evidence
+        and not risk_evidence
+        and strong_matches
+        and any(_match_payload(match)["source"] == "catalog_alias" for match in strong_matches)
+    ):
+        matched = [_match_payload(match) for match in strong_matches]
+        score = {
+            "work": 0.95,
+            "non_work": 0.0,
+            "risk": 0.0,
+            "conflict": 0.0,
+            "uncertainty": 0.05,
+        }
+        return WorkRelevanceAssessment(
+            trace_id=job.trace_id,
+            task_category=_best_category(evidence),
+            work_related_score=0.95,
+            personal_use_score=0.0,
+            confidence=0.95,
+            matched_context=matched,
+            evidence=evidence,
+            needs_review=False,
+            analyzer_version=ANALYZER_VERSION,
+            decision=DECISION_WORK_RELATED,
+            recommended_action=ACTION_ALLOW,
+            score_breakdown=score,
+        )
+
+    llm_reason = _llm_invocation_reason(job, strong_matches, weak_matches, non_work_evidence + risk_evidence)
+    if llm_judge is not None and llm_reason is not None:
+        bundle = _build_llm_bundle(job, intent, strong_matches, weak_matches, non_work_evidence + risk_evidence)
+        try:
+            adapted = _adapt_llm_result(llm_judge.judge(bundle))
+            evidence.append({
+                "kind": "llm_judge",
+                "category": adapted["decision"],
+                "weight": adapted["confidence"],
+                "source": "llm_judge",
+                "snippet": intent.text[:120],
+                "reason": "LLM judge adapted work relevance decision.",
+            })
+            return WorkRelevanceAssessment(
+                trace_id=job.trace_id,
+                task_category=adapted["task_category"],
+                work_related_score=adapted["work_related_score"],
+                personal_use_score=adapted["personal_use_score"],
+                confidence=adapted["confidence"],
+                matched_context=[_match_payload(match) for match in strong_matches + weak_matches],
+                evidence=evidence,
+                needs_review=adapted["needs_review"],
+                analyzer_version=ANALYZER_VERSION,
+                decision=adapted["decision"],
+                recommended_action=adapted["recommended_action"],
+                score_breakdown=adapted["score_breakdown"],
+            )
+        except Exception as exc:
+            error_type = getattr(exc, "error_type", exc.__class__.__name__)
+            return _conservative_llm_fallback(
+                job,
+                messages,
+                contexts,
+                llm_reason,
+                error_type,
+            )
 
     if not evidence:
         evidence.append({
@@ -103,7 +221,7 @@ def classify_work_relevance(
             "category": "no_match",
             "weight": 0.0,
             "source": "fallback",
-            "snippet": text[:120],
+            "snippet": intent.text[:120],
             "reason": "No catalog context or known task category matched.",
         })
 
@@ -131,6 +249,60 @@ def _combined_text(messages: list[NormalizedMessage]) -> str:
     return "\n".join(message.content_text for message in messages if message.content_text).lower()
 
 
+def token_tier(total_tokens: int) -> str:
+    if total_tokens <= LOW_TOKEN_LIMIT:
+        return "low"
+    if total_tokens >= HIGH_TOKEN_LIMIT:
+        return "high"
+    return "medium"
+
+
+def extract_user_intent(messages: list[NormalizedMessage], max_chars: int = MAX_INTENT_CHARS) -> ExtractedIntent:
+    relevant = [
+        message.content_text
+        for message in messages
+        if message.direction == "request"
+        and message.role in {"user", "developer", "system"}
+        and message.content_text
+    ]
+    text = "\n".join(relevant).lower()
+    original_length = len(text)
+    truncated = original_length > max_chars
+    return ExtractedIntent(
+        text=text[:max_chars],
+        original_length=original_length,
+        truncated=truncated,
+    )
+
+
+def _normalized_terms(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for value in values:
+        term = value.strip().lower()
+        if term and term not in seen:
+            seen.add(term)
+            normalized.append(term)
+    return normalized
+
+
+def _catalog_matches(text: str, contexts: list[ContextCatalogEntry]) -> tuple[list[CatalogMatch], list[CatalogMatch]]:
+    strong_matches: list[CatalogMatch] = []
+    weak_matches: list[CatalogMatch] = []
+    for context in contexts:
+        if not context.active:
+            continue
+        strong_terms = _normalized_terms([*context.aliases, context.name])
+        weak_terms = _normalized_terms(context.keywords)
+        matched_strong = [term for term in strong_terms if term in text]
+        matched_weak = [term for term in weak_terms if term in text]
+        if matched_strong:
+            strong_matches.append(CatalogMatch(context=context, matched_terms=matched_strong, strength="strong"))
+        if matched_weak:
+            weak_matches.append(CatalogMatch(context=context, matched_terms=matched_weak, strength="weak"))
+    return strong_matches, weak_matches
+
+
 def _keyword_evidence(text: str, keywords: dict[str, list[str]], kind: str, weight: float) -> list[dict[str, object]]:
     evidence: list[dict[str, object]] = []
     for category, terms in keywords.items():
@@ -149,13 +321,14 @@ def _keyword_evidence(text: str, keywords: dict[str, list[str]], kind: str, weig
 
 
 def _context_evidence(text: str, contexts: list[ContextCatalogEntry]) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    matched_context = _match_contexts(text, contexts)
+    strong_matches, weak_matches = _catalog_matches(text, contexts)
+    matched_context = [_match_payload(match) for match in strong_matches + weak_matches]
     evidence = [
         {
             "kind": "work_context",
             "category": "context_catalog",
-            "weight": 0.9,
-            "source": "context_catalog",
+            "weight": 0.9 if match["strength"] == "strong" else 0.35,
+            "source": match["source"],
             "snippet": ", ".join(match.get("matched_terms", [])),
             "reason": f"Matched active context_catalog entry {match['name']}.",
         }
@@ -231,80 +404,186 @@ def _match_contexts(text: str, contexts: list[ContextCatalogEntry]) -> list[dict
     return matches
 
 
-def classify_work_relevance_with_embeddings(
-    job,
-    messages,
-    contexts,
-    embedding_client,
-    pg_connection,
-) -> WorkRelevanceAssessment:
-    if embedding_client is None:
-        raise TypeError("embedding_client is required for classify_work_relevance_with_embeddings")
-    if pg_connection is None:
-        raise TypeError("pg_connection is required for classify_work_relevance_with_embeddings")
+def _match_payload(match: CatalogMatch) -> dict[str, Any]:
+    alias_terms = set(_normalized_terms(match.context.aliases))
+    name_term = match.context.name.strip().lower()
+    source = "catalog_keyword"
+    if any(term in alias_terms for term in match.matched_terms):
+        source = "catalog_alias"
+    elif name_term in match.matched_terms:
+        source = "catalog_name"
+    return {
+        "type": match.context.context_type,
+        "name": match.context.name,
+        "matched_terms": match.matched_terms,
+        "source": source,
+        "strength": match.strength,
+    }
 
-    text = _combined_text(messages)
-    if not text:
-        return classify_work_relevance(job, messages, contexts)
 
-    trace_embedding = embedding_client.embed(text)
-    embedding_str = "[" + ",".join(str(v) for v in trace_embedding) + "]"
+def _build_llm_bundle(
+    job: TraceCapturedJob,
+    intent: ExtractedIntent,
+    strong_matches: list[CatalogMatch],
+    weak_matches: list[CatalogMatch],
+    non_work_evidence: list[dict[str, object]],
+) -> dict[str, Any]:
+    return {
+        "trace_id": job.trace_id,
+        "token_tier": token_tier(job.usage_total_tokens),
+        "usage_total_tokens": job.usage_total_tokens,
+        "model_requested": job.model_requested,
+        "intent": {
+            "text": intent.text,
+            "truncated": intent.truncated,
+            "original_length": intent.original_length,
+        },
+        "catalog_matches": {
+            "strong": [_match_payload(match) for match in strong_matches],
+            "weak": [_match_payload(match) for match in weak_matches],
+        },
+        "non_work_evidence": non_work_evidence,
+    }
 
-    cursor = pg_connection.cursor()
-    cursor.execute(
-        """
-        SELECT
-            cc.context_type,
-            cc.name,
-            1 - (cc.embedding <=> %s::vector) AS similarity,
-            cc.expected_task_categories,
-            cc.expected_models
-        FROM context_catalog cc
-        WHERE cc.active = true
-          AND cc.embedding IS NOT NULL
-        ORDER BY cc.embedding <=> %s::vector
-        LIMIT 3
-        """,
-        (embedding_str, embedding_str),
-    )
-    matches = cursor.fetchall()
 
-    if matches and matches[0][2] > 0.75:
-        context_type, name, similarity, categories, models = matches[0]
-        category = categories[0] if categories else "unknown"
-        work_score = min(float(similarity), 1.0)
-        score = {
+def _should_call_llm(
+    job: TraceCapturedJob,
+    strong_matches: list[CatalogMatch],
+    weak_matches: list[CatalogMatch],
+    non_work_evidence: list[dict[str, object]],
+) -> bool:
+    return _llm_invocation_reason(job, strong_matches, weak_matches, non_work_evidence) is not None
+
+
+def _llm_invocation_reason(
+    job: TraceCapturedJob,
+    strong_matches: list[CatalogMatch],
+    weak_matches: list[CatalogMatch],
+    non_work_evidence: list[dict[str, object]],
+) -> str | None:
+    if non_work_evidence and (strong_matches or weak_matches):
+        return "mixed_signals"
+    if token_tier(job.usage_total_tokens) == "high" and not strong_matches:
+        return "high_cost_unknown"
+    if token_tier(job.usage_total_tokens) == "medium" and weak_matches:
+        return "medium_weak_signals"
+    return None
+
+
+def _clamp_float(value: Any, lower: float, upper: float) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        numeric = lower
+    return max(lower, min(upper, numeric))
+
+
+def _adapt_llm_result(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise InvalidLLMResult("invalid_result")
+
+    decision = raw.get("decision")
+    action = raw.get("recommended_action")
+    if decision not in VALID_DECISIONS or action not in VALID_ACTIONS:
+        raise InvalidLLMResult("invalid_result")
+    if action not in VALID_DECISION_ACTIONS.get(decision, set()):
+        raise InvalidLLMResult("invalid_result")
+
+    confidence = _clamp_float(raw.get("confidence", 0.7), 0.0, 1.0)
+    work_score = 0.0
+    personal_score = 0.0
+    if decision == DECISION_WORK_RELATED:
+        work_score = max(0.7, confidence)
+    elif decision == DECISION_NON_WORK_RELATED:
+        personal_score = max(0.7, confidence)
+    elif decision == DECISION_NEEDS_REVIEW:
+        work_score = 0.5
+        personal_score = 0.5
+
+    return {
+        "task_category": str(raw.get("task_category") or "unknown"),
+        "decision": decision,
+        "recommended_action": action,
+        "needs_review": action in {
+            ACTION_ALERT_NON_WORK,
+            ACTION_REVIEW_CONFLICT,
+            ACTION_REVIEW_HIGH_COST_UNKNOWN,
+        },
+        "confidence": confidence,
+        "work_related_score": work_score,
+        "personal_use_score": personal_score,
+        "score_breakdown": {
             "work": round(work_score, 3),
-            "non_work": 0.0,
+            "non_work": round(personal_score, 3),
             "risk": 0.0,
-            "conflict": 0.0,
-            "uncertainty": round(max(0.0, 1.0 - work_score), 3),
-        }
-        return WorkRelevanceAssessment(
-            trace_id=job.trace_id,
-            task_category=category,
-            work_related_score=score["work"],
-            personal_use_score=0.0,
-            confidence=score["work"],
-            matched_context=[{
-                "type": context_type,
-                "name": name,
-                "similarity": similarity,
-                "source": "embedding",
-            }],
-            evidence=[{
-                "kind": "work_context",
-                "category": "context_catalog",
-                "weight": score["work"],
-                "source": "embedding",
-                "snippet": name,
-                "reason": f"Semantic match with catalog entry '{name}' (similarity={similarity:.3f}).",
-            }],
-            needs_review=False,
-            analyzer_version=ANALYZER_VERSION + "+emb",
-            decision=DECISION_WORK_RELATED,
-            recommended_action=ACTION_ALLOW,
-            score_breakdown=score,
-        )
+            "conflict": round(min(work_score, personal_score), 3),
+            "uncertainty": round(max(0.0, 1.0 - confidence), 3),
+        },
+    }
 
-    return classify_work_relevance(job, messages, contexts)
+
+def _llm_unavailable_evidence(error_type: str) -> dict[str, object]:
+    return {
+        "kind": "llm_unavailable",
+        "category": error_type,
+        "weight": 0.0,
+        "source": "llm_judge",
+        "snippet": error_type,
+        "reason": f"LLM judge unavailable due to {error_type}.",
+    }
+
+
+def _conservative_llm_fallback(
+    job: TraceCapturedJob,
+    messages: list[NormalizedMessage],
+    contexts: list[ContextCatalogEntry],
+    llm_reason: str,
+    error_type: str,
+) -> WorkRelevanceAssessment:
+    assessment = classify_work_relevance(job, messages, contexts, llm_judge=None)
+    evidence = list(assessment.evidence)
+    evidence.append(_llm_unavailable_evidence(error_type))
+    if llm_reason == "mixed_signals":
+        return WorkRelevanceAssessment(
+            trace_id=assessment.trace_id,
+            task_category=assessment.task_category,
+            work_related_score=assessment.work_related_score,
+            personal_use_score=assessment.personal_use_score,
+            confidence=assessment.confidence,
+            matched_context=assessment.matched_context,
+            evidence=evidence,
+            needs_review=True,
+            analyzer_version=assessment.analyzer_version,
+            decision=DECISION_NEEDS_REVIEW,
+            recommended_action=ACTION_REVIEW_CONFLICT,
+            score_breakdown=assessment.score_breakdown,
+        )
+    if llm_reason == "high_cost_unknown":
+        return WorkRelevanceAssessment(
+            trace_id=assessment.trace_id,
+            task_category=assessment.task_category,
+            work_related_score=assessment.work_related_score,
+            personal_use_score=assessment.personal_use_score,
+            confidence=assessment.confidence,
+            matched_context=assessment.matched_context,
+            evidence=evidence,
+            needs_review=True,
+            analyzer_version=assessment.analyzer_version,
+            decision=DECISION_UNKNOWN,
+            recommended_action=ACTION_REVIEW_HIGH_COST_UNKNOWN,
+            score_breakdown=assessment.score_breakdown,
+        )
+    return WorkRelevanceAssessment(
+        trace_id=assessment.trace_id,
+        task_category=assessment.task_category,
+        work_related_score=assessment.work_related_score,
+        personal_use_score=assessment.personal_use_score,
+        confidence=assessment.confidence,
+        matched_context=assessment.matched_context,
+        evidence=evidence,
+        needs_review=assessment.needs_review,
+        analyzer_version=assessment.analyzer_version,
+        decision=assessment.decision,
+        recommended_action=assessment.recommended_action,
+        score_breakdown=assessment.score_breakdown,
+    )
