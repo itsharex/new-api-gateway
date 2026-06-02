@@ -1,5 +1,4 @@
 import json
-from inspect import signature
 import subprocess
 import sys
 from pathlib import Path
@@ -96,15 +95,66 @@ def test_process_job_line_reads_evidence_normalizes_and_persists(tmp_path: Path)
     assert repo.aggregates[0].response_body_bytes == 256
 
 
-def test_process_job_line_signature_removes_embedding_dependencies():
-    assert list(signature(process_job_line).parameters) == [
-        "line",
-        "evidence_store",
-        "repository",
-        "context_repository",
-        "storage_backend",
-        "llm_judge",
-    ]
+def test_process_job_line_works_without_db_or_embedding_dependencies():
+    class MinimalEvidenceStore:
+        def __init__(self, payloads):
+            self.payloads = payloads
+
+        def read_text(self, ref):
+            return self.payloads[ref]
+
+    class MinimalRepository:
+        def __init__(self):
+            self.messages = []
+            self.results = []
+            self.aggregates = []
+            self.anomalies = []
+            self.coverage_alerts = []
+
+        def save_trace_analysis(self, messages, results, aggregates, anomalies=(), coverage_alerts=()):
+            self.messages.extend(messages)
+            self.results.extend(results)
+            self.aggregates.extend(aggregates)
+            self.anomalies.extend(anomalies)
+            self.coverage_alerts.extend(coverage_alerts)
+
+    request_ref = "file:///raw/2026/04/28/trace_no_deps/request_body.bin"
+    response_ref = "file:///raw/2026/04/28/trace_no_deps/response_body.bin"
+    line = json.dumps({
+        "type": "trace_captured",
+        "trace_id": "trace_no_deps",
+        "route_pattern": "/v1/chat/completions",
+        "protocol_family": "openai_chat",
+        "capture_mode": "raw_and_normalized",
+        "username": "alice",
+        "request_raw_ref": request_ref,
+        "response_raw_ref": response_ref,
+        "model_requested": "gpt-4.1",
+        "usage_total_tokens": 18,
+        "status_code": 200,
+        "upstream_status_code": 200,
+        "request_started_at": "2026-04-28T13:45:22Z",
+    })
+    evidence_store = MinimalEvidenceStore({
+        request_ref: json.dumps({
+            "model": "gpt-4.1",
+            "messages": [{"role": "user", "content": "Debug the new-api gateway route tests"}],
+        }),
+        response_ref: json.dumps({
+            "choices": [{"message": {"role": "assistant", "content": "Check the route registry test."}}],
+            "usage": {"total_tokens": 18},
+        }),
+    })
+    repo = MinimalRepository()
+
+    response = process_job_line(line, evidence_store, repo)
+
+    assert response["worker_status"] == "processed"
+    assert response["work_relevance_count"] == 1
+    assert response["media_assets_extracted"] == 0
+    work_result = next(result for result in repo.results if result.category == "work_relevance")
+    assert work_result.analyzer_version == "work_relevance_mvp_2026_04_28"
+    assert work_result.result["evidence"][0]["source"] == "keyword"
 
 
 def test_process_job_line_reconstructs_sse_response(tmp_path: Path):
