@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 from evidence import FilesystemEvidenceStore
+from llm_judge import LLMJudgeUnavailable
 from main import process_job_line
 from models import AnalysisContext, ContextCatalogEntry
 
@@ -36,6 +37,19 @@ class RecordingContextRepository:
 
     def list_active_contexts(self):
         return self.contexts
+
+
+class StubJudge:
+    def __init__(self, result=None, error=None):
+        self.result = result or {}
+        self.error = error
+        self.calls = []
+
+    def judge(self, bundle):
+        self.calls.append(bundle)
+        if self.error is not None:
+            raise self.error
+        return self.result
 
 
 def test_process_job_line_reads_evidence_normalizes_and_persists(tmp_path: Path):
@@ -244,6 +258,63 @@ def test_process_job_line_persists_work_relevance_result(tmp_path: Path):
     assert work_results[0].result["work_related_score"] >= 0.9
     assert work_results[0].result["decision"] == "work_related"
     assert work_results[0].result["recommended_action"] == "allow"
+
+
+def test_process_job_line_returns_degraded_llm_fallback_metadata(tmp_path: Path):
+    evidence_dir = tmp_path / "raw" / "2026" / "04" / "28" / "trace_conflict"
+    evidence_dir.mkdir(parents=True)
+    (evidence_dir / "request_body.bin").write_text(json.dumps({
+        "model": "gpt-4.1",
+        "messages": [{"role": "user", "content": "In relay, rewrite my resume bullet about debugging this route."}]
+    }), encoding="utf-8")
+    (evidence_dir / "response_body.bin").write_text(json.dumps({
+        "choices": [{"message": {"role": "assistant", "content": "Use a stronger business impact framing."}}],
+        "usage": {"total_tokens": 1200}
+    }), encoding="utf-8")
+    repo = RecordingRepository()
+    contexts = RecordingContextRepository([ContextCatalogEntry(
+        id=1,
+        context_type="repo",
+        name="new-api-gateway",
+        description="Audit gateway",
+        keywords=["new-api", "gateway"],
+        aliases=["relay"],
+        owner="platform",
+        expected_task_categories=["coding", "debugging"],
+        expected_models=["gpt-4.1"],
+        expected_usage_level="normal",
+        active=True,
+    )])
+    judge = StubJudge(error=LLMJudgeUnavailable("timeout", "judge timed out"))
+    line = json.dumps({
+        "type": "trace_captured",
+        "trace_id": "trace_conflict",
+        "route_pattern": "/v1/chat/completions",
+        "protocol_family": "openai_chat",
+        "capture_mode": "raw_and_normalized",
+        "username": "alice",
+        "request_raw_ref": "file:///raw/2026/04/28/trace_conflict/request_body.bin",
+        "response_raw_ref": "file:///raw/2026/04/28/trace_conflict/response_body.bin",
+        "model_requested": "gpt-4.1",
+        "usage_total_tokens": 1200,
+        "status_code": 200,
+        "upstream_status_code": 200,
+        "request_started_at": "2026-04-28T13:45:22Z",
+    })
+
+    response = process_job_line(
+        line,
+        FilesystemEvidenceStore(tmp_path),
+        repo,
+        contexts,
+        llm_judge=judge,
+    )
+
+    assert response["llm_judge_status"] == "degraded"
+    assert response["llm_judge_error_type"] == "timeout"
+    assert response["llm_judge_fallback_count"] == 1
+    work_result = next(result for result in repo.results if result.category == "work_relevance")
+    assert work_result.result["recommended_action"] == "review_conflict"
 
 
 def test_process_job_line_persists_anomaly_and_coverage_alert(tmp_path: Path):
@@ -569,6 +640,67 @@ def test_process_redis_once_records_idle_heartbeat(monkeypatch):
     assert FakeHeartbeatRepository.calls[0]["status"] == "idle"
     assert FakeHeartbeatRepository.calls[0]["queue_name"] == "analysis_jobs"
     assert FakeHeartbeatRepository.calls[0]["metadata"] == {"poll_result": "idle"}
+
+
+def test_process_redis_once_records_degraded_llm_metadata_in_heartbeat(monkeypatch):
+    from main import process_redis_once
+
+    class FakeRedisClient:
+        def blpop(self, list_name, timeout):
+            return (list_name, "{\"trace_id\":\"trace-conflict\"}")
+
+    class FakeRedisModule:
+        @staticmethod
+        def from_url(url, decode_responses):
+            return FakeRedisClient()
+
+    class FakeHeartbeatRepository:
+        calls = []
+
+        def __init__(self, connection):
+            self.connection = connection
+
+        def record(self, **kwargs):
+            self.calls.append(kwargs)
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_process_job_line(*args, **kwargs):
+        return {
+            "accepted_trace_id": "trace-conflict",
+            "worker_status": "processed",
+            "llm_judge_status": "degraded",
+            "llm_judge_error_type": "timeout",
+            "llm_judge_fallback_count": 1,
+        }
+
+    monkeypatch.setattr("main.redis.Redis", FakeRedisModule)
+    monkeypatch.setattr("main.HeartbeatRepository", FakeHeartbeatRepository)
+    monkeypatch.setattr("main.process_job_line", fake_process_job_line)
+    monkeypatch.setenv("ANALYSIS_WORKER_ID", "worker-test")
+
+    exit_code = process_redis_once(
+        "redis://localhost:6379/0",
+        "analysis_jobs",
+        FilesystemEvidenceStore("/tmp/evidence-unused"),
+        "postgres://unused",
+        1,
+        connection_factory=lambda dsn: FakeConnection(),
+    )
+
+    assert exit_code == 0
+    assert FakeHeartbeatRepository.calls[0]["status"] == "processed"
+    assert FakeHeartbeatRepository.calls[0]["metadata"] == {
+        "trace_id": "trace-conflict",
+        "llm_judge_status": "degraded",
+        "llm_judge_error_type": "timeout",
+        "llm_judge_fallback_count": 1,
+    }
 
 
 def test_process_redis_once_records_error_heartbeat_without_exception_message(monkeypatch):
