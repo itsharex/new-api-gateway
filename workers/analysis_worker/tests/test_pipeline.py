@@ -4,8 +4,9 @@ import sys
 from pathlib import Path
 
 from evidence import FilesystemEvidenceStore
+from llm_judge import LLMJudgeClient
 from llm_judge import LLMJudgeUnavailable
-from main import llm_judge_metadata, process_job_line
+from main import create_llm_judge_from_env, llm_judge_metadata, process_job_line
 from models import AnalysisContext, ContextCatalogEntry
 
 
@@ -341,6 +342,37 @@ def test_llm_judge_metadata_reads_kind_and_category_contract():
         "llm_judge_error_type": "timeout",
         "llm_judge_fallback_count": 1,
     }
+
+
+def test_create_llm_judge_from_env_returns_none_when_required_env_missing(monkeypatch):
+    monkeypatch.delenv("LLM_JUDGE_BASE_URL", raising=False)
+    monkeypatch.delenv("LLM_JUDGE_MODEL", raising=False)
+    monkeypatch.delenv("LLM_JUDGE_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_JUDGE_TIMEOUT_SECONDS", raising=False)
+
+    assert create_llm_judge_from_env() is None
+
+    monkeypatch.setenv("LLM_JUDGE_BASE_URL", "https://judge.example.com")
+    assert create_llm_judge_from_env() is None
+
+    monkeypatch.delenv("LLM_JUDGE_BASE_URL", raising=False)
+    monkeypatch.setenv("LLM_JUDGE_MODEL", "judge-model")
+    assert create_llm_judge_from_env() is None
+
+
+def test_create_llm_judge_from_env_builds_expected_client(monkeypatch):
+    monkeypatch.setenv("LLM_JUDGE_BASE_URL", "https://judge.example.com/")
+    monkeypatch.setenv("LLM_JUDGE_MODEL", "judge-model")
+    monkeypatch.setenv("LLM_JUDGE_API_KEY", "secret-key")
+    monkeypatch.setenv("LLM_JUDGE_TIMEOUT_SECONDS", "12.5")
+
+    client = create_llm_judge_from_env()
+
+    assert isinstance(client, LLMJudgeClient)
+    assert client.base_url == "https://judge.example.com"
+    assert client.model == "judge-model"
+    assert client.api_key == "secret-key"
+    assert client.timeout_seconds == 12.5
 
 
 def test_process_job_line_persists_anomaly_and_coverage_alert(tmp_path: Path):
@@ -729,6 +761,80 @@ def test_process_redis_once_records_degraded_llm_metadata_in_heartbeat(monkeypat
     }
 
 
+def test_process_redis_loop_records_degraded_llm_metadata_in_heartbeat(monkeypatch):
+    from main import process_redis_loop
+
+    handlers = {}
+
+    class FakeRedisClient:
+        def __init__(self):
+            self.calls = 0
+
+        def blpop(self, list_name, timeout):
+            self.calls += 1
+            if self.calls == 1:
+                return (list_name, "{\"trace_id\":\"trace-conflict\"}")
+            handlers["SIGTERM"](None, None)
+            return None
+
+    class FakeRedisModule:
+        @staticmethod
+        def from_url(url, decode_responses):
+            return FakeRedisClient()
+
+    class FakeHeartbeatRepository:
+        calls = []
+
+        def __init__(self, connection):
+            self.connection = connection
+
+        def record(self, **kwargs):
+            self.calls.append(kwargs)
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_signal(sig, handler):
+        handlers[sig.name] = handler
+
+    def fake_process_job_line(*args, **kwargs):
+        return {
+            "accepted_trace_id": "trace-conflict",
+            "worker_status": "processed",
+            "llm_judge_status": "degraded",
+            "llm_judge_error_type": "timeout",
+            "llm_judge_fallback_count": 1,
+        }
+
+    monkeypatch.setattr("main.redis.Redis", FakeRedisModule)
+    monkeypatch.setattr("main.HeartbeatRepository", FakeHeartbeatRepository)
+    monkeypatch.setattr("main.psycopg.connect", lambda dsn: FakeConnection())
+    monkeypatch.setattr("main.process_job_line", fake_process_job_line)
+    monkeypatch.setattr("main.signal.signal", fake_signal)
+    monkeypatch.setenv("ANALYSIS_WORKER_ID", "worker-test")
+
+    exit_code = process_redis_loop(
+        "redis://localhost:6379/0",
+        "analysis_jobs",
+        FilesystemEvidenceStore("/tmp/evidence-unused"),
+        "postgres://unused",
+        1,
+    )
+
+    assert exit_code == 0
+    assert FakeHeartbeatRepository.calls[0]["status"] == "processed"
+    assert FakeHeartbeatRepository.calls[0]["metadata"] == {
+        "trace_id": "trace-conflict",
+        "llm_judge_status": "degraded",
+        "llm_judge_error_type": "timeout",
+        "llm_judge_fallback_count": 1,
+    }
+
+
 def test_process_redis_once_records_error_heartbeat_without_exception_message(monkeypatch):
     from main import process_redis_once
 
@@ -845,3 +951,89 @@ def test_process_redis_once_preserves_job_error_when_error_heartbeat_fails(monke
         raise AssertionError("expected ValueError")
 
     assert connection.events == ["rollback", "record"]
+
+
+def test_main_passes_created_llm_judge_to_process_redis_once(monkeypatch):
+    from main import main
+
+    sentinel_judge = object()
+    calls = {}
+
+    class FakeArgs:
+        offline_batch = False
+        redis_once = True
+        redis_url = "redis://localhost:6379/0"
+        redis_list = "analysis_jobs"
+        redis_timeout_seconds = 7
+        postgres_dsn = "postgres://db"
+
+    monkeypatch.setattr("main.argparse.ArgumentParser.parse_args", lambda self: FakeArgs())
+    monkeypatch.setattr("main.create_evidence_store", lambda: "evidence-store")
+    monkeypatch.setattr("main.create_llm_judge_from_env", lambda: sentinel_judge)
+    monkeypatch.setattr("main.process_contract_stdin", lambda: (_ for _ in ()).throw(AssertionError("unexpected contract mode")))
+
+    def fake_process_redis_once(redis_url, redis_list, evidence_store, postgres_dsn, timeout_seconds, **kwargs):
+        calls.update({
+            "redis_url": redis_url,
+            "redis_list": redis_list,
+            "evidence_store": evidence_store,
+            "postgres_dsn": postgres_dsn,
+            "timeout_seconds": timeout_seconds,
+            "llm_judge": kwargs["llm_judge"],
+        })
+        return 0
+
+    monkeypatch.setattr("main.process_redis_once", fake_process_redis_once)
+    monkeypatch.setenv("EVIDENCE_STORAGE_BACKEND", "filesystem")
+    monkeypatch.setenv("EVIDENCE_STORAGE_DIR", "/tmp/evidence-unused")
+
+    assert main() == 0
+    assert calls["llm_judge"] is sentinel_judge
+    assert calls["redis_url"] == "redis://localhost:6379/0"
+    assert calls["redis_list"] == "analysis_jobs"
+    assert calls["evidence_store"] == "evidence-store"
+    assert calls["postgres_dsn"] == "postgres://db"
+    assert calls["timeout_seconds"] == 7
+
+
+def test_main_passes_created_llm_judge_to_process_redis_loop(monkeypatch):
+    from main import main
+
+    sentinel_judge = object()
+    calls = {}
+
+    class FakeArgs:
+        offline_batch = False
+        redis_once = False
+        redis_url = "redis://localhost:6379/0"
+        redis_list = "analysis_jobs"
+        redis_timeout_seconds = 9
+        postgres_dsn = "postgres://db"
+
+    monkeypatch.setattr("main.argparse.ArgumentParser.parse_args", lambda self: FakeArgs())
+    monkeypatch.setattr("main.create_evidence_store", lambda: "evidence-store")
+    monkeypatch.setattr("main.create_llm_judge_from_env", lambda: sentinel_judge)
+    monkeypatch.setattr("main.process_contract_stdin", lambda: (_ for _ in ()).throw(AssertionError("unexpected contract mode")))
+
+    def fake_process_redis_loop(redis_url, redis_list, evidence_store, postgres_dsn, timeout_seconds, **kwargs):
+        calls.update({
+            "redis_url": redis_url,
+            "redis_list": redis_list,
+            "evidence_store": evidence_store,
+            "postgres_dsn": postgres_dsn,
+            "timeout_seconds": timeout_seconds,
+            "llm_judge": kwargs["llm_judge"],
+        })
+        return 0
+
+    monkeypatch.setattr("main.process_redis_loop", fake_process_redis_loop)
+    monkeypatch.setenv("EVIDENCE_STORAGE_BACKEND", "filesystem")
+    monkeypatch.setenv("EVIDENCE_STORAGE_DIR", "/tmp/evidence-unused")
+
+    assert main() == 0
+    assert calls["llm_judge"] is sentinel_judge
+    assert calls["redis_url"] == "redis://localhost:6379/0"
+    assert calls["redis_list"] == "analysis_jobs"
+    assert calls["evidence_store"] == "evidence-store"
+    assert calls["postgres_dsn"] == "postgres://db"
+    assert calls["timeout_seconds"] == 9
