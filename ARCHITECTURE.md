@@ -216,6 +216,8 @@ Worker 使用 `context_catalog` 的 aliases/keywords、独立 non-work 规则和
 
 LLM judge 只处理工作相关性 assessment，不直接生成 `AnomalyAlert`。异常落库仍由 `rules.py` 中的 `detect_anomalies()` 与 `detect_work_relevance_anomalies()` 统一完成。
 
+默认 Docker Compose 尚未透传 `LLM_JUDGE_*` 到 `analysis-worker` / `analysis-batch` 容器；如需在容器部署中启用外部 judge，需要额外的 compose override 或手动运行 worker。
+
 ## 数据库 Schema
 
 14 个迁移文件，按编号顺序应用：
@@ -256,7 +258,7 @@ docker compose -f deploy/docker-compose.yml --env-file .env.local --profile tool
 docker compose -f deploy/docker-compose.yml --env-file .env.local up -d     # 启动核心服务
 
 # 本地开发
-make dev -d        # 启动依赖服务
+make dev           # 启动整套本地 compose 栈（ARM Mac 自动叠加 override）
 make test          # Go 单元测试
 make run           # 启动网关
 make tidy          # go mod tidy

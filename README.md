@@ -215,6 +215,8 @@ NEW_API_POSTGRES_DSN=postgres://root:123456@192.168.1.100:5432/new-api?sslmode=d
 | `LLM_JUDGE_API_KEY` | 可选 API key |
 | `LLM_JUDGE_TIMEOUT_SECONDS` | 可选超时时间，默认 20 秒 |
 
+启用时至少需要同时设置 `LLM_JUDGE_BASE_URL` 和 `LLM_JUDGE_MODEL`。当前默认 Docker Compose **不会**把这些变量透传到 `analysis-worker` / `analysis-batch` 容器；如需在容器内启用 judge，请自行添加 compose override。手动运行 Python worker 时可直接读取这些环境变量。
+
 LLM 不直接写入异常表；它只生成 `work_relevance` analysis result，现有 `rules.py` 继续统一转换 `usage_anomalies`。
 
 OSS 后端额外变量（`EVIDENCE_STORAGE_BACKEND=oss` 时必需）：`OSS_ENDPOINT`、`OSS_BUCKET`、`OSS_ACCESS_KEY_ID`、`OSS_ACCESS_KEY_SECRET`。
@@ -231,8 +233,9 @@ bash start.sh
 或手动启动：
 
 ```bash
-# 启动依赖服务
-make dev -d
+# 仅启动依赖基础设施
+docker compose -f deploy/docker-compose.yml --env-file .env.local up -d postgres redis
+# ARM Mac 追加: -f deploy/docker-compose.arm.yml
 
 # 首次部署运行迁移
 docker compose -f deploy/docker-compose.yml --env-file .env.local --profile tools run --rm migrate
@@ -246,7 +249,7 @@ uv sync
 uv run python main.py
 ```
 
-`make dev` 会自动检测平台：ARM Mac 会叠加 `docker-compose.arm.yml`。
+`make dev` 会启动整套本地 Compose 栈；ARM Mac 会自动叠加 `docker-compose.arm.yml`。
 
 本地开发环境变量参考 `.env.example`。
 
