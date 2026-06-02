@@ -1,4 +1,5 @@
 import json
+from inspect import signature
 import subprocess
 import sys
 from pathlib import Path
@@ -36,30 +37,6 @@ class RecordingContextRepository:
 
     def list_active_contexts(self):
         return self.contexts
-
-
-class MockEmbeddingClient:
-    def embed(self, text):
-        return [0.0] * 384
-
-
-class MockCursor:
-    def __init__(self, rows=None):
-        self._rows = rows or []
-
-    def execute(self, query, params=None):
-        pass
-
-    def fetchall(self):
-        return self._rows
-
-
-class MockConnection:
-    def __init__(self, cursor=None):
-        self._cursor = cursor or MockCursor()
-
-    def cursor(self):
-        return self._cursor
 
 
 def test_process_job_line_reads_evidence_normalizes_and_persists(tmp_path: Path):
@@ -101,8 +78,7 @@ def test_process_job_line_reads_evidence_normalizes_and_persists(tmp_path: Path)
         "response_body_size": 256
     })
 
-    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo,
-                                embedding_client=MockEmbeddingClient(), pg_connection=MockConnection())
+    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo)
 
     assert response["accepted_trace_id"] == "trace_1"
     assert response["normalized_message_count"] == 2
@@ -118,6 +94,17 @@ def test_process_job_line_reads_evidence_normalizes_and_persists(tmp_path: Path)
     assert repo.aggregates[0].total_tokens == 18
     assert repo.aggregates[0].request_body_bytes == 128
     assert repo.aggregates[0].response_body_bytes == 256
+
+
+def test_process_job_line_signature_removes_embedding_dependencies():
+    assert list(signature(process_job_line).parameters) == [
+        "line",
+        "evidence_store",
+        "repository",
+        "context_repository",
+        "storage_backend",
+        "llm_judge",
+    ]
 
 
 def test_process_job_line_reconstructs_sse_response(tmp_path: Path):
@@ -151,8 +138,7 @@ def test_process_job_line_reconstructs_sse_response(tmp_path: Path):
         "request_started_at": "2026-04-28T13:45:22Z",
     })
 
-    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo,
-                                embedding_client=MockEmbeddingClient(), pg_connection=MockConnection())
+    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo)
 
     assert response["normalized_message_count"] == 2
     assert any(message.direction == "response" and message.content_text == "hello world" for message in repo.messages)
@@ -199,8 +185,7 @@ def test_process_job_line_persists_work_relevance_result(tmp_path: Path):
         "request_started_at": "2026-04-28T13:45:22Z",
     })
 
-    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo, contexts,
-                                embedding_client=MockEmbeddingClient(), pg_connection=MockConnection())
+    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo, contexts)
 
     assert response["work_relevance_count"] == 1
     work_results = [result for result in repo.results if result.category == "work_relevance"]
@@ -242,8 +227,7 @@ def test_process_job_line_persists_anomaly_and_coverage_alert(tmp_path: Path):
         "response_body_size": 2
     })
 
-    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo,
-                                embedding_client=MockEmbeddingClient(), pg_connection=MockConnection())
+    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo)
 
     assert response["worker_status"] == "processed"
     assert response["work_relevance_count"] == 1
@@ -289,8 +273,7 @@ def test_process_job_line_uses_repository_analysis_context(tmp_path: Path):
         "request_started_at": "2026-04-28T13:45:22Z",
     })
 
-    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo,
-                                embedding_client=MockEmbeddingClient(), pg_connection=MockConnection())
+    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo)
 
     assert repo.context_requests == ["trace_context"]
     assert response["anomaly_count"] == 2
@@ -325,8 +308,7 @@ def test_process_job_line_handles_malformed_timestamp_with_fallback_anomaly_wind
         "request_started_at": "not-a-timestamp",
     })
 
-    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo,
-                                embedding_client=MockEmbeddingClient(), pg_connection=MockConnection())
+    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo)
 
     assert response["worker_status"] == "processed"
     assert [aggregate.bucket_start for aggregate in repo.aggregates] == [
@@ -370,8 +352,7 @@ def test_process_job_line_detects_non_work_personal_use_high_cost(tmp_path: Path
         "request_started_at": "2026-04-28T13:45:22Z",
     })
 
-    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo, RecordingContextRepository(),
-                                embedding_client=MockEmbeddingClient(), pg_connection=MockConnection())
+    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo, RecordingContextRepository())
 
     assert response["anomaly_count"] == 4
     assert [alert.anomaly_type for alert in repo.anomalies] == [
@@ -411,8 +392,7 @@ def test_process_job_line_persists_low_token_non_work_alert(tmp_path: Path):
         "request_started_at": "2026-04-28T02:45:22Z",
     })
 
-    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo, RecordingContextRepository(),
-                                embedding_client=MockEmbeddingClient(), pg_connection=MockConnection())
+    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo, RecordingContextRepository())
 
     assert response["anomaly_count"] == 1
     work_results = [r for r in repo.results if r.category == "work_relevance"]
@@ -657,89 +637,3 @@ def test_process_redis_once_preserves_job_error_when_error_heartbeat_fails(monke
         raise AssertionError("expected ValueError")
 
     assert connection.events == ["rollback", "record"]
-
-
-def test_process_job_line_uses_embedding_match_when_similarity_above_threshold(tmp_path: Path):
-    evidence_dir = tmp_path / "raw" / "2026" / "04" / "28" / "trace_emb"
-    evidence_dir.mkdir(parents=True)
-    (evidence_dir / "request_body.bin").write_text(json.dumps({
-        "model": "gpt-4.1",
-        "messages": [{"role": "user", "content": "Debug the payment processing module"}]
-    }), encoding="utf-8")
-    (evidence_dir / "response_body.bin").write_text(json.dumps({
-        "choices": [{"message": {"role": "assistant", "content": "Check the payment module."}}],
-        "usage": {"total_tokens": 50}
-    }), encoding="utf-8")
-    repo = RecordingRepository()
-    mock_cursor = MockCursor(rows=[
-        ("repo", "payment-service", 0.92, ["coding", "debugging"], ["gpt-4.1"]),
-    ])
-    mock_conn = MockConnection(cursor=mock_cursor)
-    line = json.dumps({
-        "type": "trace_captured",
-        "trace_id": "trace_emb",
-        "route_pattern": "/v1/chat/completions",
-        "protocol_family": "openai_chat",
-        "capture_mode": "raw_and_normalized",
-        "username": "alice",
-        "request_raw_ref": "file:///raw/2026/04/28/trace_emb/request_body.bin",
-        "response_raw_ref": "file:///raw/2026/04/28/trace_emb/response_body.bin",
-        "model_requested": "gpt-4.1",
-        "usage_total_tokens": 50,
-        "status_code": 200,
-        "upstream_status_code": 200,
-        "request_started_at": "2026-04-28T13:45:22Z",
-    })
-
-    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo,
-                                embedding_client=MockEmbeddingClient(), pg_connection=mock_conn)
-
-    assert response["worker_status"] == "processed"
-    work_results = [r for r in repo.results if r.category == "work_relevance"]
-    assert len(work_results) == 1
-    assert work_results[0].result["work_related_score"] == 0.92
-    assert any(
-        evidence.get("source") == "embedding" and "Semantic match" in evidence.get("reason", "")
-        for evidence in work_results[0].result["evidence"]
-    )
-
-
-def test_process_job_line_falls_back_to_keyword_when_embedding_no_match(tmp_path: Path):
-    evidence_dir = tmp_path / "raw" / "2026" / "04" / "28" / "trace_nomatch"
-    evidence_dir.mkdir(parents=True)
-    (evidence_dir / "request_body.bin").write_text(json.dumps({
-        "model": "gpt-4.1",
-        "messages": [{"role": "user", "content": "Random unrelated query"}]
-    }), encoding="utf-8")
-    (evidence_dir / "response_body.bin").write_text(json.dumps({
-        "choices": [{"message": {"role": "assistant", "content": "Response."}}],
-        "usage": {"total_tokens": 20}
-    }), encoding="utf-8")
-    repo = RecordingRepository()
-    mock_cursor = MockCursor(rows=[
-        ("repo", "some-service", 0.4, ["coding"], ["gpt-4.1"]),
-    ])
-    mock_conn = MockConnection(cursor=mock_cursor)
-    line = json.dumps({
-        "type": "trace_captured",
-        "trace_id": "trace_nomatch",
-        "route_pattern": "/v1/chat/completions",
-        "protocol_family": "openai_chat",
-        "capture_mode": "raw_and_normalized",
-        "username": "alice",
-        "request_raw_ref": "file:///raw/2026/04/28/trace_nomatch/request_body.bin",
-        "response_raw_ref": "file:///raw/2026/04/28/trace_nomatch/response_body.bin",
-        "model_requested": "gpt-4.1",
-        "usage_total_tokens": 20,
-        "status_code": 200,
-        "upstream_status_code": 200,
-        "request_started_at": "2026-04-28T13:45:22Z",
-    })
-
-    response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo,
-                                embedding_client=MockEmbeddingClient(), pg_connection=mock_conn)
-
-    assert response["worker_status"] == "processed"
-    work_results = [r for r in repo.results if r.category == "work_relevance"]
-    assert len(work_results) == 1
-    assert work_results[0].result["work_related_score"] < 0.75
