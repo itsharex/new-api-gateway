@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping
 
 import httpx
 
@@ -32,7 +32,7 @@ class LLMJudgeClient:
         self.timeout_seconds = timeout_seconds
         self.max_tokens = max_tokens
 
-    def judge(self, bundle: Any) -> dict[str, Any]:
+    def judge(self, bundle: Mapping[str, Any]) -> dict[str, Any]:
         payload = {
             "model": self.model,
             "temperature": 0,
@@ -100,13 +100,15 @@ class LLMJudgeClient:
         try:
             parsed = json.loads(body)
         except json.JSONDecodeError as exc:
-            snippet = body[:120]
             raise LLMJudgeUnavailable(
                 "invalid_json",
-                f"LLM judge returned invalid JSON: {exc.msg}; content={snippet!r}",
+                f"LLM judge returned invalid JSON: {exc.msg}; content_length={len(body)}",
             ) from exc
         if not isinstance(parsed, dict):
-            raise LLMJudgeUnavailable("invalid_json", "LLM judge response must be a JSON object")
+            raise LLMJudgeUnavailable(
+                "invalid_json",
+                f"LLM judge response must be a JSON object; content_length={len(body)}",
+            )
         return parsed
 
     def _unwrap_json_fence(self, content: str) -> str:

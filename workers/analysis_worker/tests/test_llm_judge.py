@@ -122,4 +122,84 @@ def test_raises_unavailable_on_invalid_json(monkeypatch):
         client.judge({"trace_id": "trace_invalid_json"})
 
     assert exc_info.value.error_type == "invalid_json"
-    assert "not json" in exc_info.value.message
+    assert "not json" not in exc_info.value.message
+    assert "content_length=" in exc_info.value.message
+
+
+def test_raises_unavailable_on_http_status_error(monkeypatch):
+    request = httpx.Request("POST", "https://judge.example.com/chat/completions")
+    response = httpx.Response(503, request=request)
+
+    def fake_post(*args, **kwargs):
+        raise httpx.HTTPStatusError("service unavailable", request=request, response=response)
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    client = LLMJudgeClient(base_url="https://judge.example.com", model="judge-model")
+
+    with pytest.raises(LLMJudgeUnavailable) as exc_info:
+        client.judge({"trace_id": "trace_http_error"})
+
+    assert exc_info.value.error_type == "http_error"
+    assert "service unavailable" in exc_info.value.message
+
+
+def test_raises_unavailable_on_connection_error(monkeypatch):
+    request = httpx.Request("POST", "https://judge.example.com/chat/completions")
+
+    def fake_post(*args, **kwargs):
+        raise httpx.ConnectError("connection refused", request=request)
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    client = LLMJudgeClient(base_url="https://judge.example.com", model="judge-model")
+
+    with pytest.raises(LLMJudgeUnavailable) as exc_info:
+        client.judge({"trace_id": "trace_connection_error"})
+
+    assert exc_info.value.error_type == "connection_error"
+    assert "connection refused" in exc_info.value.message
+
+
+def test_raises_unavailable_on_invalid_response_shape(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"unexpected": []}
+
+    monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: FakeResponse())
+
+    client = LLMJudgeClient(base_url="https://judge.example.com", model="judge-model")
+
+    with pytest.raises(LLMJudgeUnavailable) as exc_info:
+        client.judge({"trace_id": "trace_invalid_shape"})
+
+    assert exc_info.value.error_type == "invalid_response"
+
+
+def test_rejects_legal_json_content_that_is_not_an_object(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "[\"not\", \"object\"]",
+                        }
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: FakeResponse())
+
+    client = LLMJudgeClient(base_url="https://judge.example.com", model="judge-model")
+
+    with pytest.raises(LLMJudgeUnavailable) as exc_info:
+        client.judge({"trace_id": "trace_non_object_json"})
+
+    assert exc_info.value.error_type == "invalid_json"
