@@ -258,14 +258,20 @@ func (h Handler) requireCSRF(next http.Handler) http.Handler {
 }
 
 func (h Handler) listTraces(w http.ResponseWriter, r *http.Request) {
+	page := 1
+	if rawPage := strings.TrimSpace(r.URL.Query().Get("page")); rawPage != "" {
+		if parsed, err := strconv.Atoi(rawPage); err == nil && parsed > 0 {
+			page = parsed
+		}
+	}
 	filter := TraceFilter{
 		TraceID:          r.URL.Query().Get("trace_id"),
 		Username:         r.URL.Query().Get("username"),
 		TokenFingerprint: r.URL.Query().Get("token_fingerprint"),
 		RoutePattern:     r.URL.Query().Get("route_pattern"),
 		Model:            r.URL.Query().Get("model"),
-		Page:             intQueryOrDefault(r, "page", 1),
-		Limit:            intQueryOrDefault(r, "limit", 100),
+		Page:             page,
+		Limit:            50,
 	}
 	items, err := h.repo.ListTraces(r.Context(), filter)
 	if err != nil {
@@ -273,18 +279,6 @@ func (h Handler) listTraces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, items)
-}
-
-func intQueryOrDefault(r *http.Request, key string, fallback int) int {
-	value := strings.TrimSpace(r.URL.Query().Get(key))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed < 1 {
-		return fallback
-	}
-	return parsed
 }
 
 func (h Handler) overview(w http.ResponseWriter, r *http.Request) {

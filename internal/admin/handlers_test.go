@@ -696,7 +696,7 @@ func TestListTracesReturnsTopLevelPagination(t *testing.T) {
 	}
 	db.traceTotalItems = int64(len(db.traceList))
 
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/traces?page=2&limit=1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/traces?page=2", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 
@@ -709,16 +709,16 @@ func TestListTracesReturnsTopLevelPagination(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode body: %v; raw=%s", err, rec.Body.String())
 	}
-	if len(body.Traces) != 1 || body.Traces[0].TraceID != "trace_002" || !body.Traces[0].NeedsReview {
+	if len(body.Traces) != 2 || body.Traces[1].TraceID != "trace_002" || !body.Traces[1].NeedsReview {
 		t.Fatalf("traces = %#v", body.Traces)
 	}
-	if body.Pagination.Page != 2 || body.Pagination.PageSize != 1 {
+	if body.Pagination.Page != 1 || body.Pagination.PageSize != 50 {
 		t.Fatalf("pagination page = %#v", body.Pagination)
 	}
-	if body.Pagination.TotalItems != 2 || body.Pagination.TotalPages != 2 {
+	if body.Pagination.TotalItems != 2 || body.Pagination.TotalPages != 1 {
 		t.Fatalf("pagination totals = %#v", body.Pagination)
 	}
-	if !body.Pagination.HasPrev || body.Pagination.HasNext {
+	if body.Pagination.HasPrev || body.Pagination.HasNext {
 		t.Fatalf("pagination nav flags = %#v", body.Pagination)
 	}
 }
@@ -746,7 +746,7 @@ func TestListTracesInvalidPageFallsBackToFirstPage(t *testing.T) {
 	}
 	db.traceTotalItems = int64(len(db.traceList))
 
-	req := httptest.NewRequest(http.MethodGet, "/admin/api/traces?page=bogus&limit=1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/traces?page=bogus", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 
@@ -759,8 +759,8 @@ func TestListTracesInvalidPageFallsBackToFirstPage(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode body: %v; raw=%s", err, rec.Body.String())
 	}
-	if body.Pagination.Page != 1 || body.Pagination.PageSize != 1 {
-		t.Fatalf("pagination = %#v, want page 1 size 1", body.Pagination)
+	if body.Pagination.Page != 1 || body.Pagination.PageSize != 50 {
+		t.Fatalf("pagination = %#v, want page 1 size 50", body.Pagination)
 	}
 	if len(body.Traces) != 1 || body.Traces[0].TraceID != "trace_001" {
 		t.Fatalf("traces = %#v", body.Traces)
