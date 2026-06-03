@@ -26,7 +26,9 @@ HAVING COUNT(*) >= 3
 QUERY_TRACE_LEVEL = """
 SELECT
     token_fingerprint AS fingerprint_key,
-    PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY usage_total_tokens) AS p95_total,
+    PERCENTILE_CONT(0.95) WITHIN GROUP (
+        ORDER BY GREATEST(usage_prompt_tokens - usage_cached_tokens, 0) + usage_completion_tokens
+    ) AS p95_effective,
     PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY usage_completion_tokens) AS p95_completion
 FROM traces
 WHERE request_started_at >= (now() - (%s || ' days')::interval)
@@ -67,8 +69,8 @@ def compute_trace_level_baselines(rows: list[dict]) -> list[BaselineRow]:
         result.append(
             BaselineRow(
                 fingerprint_key=row["fingerprint_key"],
-                metric_type="trace_tokens_p95",
-                metric_value=float(row["p95_total"]),
+                metric_type="trace_effective_tokens_p95",
+                metric_value=float(row["p95_effective"]),
                 metadata_json={},
             )
         )

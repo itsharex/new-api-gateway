@@ -186,27 +186,22 @@ def test_work_relevance_assessment_serializes_v2_decision_fields():
     assert result.result["evidence"][0]["category"] == "job_search"
 
 
-def test_analysis_context_accepts_baseline_fields():
+def test_analysis_context_accepts_surviving_cost_fields():
     ctx = AnalysisContext(
-        hourly_tokens_baseline=5000.0,
-        hourly_tokens_mad=1200.0,
-        short_window_baseline=800.0,
-        short_window_mad=200.0,
-        trace_tokens_p95=15000.0,
+        trace_effective_tokens_p95=15000.0,
         completion_tokens_p95=6000.0,
-        off_hours_baseline=1000.0,
-        off_hours_mad=300.0,
-        model_baselines={"o1-pro": 400.0, "gpt-4.5-preview": 350.0},
         baseline_computed_at="2026-05-18T12:00:00+00:00",
     )
-    assert ctx.hourly_tokens_baseline == 5000.0
-    assert ctx.model_baselines["o1-pro"] == 400.0
+    assert ctx.trace_effective_tokens_p95 == 15000.0
+    assert ctx.completion_tokens_p95 == 6000.0
     assert ctx.baseline_computed_at is not None
 
 
-def test_analysis_context_defaults_baseline_fields_to_none():
+def test_analysis_context_defaults_only_keep_surviving_cost_fields():
     ctx = AnalysisContext()
-    assert ctx.hourly_tokens_baseline is None
-    assert ctx.trace_tokens_p95 is None
-    assert ctx.model_baselines is None
+
+    assert ctx.trace_effective_tokens_p95 is None
+    assert ctx.completion_tokens_p95 is None
+    assert ctx.long_output_token_threshold == 16_000
+    assert ctx.off_hours_token_threshold == 20_000
     assert ctx.baseline_computed_at is None

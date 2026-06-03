@@ -250,138 +250,32 @@ def test_repository_inserts_messages_results_aggregates_anomalies_and_coverage()
     assert len(analysis_queries) == 2
 
 
-def test_repository_loads_analysis_context_from_aggregates_and_recent_trace_hashes():
-    conn = FakeConnection(fetch_values=[(90000,), (7000,), (3,)])
+def test_analysis_context_maps_trace_effective_tokens_p95_from_baseline_cache():
+    computed = datetime.now(timezone.utc)
+    conn = FakeConnection(
+        fetchall_rows=[[
+            ("trace_effective_tokens_p95", 22000.0, {}, computed),
+            ("completion_tokens_p95", 9000.0, {}, computed),
+        ]],
+    )
     repo = PostgresAnalysisRepository(conn)
-    job = TraceCapturedJob(
+    context = repo.analysis_context_for(TraceCapturedJob(
         type="trace_captured",
         trace_id="trace_1",
         route_pattern="/v1/chat/completions",
         protocol_family="openai_chat",
         capture_mode="raw_and_normalized",
         username="alice",
-        token_fingerprint="tkfp_raw",
+        token_fingerprint="fp_1",
         request_started_at="2026-04-28T13:45:22Z",
-    )
+    ))
 
-    context = repo.analysis_context_for(job)
-
-    assert context.daily_tokens_before == 90000
-    assert context.short_window_tokens_before == 7000
-    assert context.distinct_client_hashes_1h == 3
-    queries = "\n".join(query for query, _ in conn.cursor_obj.executed)
-    assert "bucket_size = 'day'" in queries
-    assert "SUM(usage_total_tokens)" in queries
-    assert "interval '5 minutes'" in queries
-    assert "client_ip_hash" in queries
-    assert "user_agent_hash" in queries
-
-
-def test_repository_loads_short_window_context_from_previous_5_minutes_of_traces():
-    cursor = SemanticCursor(
-        aggregate_rows=[(97000,)],
-        distinct_client_hashes=2,
-        rows_by_trace=[
-            {
-                "token_fingerprint": "tkfp_raw",
-                "username": "alice",
-                "request_started_at": "2026-04-28T13:40:21Z",
-                "usage_total_tokens": 9000,
-            },
-            {
-                "token_fingerprint": "tkfp_raw",
-                "username": "alice",
-                "request_started_at": "2026-04-28T13:40:22Z",
-                "usage_total_tokens": 300,
-            },
-            {
-                "token_fingerprint": "tkfp_raw",
-                "username": "alice",
-                "request_started_at": "2026-04-28T13:44:22Z",
-                "usage_total_tokens": 450,
-            },
-            {
-                "token_fingerprint": "tkfp_raw",
-                "username": "alice",
-                "request_started_at": "2026-04-28T13:45:22Z",
-                "usage_total_tokens": 2000,
-            },
-            {
-                "token_fingerprint": "other_token",
-                "username": "alice",
-                "request_started_at": "2026-04-28T13:44:22Z",
-                "usage_total_tokens": 7000,
-            },
-            {
-                "token_fingerprint": "tkfp_raw",
-                "username": "bob",
-                "request_started_at": "2026-04-28T13:44:22Z",
-                "usage_total_tokens": 8000,
-            },
-        ],
-    )
-    repo = PostgresAnalysisRepository(SemanticConnection(cursor))
-    job = TraceCapturedJob(
-        type="trace_captured",
-        trace_id="trace_current",
-        route_pattern="/v1/chat/completions",
-        protocol_family="openai_chat",
-        capture_mode="raw_and_normalized",
-        username="alice",
-        token_fingerprint="tkfp_raw",
-        usage_total_tokens=2000,
-        request_started_at="2026-04-28T13:45:22Z",
-    )
-
-    context = repo.analysis_context_for(job)
-
-    assert context.daily_tokens_before == 97000
-    assert context.short_window_tokens_before == 8750
-    assert context.distinct_client_hashes_1h == 2
-
-
-def test_repository_counts_current_job_client_tuple_for_token_leak_context():
-    cursor = SemanticCursor(
-        aggregate_rows=[(0,)],
-        rows_by_trace=[],
-        client_rows=[
-            {
-                "token_fingerprint": "tkfp_raw",
-                "request_started_at": "2026-04-28T13:20:00Z",
-                "client_ip_hash": "client_a",
-                "user_agent_hash": "ua_a",
-            },
-            {
-                "token_fingerprint": "tkfp_raw",
-                "request_started_at": "2026-04-28T13:45:22.500Z",
-                "client_ip_hash": "client_late",
-                "user_agent_hash": "ua_late",
-            },
-            {
-                "token_fingerprint": "tkfp_raw",
-                "request_started_at": "2026-04-28T13:44:00Z",
-                "client_ip_hash": "client_b",
-                "user_agent_hash": "ua_b",
-            },
-        ],
-    )
-    repo = PostgresAnalysisRepository(SemanticConnection(cursor))
-    job = TraceCapturedJob(
-        type="trace_captured",
-        trace_id="trace_current",
-        route_pattern="/v1/chat/completions",
-        protocol_family="openai_chat",
-        capture_mode="raw_and_normalized",
-        username="alice",
-        token_fingerprint="tkfp_raw",
-        client_ip_hash="client_current",
-        user_agent_hash="ua_current",
-        request_started_at="2026-04-28T13:45:22Z",
-    )
-
-    context = repo.analysis_context_for(job)
-
-    assert context.distinct_client_hashes_1h == 3
+    assert context.trace_effective_tokens_p95 == 22000.0
+    assert context.completion_tokens_p95 == 9000.0
+    assert context.baseline_computed_at == computed.isoformat()
+    query, params = conn.cursor_obj.executed[0]
+    assert "baseline_cache" in query
+    assert params == ("fp_1",)
 
 
 def test_repository_returns_default_context_without_querying_for_empty_token_fingerprint():
@@ -400,33 +294,9 @@ def test_repository_returns_default_context_without_querying_for_empty_token_fin
 
     context = repo.analysis_context_for(job)
 
-    assert context.daily_tokens_before == 0
-    assert context.short_window_tokens_before == 0
-    assert context.distinct_client_hashes_1h == 0
+    assert context.trace_effective_tokens_p95 is None
+    assert context.completion_tokens_p95 is None
     assert conn.cursor_obj.executed == []
-
-
-def test_repository_returns_default_context_without_querying_for_malformed_timestamp():
-    conn = FakeConnection()
-    repo = PostgresAnalysisRepository(conn)
-    job = TraceCapturedJob(
-        type="trace_captured",
-        trace_id="trace_bad_timestamp",
-        route_pattern="/v1/chat/completions",
-        protocol_family="openai_chat",
-        capture_mode="raw_and_normalized",
-        username="alice",
-        token_fingerprint="tkfp_raw",
-        request_started_at="not-a-timestamp",
-    )
-
-    context = repo.analysis_context_for(job)
-
-    assert context.daily_tokens_before == 0
-    assert context.short_window_tokens_before == 0
-    assert context.distinct_client_hashes_1h == 0
-    assert conn.cursor_obj.executed == []
-
 
 def test_repository_queues_media_snapshot_jobs_for_media_urls():
     conn = FakeConnection()
@@ -567,46 +437,8 @@ def test_repository_updates_request_body_sha256():
     assert sha_queries[0][1] == ("abc123sha256", "trace_1")
 
 
-def test_analysis_context_for_loads_baselines_from_cache():
-    from datetime import datetime, timezone
-
-    computed = datetime(2026, 5, 18, 12, 0, 0, tzinfo=timezone.utc)
-    baseline_rows = [
-        ("trace_tokens_p95", 25000.0, {}, computed),
-        ("hourly_tokens_median", 3000.0, {}, computed),
-        ("model_hourly_median_o1-pro", 600.0, {}, computed),
-    ]
-    conn = FakeConnection(
-        fetch_values=[(0,), (0,), (0,)],
-        fetchall_rows=[baseline_rows],
-    )
-    repo = PostgresAnalysisRepository(conn)
-    job = TraceCapturedJob(
-        type="trace_captured",
-        trace_id="t1",
-        route_pattern="/v1/chat/completions",
-        protocol_family="openai_chat",
-        capture_mode="raw_and_normalized",
-        username="alice",
-        token_fingerprint="tkfp_raw",
-        request_started_at="2026-05-18T10:00:00Z",
-    )
-
-    context = repo.analysis_context_for(job)
-
-    assert context.trace_tokens_p95 == 25000.0
-    assert context.hourly_tokens_baseline == 3000.0
-    assert context.model_baselines == {"o1-pro": 600.0}
-    assert context.baseline_computed_at is not None
-
-    queries = "\n".join(query for query, _ in conn.cursor_obj.executed)
-    assert "baseline_cache" in queries
-    assert "expires_at > now()" in queries
-
-
 def test_analysis_context_for_ignores_expired_baselines():
     conn = FakeConnection(
-        fetch_values=[(0,), (0,), (0,)],
         fetchall_rows=[[]],
     )
     repo = PostgresAnalysisRepository(conn)
@@ -623,11 +455,11 @@ def test_analysis_context_for_ignores_expired_baselines():
 
     context = repo.analysis_context_for(job)
 
-    assert context.trace_tokens_p95 is None
+    assert context.trace_effective_tokens_p95 is None
     assert context.baseline_computed_at is None
 
 
-def test_analysis_context_for_maps_all_baseline_metric_types():
+def test_analysis_context_for_ignores_non_surviving_baseline_metric_types():
     from datetime import datetime, timezone
 
     computed = datetime(2026, 5, 18, 12, 0, 0, tzinfo=timezone.utc)
@@ -636,7 +468,7 @@ def test_analysis_context_for_maps_all_baseline_metric_types():
         ("hourly_tokens_mad", 200.0, {}, computed),
         ("short_window_baseline", 500.0, {}, computed),
         ("short_window_mad", 50.0, {}, computed),
-        ("trace_tokens_p95", 8000.0, {}, computed),
+        ("trace_effective_tokens_p95", 8000.0, {}, computed),
         ("completion_tokens_p95", 3000.0, {}, computed),
         ("off_hours_baseline", 400.0, {}, computed),
         ("off_hours_mad", 80.0, {}, computed),
@@ -644,7 +476,6 @@ def test_analysis_context_for_maps_all_baseline_metric_types():
         ("model_hourly_median_o3", 300.0, {}, computed),
     ]
     conn = FakeConnection(
-        fetch_values=[(0,), (0,), (0,)],
         fetchall_rows=[baseline_rows],
     )
     repo = PostgresAnalysisRepository(conn)
@@ -661,13 +492,6 @@ def test_analysis_context_for_maps_all_baseline_metric_types():
 
     context = repo.analysis_context_for(job)
 
-    assert context.hourly_tokens_baseline == 1000.0
-    assert context.hourly_tokens_mad == 200.0
-    assert context.short_window_baseline == 500.0
-    assert context.short_window_mad == 50.0
-    assert context.trace_tokens_p95 == 8000.0
+    assert context.trace_effective_tokens_p95 == 8000.0
     assert context.completion_tokens_p95 == 3000.0
-    assert context.off_hours_baseline == 400.0
-    assert context.off_hours_mad == 80.0
-    assert context.model_baselines == {"gpt-4.1": 700.0, "o3": 300.0}
     assert context.baseline_computed_at is not None

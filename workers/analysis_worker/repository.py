@@ -1,5 +1,4 @@
 import json
-from datetime import datetime, timezone
 from typing import Iterable
 from urllib.parse import urlparse
 
@@ -11,18 +10,7 @@ from models import (
     NormalizedMessage,
     TraceCapturedJob,
     UsageAggregateDelta,
-    bucket_start_day,
 )
-
-
-def _has_valid_timestamp(value: str) -> bool:
-    if not value:
-        return True
-    try:
-        datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return False
-    return True
 
 
 class PostgresAnalysisRepository:
@@ -32,57 +20,7 @@ class PostgresAnalysisRepository:
     def analysis_context_for(self, job: TraceCapturedJob) -> AnalysisContext:
         if not job.token_fingerprint:
             return AnalysisContext()
-        if not _has_valid_timestamp(job.request_started_at):
-            return AnalysisContext()
         cursor = self.connection.cursor()
-        daily_bucket = bucket_start_day(job.request_started_at)
-        window_end = job.request_started_at or datetime.now(timezone.utc).isoformat()
-        cursor.execute(
-            """
-            SELECT COALESCE(SUM(total_tokens), 0)
-            FROM usage_aggregates
-            WHERE token_fingerprint = %s
-              AND bucket_size = 'day'
-              AND bucket_start = %s::timestamptz
-            """,
-            (job.token_fingerprint, daily_bucket),
-        )
-        daily_row = cursor.fetchone()
-        cursor.execute(
-            """
-            SELECT COALESCE(SUM(usage_total_tokens), 0)
-            FROM traces
-            WHERE token_fingerprint = %s
-              AND request_started_at >= (%s::timestamptz - interval '5 minutes')
-              AND request_started_at < %s::timestamptz
-            """,
-            (job.token_fingerprint, window_end, window_end),
-        )
-        short_window_row = cursor.fetchone()
-        cursor.execute(
-            """
-            SELECT COUNT(DISTINCT client_hash)
-            FROM (
-                SELECT concat_ws(':', NULLIF(client_ip_hash, ''), NULLIF(user_agent_hash, '')) AS client_hash
-                FROM traces
-                WHERE token_fingerprint = %s
-                  AND request_started_at >= (%s::timestamptz - interval '1 hour')
-                  AND request_started_at <= %s::timestamptz
-                  AND (client_ip_hash <> '' OR user_agent_hash <> '')
-                UNION ALL
-                SELECT concat_ws(':', NULLIF(%s, ''), NULLIF(%s, '')) AS client_hash
-            ) clients
-            WHERE client_hash <> ''
-            """,
-            (
-                job.token_fingerprint,
-                window_end,
-                window_end,
-                job.client_ip_hash,
-                job.user_agent_hash,
-            ),
-        )
-        client_hash_row = cursor.fetchone()
         cursor.execute(
             """
             SELECT metric_type, metric_value, metadata_json, computed_at
@@ -94,43 +32,21 @@ class PostgresAnalysisRepository:
         baseline_rows = cursor.fetchall()
 
         baseline_fields = {
-            "hourly_tokens_median": "hourly_tokens_baseline",
-            "hourly_tokens_mad": "hourly_tokens_mad",
-            "short_window_baseline": "short_window_baseline",
-            "short_window_mad": "short_window_mad",
-            "trace_tokens_p95": "trace_tokens_p95",
+            "trace_effective_tokens_p95": "trace_effective_tokens_p95",
             "completion_tokens_p95": "completion_tokens_p95",
-            "off_hours_baseline": "off_hours_baseline",
-            "off_hours_mad": "off_hours_mad",
         }
-        model_prefix = "model_hourly_median_"
 
-        baseline_kwargs: dict = {}
-        model_baselines: dict[str, float] = {}
+        baseline_kwargs: dict[str, object] = {}
         max_computed_at = None
 
         for metric_type, metric_value, _metadata_json, computed_at in baseline_rows:
             if metric_type in baseline_fields:
                 baseline_kwargs[baseline_fields[metric_type]] = metric_value
-            elif metric_type.startswith(model_prefix):
-                model_name = metric_type[len(model_prefix):]
-                model_baselines[model_name] = metric_value
-            if computed_at is not None:
-                if max_computed_at is None or computed_at > max_computed_at:
-                    max_computed_at = computed_at
-
-        if model_baselines:
-            baseline_kwargs["model_baselines"] = model_baselines
+            if computed_at is not None and (max_computed_at is None or computed_at > max_computed_at):
+                max_computed_at = computed_at
         if max_computed_at is not None:
             baseline_kwargs["baseline_computed_at"] = max_computed_at.isoformat()
-
-        return AnalysisContext(
-            daily_tokens_before=int(daily_row[0] if daily_row else 0),
-            short_window_tokens_before=int(short_window_row[0] if short_window_row else 0),
-            distinct_client_hashes_1h=int(client_hash_row[0] if client_hash_row else 0),
-            local_timezone_offset_hours=8,
-            **baseline_kwargs,
-        )
+        return AnalysisContext(**baseline_kwargs)
 
     def save_trace_analysis(
         self,
