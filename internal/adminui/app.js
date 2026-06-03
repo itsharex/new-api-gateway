@@ -900,7 +900,7 @@ function renderTraceDetail(body) {
     item.anomaly_type,
     item.status,
     item.username || item.fingerprint_display,
-    item.reason,
+    item.display_reason || item.reason,
   ]);
   renderShell(
     page(
@@ -929,7 +929,7 @@ function renderAnomalies(body) {
     item.anomaly_type,
     item.username || item.fingerprint_display,
     item.observed_value,
-    item.reason,
+    item.display_reason || item.reason,
   ]);
   renderShell(page("异常", `<section class="panel">${table(["ID", "时间 (UTC+8)", "Severity", "类型", "员工", "观测值", "原因"], rows)}</section>`));
 }

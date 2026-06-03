@@ -378,6 +378,7 @@ func (h Handler) getTraceDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to load trace", http.StatusInternalServerError)
 		return
 	}
+	detail.Anomalies = withAnomalyDisplayReasons(detail.Anomalies)
 	if principal, ok := PrincipalFromContext(r.Context()); !ok || !principal.Role.Allows(PermissionRawEvidence) {
 		detail.RequestRawRef = ""
 		detail.ResponseRawRef = ""
@@ -488,7 +489,20 @@ func (h Handler) listAnomalies(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to list anomalies", http.StatusInternalServerError)
 		return
 	}
+	items = withAnomalyDisplayReasons(items)
 	writeJSON(w, http.StatusOK, map[string]any{"anomalies": items})
+}
+
+func withAnomalyDisplayReasons(items []AnomalySummary) []AnomalySummary {
+	if len(items) == 0 {
+		return items
+	}
+	result := make([]AnomalySummary, 0, len(items))
+	for _, item := range items {
+		item.DisplayReason = FormatAnomalyDisplayReasonZH(item)
+		result = append(result, item)
+	}
+	return result
 }
 
 func (h Handler) listCoverageAlerts(w http.ResponseWriter, r *http.Request) {

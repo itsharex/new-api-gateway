@@ -113,6 +113,7 @@ type AnomalySummary struct {
 	ObservedValue      string `json:"observed_value"`
 	ThresholdValue     string `json:"threshold_value"`
 	Reason             string `json:"reason"`
+	DisplayReason      string `json:"display_reason"`
 	CreatedAt          string `json:"created_at"`
 }
 

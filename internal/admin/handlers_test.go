@@ -855,6 +855,95 @@ func TestTraceDetailIncludesRawRefsForRawEvidenceRoles(t *testing.T) {
 	}
 }
 
+func TestListAnomaliesIncludesDisplayReason(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleViewer, "", nil)
+	db.anomalies = []AnomalySummary{
+		{
+			AnomalyID:          "anom_1",
+			AnomalyType:        "high_trace_tokens",
+			Severity:           "high",
+			Status:             "open",
+			Username:           "E10001",
+			FingerprintDisplay: "fp_1234",
+			ObservedValue:      "48200",
+			ThresholdValue:     "40000",
+			Reason:             "raw high trace token reason",
+			CreatedAt:          "2026-04-28 10:00:00+00",
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/anomalies", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Anomalies []map[string]any `json:"anomalies"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode anomalies body: %v", err)
+	}
+	if len(body.Anomalies) != 1 {
+		t.Fatalf("anomalies = %#v, want one item", body.Anomalies)
+	}
+	if got := body.Anomalies[0]["display_reason"]; got != "本次请求有效 token 消耗 48,200，超过阈值 40,000。" {
+		t.Fatalf("display_reason = %#v", got)
+	}
+	if got := body.Anomalies[0]["reason"]; got != "raw high trace token reason" {
+		t.Fatalf("reason = %#v", got)
+	}
+}
+
+func TestGetTraceDetailIncludesDisplayReasonInAnomalies(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleAuditor, "", nil)
+	db.traceDetail = traceDetailWithRawRefs()
+	db.traceAnomalies = []AnomalySummary{
+		{
+			AnomalyID:          "anom_2",
+			AnomalyType:        "off_hours_high_usage",
+			Severity:           "medium",
+			Status:             "open",
+			Username:           "E10001",
+			FingerprintDisplay: "fp_1234",
+			ObservedValue:      "22500",
+			ThresholdValue:     "20000",
+			Reason:             "raw off hours reason",
+			CreatedAt:          "2026-04-28 11:00:00+00",
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/traces/trace_123", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Trace struct {
+			Anomalies []map[string]any `json:"anomalies"`
+		} `json:"trace"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode trace detail body: %v", err)
+	}
+	if len(body.Trace.Anomalies) != 1 {
+		t.Fatalf("trace anomalies = %#v, want one item", body.Trace.Anomalies)
+	}
+	if got := body.Trace.Anomalies[0]["display_reason"]; got != "夜间时段（23:00-07:00）本次有效 token 消耗 22,500，超过阈值 20,000。" {
+		t.Fatalf("display_reason = %#v", got)
+	}
+	if got := body.Trace.Anomalies[0]["reason"]; got != "raw off hours reason" {
+		t.Fatalf("reason = %#v", got)
+	}
+}
+
 func TestRawEvidenceAccessRequiresRawEvidencePermission(t *testing.T) {
 	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleAuditor, "audit-secret-0123456789abcdef", fakeEvidenceStore{
 		body: "raw evidence bytes",
@@ -1363,6 +1452,8 @@ type memoryAdminDB struct {
 	revokeOtherErr          error
 	passwordChangeOps       []string
 	traceDetail             TraceDetail
+	anomalies               []AnomalySummary
+	traceAnomalies          []AnomalySummary
 	usageModelFilter        string
 	employeeUsageFilter     EmployeeUsageFilter
 	employeeUsageCalled     bool
@@ -1487,6 +1578,30 @@ func (m *memoryAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgco
 }
 
 func (m *memoryAdminDB) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	if strings.Contains(sql, "FROM usage_anomalies") {
+		items := m.anomalies
+		if strings.Contains(sql, "WHERE $1 = ANY(sample_trace_ids)") {
+			items = m.traceAnomalies
+		}
+		scans := make([]func(dest ...any) error, 0, len(items))
+		for _, item := range items {
+			item := item
+			scans = append(scans, func(dest ...any) error {
+				*(dest[0].(*string)) = item.AnomalyID
+				*(dest[1].(*string)) = item.AnomalyType
+				*(dest[2].(*string)) = item.Severity
+				*(dest[3].(*string)) = item.Status
+				*(dest[4].(*string)) = item.Username
+				*(dest[5].(*string)) = item.FingerprintDisplay
+				*(dest[6].(*string)) = item.ObservedValue
+				*(dest[7].(*string)) = item.ThresholdValue
+				*(dest[8].(*string)) = item.Reason
+				*(dest[9].(*string)) = item.CreatedAt
+				return nil
+			})
+		}
+		return &scanRows{scans: scans}, nil
+	}
 	if strings.Contains(sql, "FROM usage_aggregates") &&
 		!strings.Contains(sql, "SELECT DISTINCT model") &&
 		!strings.Contains(sql, "GROUP BY bucket_start") &&
