@@ -370,9 +370,9 @@ def _decision_from_scores(job: TraceCapturedJob, score: dict[str, float]) -> tup
     if score["conflict"] >= 0.5:
         return DECISION_NEEDS_REVIEW, ACTION_REVIEW_CONFLICT, True, 0.65
     if score["risk"] >= 0.8:
-        return DECISION_NON_WORK_RELATED, ACTION_ALERT_NON_WORK, True, score["risk"]
+        return DECISION_NON_WORK_RELATED, ACTION_ALERT_NON_WORK, False, score["risk"]
     if score["non_work"] >= 0.7:
-        return DECISION_NON_WORK_RELATED, ACTION_ALERT_NON_WORK, True, score["non_work"]
+        return DECISION_NON_WORK_RELATED, ACTION_ALERT_NON_WORK, False, score["non_work"]
     if score["work"] >= 0.7 and score["non_work"] < 0.3 and score["risk"] < 0.3:
         return DECISION_WORK_RELATED, ACTION_ALLOW, False, score["work"]
     if job.usage_total_tokens >= UNKNOWN_HIGH_COST_THRESHOLD:
@@ -505,7 +505,6 @@ def _adapt_llm_result(raw: Any) -> dict[str, Any]:
         "decision": decision,
         "recommended_action": action,
         "needs_review": action in {
-            ACTION_ALERT_NON_WORK,
             ACTION_REVIEW_CONFLICT,
             ACTION_REVIEW_HIGH_COST_UNKNOWN,
         },

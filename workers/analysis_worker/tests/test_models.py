@@ -162,7 +162,7 @@ def test_work_relevance_assessment_serializes_v2_decision_fields():
             "snippet": "resume interview",
             "reason": "Matched job-search terms: resume, interview.",
         }],
-        needs_review=True,
+        needs_review=False,
         analyzer_version="work_relevance_mvp_2026_04_28",
         decision="non_work_related",
         recommended_action="alert_non_work",
@@ -179,7 +179,7 @@ def test_work_relevance_assessment_serializes_v2_decision_fields():
 
     assert result.category == "work_relevance"
     assert result.label == "job_search"
-    assert result.severity == "review"
+    assert result.severity == ""
     assert result.result["decision"] == "non_work_related"
     assert result.result["recommended_action"] == "alert_non_work"
     assert result.result["score_breakdown"]["non_work"] == 0.9

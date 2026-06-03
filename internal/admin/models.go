@@ -284,6 +284,7 @@ type TraceDetail struct {
 	AnalysisStatus           string                     `json:"analysis_status"`
 	NormalizedMessages       []NormalizedMessageSummary `json:"normalized_messages"`
 	AnalysisResults          []AnalysisResultSummary    `json:"analysis_results"`
+	Anomalies                []AnomalySummary           `json:"anomalies"`
 }
 
 type NormalizedMessageSummary struct {

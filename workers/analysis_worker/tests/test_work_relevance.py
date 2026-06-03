@@ -115,7 +115,7 @@ def test_classifies_personal_chat_as_review_needed():
     assert assessment.personal_use_score == 0.8
     assert assessment.decision == "non_work_related"
     assert assessment.recommended_action == "alert_non_work"
-    assert assessment.needs_review is True
+    assert assessment.needs_review is False
     assert assessment.matched_context == []
 
 
@@ -148,7 +148,7 @@ def test_low_token_personal_use_decides_non_work():
     assert assessment.task_category == "personal_chat"
     assert assessment.decision == "non_work_related"
     assert assessment.recommended_action == "alert_non_work"
-    assert assessment.needs_review is True
+    assert assessment.needs_review is False
     assert assessment.score_breakdown["non_work"] >= 0.75
     assert assessment.evidence[0]["kind"] == "non_work"
 
@@ -215,6 +215,18 @@ def test_unknown_high_cost_requires_review():
     assert assessment.decision == "unknown"
     assert assessment.recommended_action == "review_high_cost_unknown"
     assert assessment.needs_review is True
+
+
+def test_non_work_alert_does_not_require_review():
+    assessment = classify_work_relevance(
+        job(usage_total_tokens=300),
+        [message("Rewrite my resume and prepare answers for a senior backend interview.")],
+        [context()],
+    )
+
+    assert assessment.decision == "non_work_related"
+    assert assessment.recommended_action == "alert_non_work"
+    assert assessment.needs_review is False
 
 
 def test_work_and_non_work_conflict_requires_review():

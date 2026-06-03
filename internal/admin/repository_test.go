@@ -818,6 +818,21 @@ func TestRepositoryGetTraceDetailScansMessagesAndAnalysisResults(t *testing.T) {
 					return nil
 				},
 			}},
+			&scanRows{scans: []func(dest ...any) error{
+				func(dest ...any) error {
+					*(dest[0].(*string)) = "anom-1"
+					*(dest[1].(*string)) = "non_work_job_search"
+					*(dest[2].(*string)) = "high"
+					*(dest[3].(*string)) = "open"
+					*(dest[4].(*string)) = "E10001"
+					*(dest[5].(*string)) = "tkfp_display"
+					*(dest[6].(*string)) = "300"
+					*(dest[7].(*string)) = "0"
+					*(dest[8].(*string)) = "resume rewrite detected"
+					*(dest[9].(*string)) = "2026-04-28 10:02:00+00"
+					return nil
+				},
+			}},
 		},
 	}
 	repo := NewRepository(db)
@@ -839,7 +854,10 @@ func TestRepositoryGetTraceDetailScansMessagesAndAnalysisResults(t *testing.T) {
 	if len(detail.AnalysisResults) != 1 || detail.AnalysisResults[0].Label != "work" || detail.AnalysisResults[0].ResultJSON != `{"matched":"gateway"}` {
 		t.Fatalf("analysis results = %#v", detail.AnalysisResults)
 	}
-	if !db.queried("FROM normalized_messages") || !db.queried("FROM analysis_results") {
+	if len(detail.Anomalies) != 1 || detail.Anomalies[0].AnomalyType != "non_work_job_search" {
+		t.Fatalf("anomalies = %#v", detail.Anomalies)
+	}
+	if !db.queried("FROM normalized_messages") || !db.queried("FROM analysis_results") || !db.queried("FROM usage_anomalies") {
 		t.Fatalf("expected detail helper queries, got %#v", db.querySQLs)
 	}
 }
@@ -936,6 +954,9 @@ func TestRepositoryDetailHelpersRequireDB(t *testing.T) {
 	}
 	if _, err := repo.listAnalysisResults(context.Background(), "trace-123"); !errors.Is(err, ErrAdminDBRequired) {
 		t.Fatalf("listAnalysisResults error = %v, want ErrAdminDBRequired", err)
+	}
+	if _, err := repo.listTraceAnomalies(context.Background(), "trace-123"); !errors.Is(err, ErrAdminDBRequired) {
+		t.Fatalf("listTraceAnomalies error = %v, want ErrAdminDBRequired", err)
 	}
 }
 

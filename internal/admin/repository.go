@@ -861,8 +861,13 @@ LIMIT 1`, traceID).Scan(
 	if err != nil {
 		return TraceDetail{}, err
 	}
+	anomalies, err := r.listTraceAnomalies(ctx, traceID)
+	if err != nil {
+		return TraceDetail{}, err
+	}
 	detail.NormalizedMessages = messages
 	detail.AnalysisResults = results
+	detail.Anomalies = anomalies
 	return detail, nil
 }
 
@@ -925,6 +930,42 @@ ORDER BY created_at ASC`, traceID)
 			&item.Confidence,
 			&item.Severity,
 			&item.ResultJSON,
+			&item.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r Repository) listTraceAnomalies(ctx context.Context, traceID string) ([]AnomalySummary, error) {
+	if r.db == nil {
+		return nil, ErrAdminDBRequired
+	}
+	rows, err := r.db.Query(ctx, `
+SELECT anomaly_id, anomaly_type, severity, status, username, fingerprint_display,
+       observed_value, threshold_value, reason, created_at::text
+FROM usage_anomalies
+WHERE $1 = ANY(sample_trace_ids)
+ORDER BY created_at DESC`, traceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AnomalySummary{}
+	for rows.Next() {
+		var item AnomalySummary
+		if err := rows.Scan(
+			&item.AnomalyID,
+			&item.AnomalyType,
+			&item.Severity,
+			&item.Status,
+			&item.Username,
+			&item.FingerprintDisplay,
+			&item.ObservedValue,
+			&item.ThresholdValue,
+			&item.Reason,
 			&item.CreatedAt,
 		); err != nil {
 			return nil, err

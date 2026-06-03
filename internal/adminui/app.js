@@ -893,6 +893,15 @@ function renderTraceDetail(body) {
     badge(item.severity),
     formatTime(item.created_at),
   ]);
+  const anomalies = arrayValue(trace.anomalies).map((item) => [
+    item.anomaly_id,
+    formatTime(item.created_at),
+    badge(item.severity),
+    item.anomaly_type,
+    item.status,
+    item.username || item.fingerprint_display,
+    item.reason,
+  ]);
   renderShell(
     page(
       "Trace 详情",
@@ -900,6 +909,7 @@ function renderTraceDetail(body) {
         <section class="panel"><div class="meta-grid">${meta}</div></section>
         <section class="panel"><h2>归一化消息</h2>${table(["序号", "方向", "角色", "模态", "类型", "内容", "Token"], messages)}</section>
         <section class="panel"><h2>分析结果</h2>${table(["分析器", "分类", "标签", "分数", "置信度", "Severity", "时间 (UTC+8)"], analysis)}</section>
+        <section class="panel"><h2>关联异常</h2>${table(["ID", "时间 (UTC+8)", "Severity", "类型", "状态", "员工", "原因"], anomalies)}</section>
       `,
       `<button type="button" id="back-to-traces">返回</button>`,
     ),
