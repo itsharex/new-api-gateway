@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -263,14 +264,27 @@ func (h Handler) listTraces(w http.ResponseWriter, r *http.Request) {
 		TokenFingerprint: r.URL.Query().Get("token_fingerprint"),
 		RoutePattern:     r.URL.Query().Get("route_pattern"),
 		Model:            r.URL.Query().Get("model"),
-		Limit:            100,
+		Page:             intQueryOrDefault(r, "page", 1),
+		Limit:            intQueryOrDefault(r, "limit", 100),
 	}
 	items, err := h.repo.ListTraces(r.Context(), filter)
 	if err != nil {
 		http.Error(w, "failed to list traces", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"traces": items})
+	writeJSON(w, http.StatusOK, items)
+}
+
+func intQueryOrDefault(r *http.Request, key string, fallback int) int {
+	value := strings.TrimSpace(r.URL.Query().Get(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 1 {
+		return fallback
+	}
+	return parsed
 }
 
 func (h Handler) overview(w http.ResponseWriter, r *http.Request) {

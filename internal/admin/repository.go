@@ -251,6 +251,8 @@ func (r Repository) ListTraces(ctx context.Context, filter TraceFilter) (TraceLi
 		if page > totalPages {
 			page = totalPages
 		}
+	} else {
+		page = 1
 	}
 
 	offset := 0

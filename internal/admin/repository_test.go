@@ -382,6 +382,81 @@ func TestRepositoryListTracesClampsPageToLastPage(t *testing.T) {
 	}
 }
 
+func TestRepositoryListTracesReturnsFirstPageForEmptyResults(t *testing.T) {
+	db := &recordingAdminDB{
+		rowQueue: []pgx.Row{
+			scanFuncRow{scan: func(dest ...any) error {
+				*(dest[0].(*int64)) = int64(0)
+				return nil
+			}},
+		},
+		rowsQueue: []pgx.Rows{&fakeRows{}},
+	}
+	repo := NewRepository(db)
+
+	result, err := repo.ListTraces(context.Background(), TraceFilter{
+		Page:  9,
+		Limit: 50,
+	})
+
+	if err != nil {
+		t.Fatalf("ListTraces error: %v", err)
+	}
+	if result.Pagination.Page != 1 || result.Pagination.TotalPages != 0 || result.Pagination.TotalItems != 0 {
+		t.Fatalf("pagination = %#v, want empty result page 1 with zero totals", result.Pagination)
+	}
+	if result.Pagination.HasPrev || result.Pagination.HasNext {
+		t.Fatalf("pagination nav flags = %#v, want no navigation", result.Pagination)
+	}
+	if got := db.queryArgsLog[1]; len(got) != 2 || got[0] != 50 || got[1] != 0 {
+		t.Fatalf("list query args = %#v, want [50 0]", got)
+	}
+}
+
+func TestRepositoryListTracesBindsFiltersAndCapsLimit(t *testing.T) {
+	db := &recordingAdminDB{
+		rowQueue: []pgx.Row{
+			scanFuncRow{scan: func(dest ...any) error {
+				*(dest[0].(*int64)) = int64(0)
+				return nil
+			}},
+		},
+		rowsQueue: []pgx.Rows{&fakeRows{}},
+	}
+	repo := NewRepository(db)
+
+	_, err := repo.ListTraces(context.Background(), TraceFilter{
+		TraceID:          "trace_123",
+		Username:         "E10001",
+		TokenFingerprint: "fp_123",
+		RoutePattern:     "/v1/chat/completions",
+		Model:            "gpt-5",
+		StatusCode:       429,
+		Limit:            500,
+	})
+
+	if err != nil {
+		t.Fatalf("ListTraces error: %v", err)
+	}
+	if !strings.Contains(db.querySQLs[0], "t.trace_id = $1") ||
+		!strings.Contains(db.querySQLs[0], "t.username_snapshot = $2") ||
+		!strings.Contains(db.querySQLs[0], "t.token_fingerprint = $3") ||
+		!strings.Contains(db.querySQLs[0], "t.route_pattern = $4") ||
+		!strings.Contains(db.querySQLs[0], "t.model_requested = $5") ||
+		!strings.Contains(db.querySQLs[0], "t.status_code = $6") {
+		t.Fatalf("count query filters = %s", db.querySQLs[0])
+	}
+	if strings.Contains(db.querySQLs[1], "500") {
+		t.Fatalf("list query interpolated raw limit: %s", db.querySQLs[1])
+	}
+	if got := db.queryArgsLog[0]; len(got) != 6 {
+		t.Fatalf("count query args = %#v, want 6 filters", got)
+	}
+	if got := db.queryArgsLog[1]; len(got) != 8 || got[6] != 100 || got[7] != 0 {
+		t.Fatalf("list query args = %#v, want filters + [100 0]", got)
+	}
+}
+
 func TestRepositoryLookupTokenSummaryReturnsIdentityScanError(t *testing.T) {
 	db := &recordingAdminDB{
 		rowQueue: []pgx.Row{scanErrorRow{err: errors.New("identity scan failed")}},
