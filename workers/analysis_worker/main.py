@@ -28,6 +28,8 @@ from models import (
 from normalizers import normalize_json_trace
 from repository import PostgresAnalysisRepository
 from rules import detect_anomalies, detect_coverage_alerts, detect_work_relevance_anomalies
+from streams import StreamConsumer
+from task_store import AnalysisTaskStore
 from work_relevance import classify_work_relevance
 
 
@@ -416,6 +418,52 @@ def process_redis_loop(
 
     print(json.dumps({"worker_status": "stopped", "worker_id": wid}), flush=True)
     return 0
+
+
+def run_core_once(
+    redis_client,
+    connection,
+    stage_processor,
+    worker_id: str,
+    stream_name: str = "analysis.core",
+    group_name: str = "analysis-core",
+    lease_seconds: int = 300,
+    max_attempts: int = 5,
+):
+    consumer = StreamConsumer(
+        redis_client,
+        stream_name=stream_name,
+        group_name=group_name,
+        consumer_name=worker_id,
+    )
+    message = consumer.read_one()
+    if message is None:
+        return None
+
+    task_store = AnalysisTaskStore(connection)
+    task_store.insert_task(
+        trace_id=message.envelope.trace_id,
+        stage=message.envelope.stage.value,
+        stream_name=message.stream_name,
+        stream_message_id=message.message_id,
+        max_attempts=max_attempts,
+    )
+    task = task_store.claim_task(
+        trace_id=message.envelope.trace_id,
+        stage=message.envelope.stage.value,
+        lease_owner=worker_id,
+        lease_seconds=lease_seconds,
+    )
+    if task is None:
+        return None
+
+    result = stage_processor.process(message.envelope.trace_id)
+    task_store.mark_succeeded(
+        trace_id=message.envelope.trace_id,
+        stage=message.envelope.stage.value,
+    )
+    consumer.ack(message)
+    return result
 
 
 def main() -> int:

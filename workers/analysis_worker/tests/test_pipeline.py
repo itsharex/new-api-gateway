@@ -1123,3 +1123,76 @@ def test_main_passes_created_llm_judge_to_process_redis_loop(monkeypatch):
     assert calls["evidence_store"] == "evidence-store"
     assert calls["postgres_dsn"] == "postgres://db"
     assert calls["timeout_seconds"] == 9
+
+
+def test_process_core_stream_message_marks_trace_completed_and_acks(monkeypatch):
+    from main import run_core_once
+    from models import AnalysisStage, StreamEnvelope
+
+    class FakeConnection:
+        pass
+
+    class FakeConsumer:
+        def __init__(self, *args, **kwargs):
+            self.acked = []
+
+        def read_one(self):
+            return type("Msg", (), {
+                "stream_name": "analysis.core",
+                "message_id": "1748944471000-0",
+                "envelope": StreamEnvelope(trace_id="trace_1", stage=AnalysisStage.CORE),
+            })()
+
+        def ack(self, message):
+            self.acked.append((message.stream_name, message.message_id))
+
+    class FakeTaskStore:
+        instances = []
+
+        def __init__(self, connection):
+            self.connection = connection
+            self.inserted = []
+            self.claimed = []
+            self.succeeded = []
+            self.__class__.instances.append(self)
+
+        def insert_task(self, **kwargs):
+            self.inserted.append(kwargs)
+
+        def claim_task(self, **kwargs):
+            self.claimed.append(kwargs)
+            return object()
+
+        def mark_succeeded(self, **kwargs):
+            self.succeeded.append(kwargs)
+
+    class FakeStageProcessor:
+        def __init__(self):
+            self.calls = []
+
+        def process(self, trace_id):
+            self.calls.append(trace_id)
+            return {"accepted_trace_id": trace_id, "worker_status": "processed"}
+
+    consumer = FakeConsumer()
+    processor = FakeStageProcessor()
+
+    monkeypatch.setattr("main.StreamConsumer", lambda *args, **kwargs: consumer)
+    monkeypatch.setattr("main.AnalysisTaskStore", FakeTaskStore)
+
+    result = run_core_once(
+        redis_client=object(),
+        connection=FakeConnection(),
+        stage_processor=processor,
+        worker_id="worker-1",
+    )
+
+    assert result == {"accepted_trace_id": "trace_1", "worker_status": "processed"}
+    assert processor.calls == ["trace_1"]
+    assert consumer.acked == [("analysis.core", "1748944471000-0")]
+    assert len(FakeTaskStore.instances) == 1
+    assert FakeTaskStore.instances[0].inserted[0]["trace_id"] == "trace_1"
+    assert FakeTaskStore.instances[0].inserted[0]["stream_message_id"] == "1748944471000-0"
+    assert FakeTaskStore.instances[0].claimed[0]["trace_id"] == "trace_1"
+    assert FakeTaskStore.instances[0].claimed[0]["lease_owner"] == "worker-1"
+    assert FakeTaskStore.instances[0].succeeded[0]["trace_id"] == "trace_1"
