@@ -47,7 +47,7 @@ type TraceCapturedJob struct {
 }
 
 type Publisher interface {
-	PublishTraceCaptured(ctx context.Context, job TraceCapturedJob) error
+	PublishTraceCaptured(ctx context.Context, input TraceCapturedInput) error
 }
 
 type TraceCapturedInput struct {
@@ -135,10 +135,11 @@ func NewRedisListPublisher(client redisListClient, list string) RedisListPublish
 	return RedisListPublisher{client: client, list: list}
 }
 
-func (p RedisListPublisher) PublishTraceCaptured(ctx context.Context, job TraceCapturedJob) error {
+func (p RedisListPublisher) PublishTraceCaptured(ctx context.Context, input TraceCapturedInput) error {
 	if p.client == nil {
 		return ErrRedisListClientRequired
 	}
+	job := NewTraceCaptured(input)
 	data, err := json.Marshal(job)
 	if err != nil {
 		return err

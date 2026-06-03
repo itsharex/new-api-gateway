@@ -51,7 +51,7 @@ func (fixedResolver) Resolve(ctx context.Context, canonicalKey, fingerprintValue
 		FingerprintDisplay:  fingerprintDisplay,
 		NewAPITokenID:       7,
 		TokenNameRaw:        "E12345",
-		Username:          "E12345",
+		Username:            "E12345",
 		ResolutionStatus:    "resolved",
 		IdentityCacheStatus: "test",
 	}, nil
@@ -440,8 +440,8 @@ func TestProxyPublishesTraceCapturedJobAfterTracePersistence(t *testing.T) {
 		t.Fatalf("published jobs = %d, want 1", len(publisher.jobs))
 	}
 	job := publisher.jobs[0]
-	if job.Type != "trace_captured" {
-		t.Fatalf("job Type = %q", job.Type)
+	if job.TraceID == "" {
+		t.Fatal("job TraceID is empty")
 	}
 	if job.RoutePattern != "/v1/chat/completions" {
 		t.Fatalf("job RoutePattern = %q", job.RoutePattern)
@@ -2107,12 +2107,12 @@ func (r errReadCloser) Close() error {
 }
 
 type recordingJobPublisher struct {
-	jobs []jobs.TraceCapturedJob
+	jobs []jobs.TraceCapturedInput
 	err  error
 }
 
-func (p *recordingJobPublisher) PublishTraceCaptured(ctx context.Context, job jobs.TraceCapturedJob) error {
-	p.jobs = append(p.jobs, job)
+func (p *recordingJobPublisher) PublishTraceCaptured(ctx context.Context, input jobs.TraceCapturedInput) error {
+	p.jobs = append(p.jobs, input)
 	return p.err
 }
 
@@ -2134,7 +2134,7 @@ type orderedJobPublisher struct {
 	events *[]string
 }
 
-func (p *orderedJobPublisher) PublishTraceCaptured(ctx context.Context, job jobs.TraceCapturedJob) error {
+func (p *orderedJobPublisher) PublishTraceCaptured(ctx context.Context, input jobs.TraceCapturedInput) error {
 	*p.events = append(*p.events, "publish")
 	return nil
 }

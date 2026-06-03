@@ -11,16 +11,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/your-company/new-api-gateway/internal/config"
+	"github.com/your-company/new-api-gateway/internal/jobs"
 )
 
 func TestBuildHandlerWiresGatewayRuntimeDependencies(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr:              "127.0.0.1:8080",
-		NewAPIBaseURL:           "https://new-api.example.test/base",
-		AuditHMACSecret:         "0123456789abcdef0123456789abcdef",
-		EvidenceStorageBackend:  "filesystem",
-		EvidenceStorageDir:      t.TempDir(),
+		ListenAddr:             "127.0.0.1:8080",
+		NewAPIBaseURL:          "https://new-api.example.test/base",
+		AuditHMACSecret:        "0123456789abcdef0123456789abcdef",
+		EvidenceStorageBackend: "filesystem",
+		EvidenceStorageDir:     t.TempDir(),
 	}
 
 	handler := buildHandler(cfg, nil, nil, nil, log.New(ioDiscard{}, "", 0))
@@ -51,15 +53,34 @@ func TestBuildHandlerWiresGatewayRuntimeDependencies(t *testing.T) {
 	}
 }
 
+func TestBuildHandlerUsesRedisStreamPublisher(t *testing.T) {
+	cfg := config.Config{
+		ListenAddr:             "127.0.0.1:8080",
+		NewAPIBaseURL:          "https://new-api.example.test/base",
+		AuditHMACSecret:        "0123456789abcdef0123456789abcdef",
+		EvidenceStorageBackend: "filesystem",
+		EvidenceStorageDir:     t.TempDir(),
+	}
+
+	handler := buildHandler(cfg, nil, nil, redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379"}), log.New(ioDiscard{}, "", 0))
+
+	if handler.JobPublisher == nil {
+		t.Fatal("JobPublisher is nil")
+	}
+	if _, ok := handler.JobPublisher.(jobs.RedisStreamPublisher); !ok {
+		t.Fatalf("JobPublisher type = %T, want jobs.RedisStreamPublisher", handler.JobPublisher)
+	}
+}
+
 func TestBuildHTTPHandlerRoutesAdminBeforeProxy(t *testing.T) {
 	cfg := config.Config{
-		ListenAddr:              "127.0.0.1:8080",
-		NewAPIBaseURL:           "https://new-api.example.test/base",
-		AuditHMACSecret:         "0123456789abcdef0123456789abcdef",
-		AdminSessionSecret:      "admin-session-secret-0123456789abcdef",
-		AdminCookieName:         "audit_admin_session",
-		EvidenceStorageBackend:  "filesystem",
-		EvidenceStorageDir:      t.TempDir(),
+		ListenAddr:             "127.0.0.1:8080",
+		NewAPIBaseURL:          "https://new-api.example.test/base",
+		AuditHMACSecret:        "0123456789abcdef0123456789abcdef",
+		AdminSessionSecret:     "admin-session-secret-0123456789abcdef",
+		AdminCookieName:        "audit_admin_session",
+		EvidenceStorageBackend: "filesystem",
+		EvidenceStorageDir:     t.TempDir(),
 	}
 
 	handler := buildHTTPHandler(cfg, nil, nil, nil, log.New(ioDiscard{}, "", 0))
