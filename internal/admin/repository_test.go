@@ -472,13 +472,15 @@ func TestRepositoryLookupTokenSummaryReturnsIdentityScanError(t *testing.T) {
 
 func TestRepositoryLookupTokenSummaryReturnsAnomalyCountScanError(t *testing.T) {
 	db := &recordingAdminDB{
-		rowQueue: []pgx.Row{
-			scanFuncRow{scan: scanTokenIdentity("E10001", 42, "prod key", 1)},
-			scanFuncRow{scan: func(dest ...any) error {
-				*(dest[0].(*int64)) = int64(0)
-				return nil
-			}},
-			scanErrorRow{err: errors.New("anomaly count failed")},
+		queryRowFunc: func(sql string, args ...any) pgx.Row {
+			switch {
+			case strings.Contains(sql, "FROM token_identity_cache"):
+				return scanFuncRow{scan: scanTokenIdentity("E10001", 42, "prod key", 1)}
+			case strings.Contains(sql, "FROM usage_anomalies"):
+				return scanErrorRow{err: errors.New("anomaly count failed")}
+			default:
+				return fakeRow{}
+			}
 		},
 		rowsQueue: []pgx.Rows{&fakeRows{}},
 	}
@@ -493,13 +495,15 @@ func TestRepositoryLookupTokenSummaryReturnsAnomalyCountScanError(t *testing.T) 
 
 func TestRepositoryLookupTokenSummaryToleratesMissingIdentityCacheRow(t *testing.T) {
 	db := &recordingAdminDB{
-		rowQueue: []pgx.Row{
-			scanErrorRow{err: pgx.ErrNoRows},
-			scanFuncRow{scan: func(dest ...any) error {
-				*(dest[0].(*int64)) = int64(0)
-				return nil
-			}},
-			scanFuncRow{scan: scanAnomalyCount(3)},
+		queryRowFunc: func(sql string, args ...any) pgx.Row {
+			switch {
+			case strings.Contains(sql, "FROM token_identity_cache"):
+				return scanErrorRow{err: pgx.ErrNoRows}
+			case strings.Contains(sql, "FROM usage_anomalies"):
+				return scanFuncRow{scan: scanAnomalyCount(3)}
+			default:
+				return fakeRow{}
+			}
 		},
 		rowsQueue: []pgx.Rows{&fakeRows{}},
 	}
@@ -518,6 +522,67 @@ func TestRepositoryLookupTokenSummaryToleratesMissingIdentityCacheRow(t *testing
 	}
 	if summary.OpenAnomalyCount != 3 {
 		t.Fatalf("OpenAnomalyCount = %d, want 3", summary.OpenAnomalyCount)
+	}
+}
+
+func TestRepositoryLookupTokenSummaryReturnsRecentTracesWithoutTraceCountQuery(t *testing.T) {
+	db := &recordingAdminDB{
+		queryRowFunc: func(sql string, args ...any) pgx.Row {
+			switch {
+			case strings.Contains(sql, "FROM token_identity_cache"):
+				return scanFuncRow{scan: scanTokenIdentity("E10001", 42, "prod key", 1)}
+			case strings.Contains(sql, "SELECT count(*) FROM traces"):
+				return scanErrorRow{err: errors.New("unexpected trace count query")}
+			case strings.Contains(sql, "FROM usage_anomalies"):
+				return scanFuncRow{scan: scanAnomalyCount(2)}
+			default:
+				return fakeRow{}
+			}
+		},
+		rowsQueue: []pgx.Rows{
+			&scanRows{scans: []func(dest ...any) error{
+				func(dest ...any) error {
+					*(dest[0].(*string)) = "trace_123"
+					*(dest[1].(*string)) = "POST"
+					*(dest[2].(*string)) = "/v1/chat/completions"
+					*(dest[3].(*string)) = "/v1/chat/completions"
+					*(dest[4].(*string)) = "openai_chat"
+					*(dest[5].(*int)) = 200
+					*(dest[6].(*string)) = "E10001"
+					*(dest[7].(*string)) = "tkfp_example"
+					*(dest[8].(*string)) = "gpt-5"
+					*(dest[9].(*int)) = 10
+					*(dest[10].(*int)) = 5
+					*(dest[11].(*int)) = 2
+					*(dest[12].(*int)) = 17
+					*(dest[13].(*string)) = "2026-06-03 10:00:00+00"
+					*(dest[14].(*bool)) = true
+					return nil
+				},
+			}},
+		},
+	}
+	repo := NewRepository(db)
+
+	summary, err := repo.LookupTokenSummary(context.Background(), "fingerprint-value", "tkfp_example")
+
+	if err != nil {
+		t.Fatalf("LookupTokenSummary error: %v", err)
+	}
+	if summary.Username != "E10001" || summary.TokenName != "prod key" || summary.OpenAnomalyCount != 2 {
+		t.Fatalf("summary identity/anomaly fields = %#v", summary)
+	}
+	if len(summary.RecentTraces) != 1 {
+		t.Fatalf("RecentTraces len = %d, want 1", len(summary.RecentTraces))
+	}
+	trace := summary.RecentTraces[0]
+	if trace.TraceID != "trace_123" || trace.ModelRequested != "gpt-5" || !trace.NeedsReview {
+		t.Fatalf("recent trace = %#v", trace)
+	}
+	for _, sql := range db.querySQLs {
+		if strings.Contains(sql, "SELECT count(*) FROM traces") {
+			t.Fatalf("LookupTokenSummary unexpectedly issued trace count query: %s", sql)
+		}
 	}
 }
 
@@ -1118,6 +1183,7 @@ type recordingAdminDB struct {
 	queryLog     []string
 	queryArgsLog [][]any
 	querySQLs    []string
+	queryRowFunc func(sql string, args ...any) pgx.Row
 	rows         pgx.Rows
 	rowsQueue    []pgx.Rows
 	row          pgx.Row
@@ -1153,6 +1219,9 @@ func (db *recordingAdminDB) QueryRow(ctx context.Context, sql string, args ...an
 	db.queryArgs = append([]any(nil), args...)
 	db.queryLog = append(db.queryLog, sql)
 	db.queryArgsLog = append(db.queryArgsLog, append([]any(nil), args...))
+	if db.queryRowFunc != nil {
+		return db.queryRowFunc(sql, args...)
+	}
 	if len(db.rowQueue) > 0 {
 		row := db.rowQueue[0]
 		db.rowQueue = db.rowQueue[1:]

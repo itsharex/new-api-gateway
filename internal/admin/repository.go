@@ -202,18 +202,21 @@ INSERT INTO review_decisions (
 	return err
 }
 
-func (r Repository) ListTraces(ctx context.Context, filter TraceFilter) (TraceListResult, error) {
-	if r.db == nil {
-		return TraceListResult{}, ErrAdminDBRequired
-	}
-	page := filter.Page
+func normalizeTraceListPage(page int) int {
 	if page < 1 {
-		page = 1
+		return 1
 	}
-	limit := filter.Limit
+	return page
+}
+
+func normalizeTraceListLimit(limit int) int {
 	if limit <= 0 || limit > 100 {
-		limit = 100
+		return 100
 	}
+	return limit
+}
+
+func traceFilterWhereArgs(filter TraceFilter) ([]string, []any) {
 	where := []string{"1=1"}
 	args := []any{}
 	add := func(clause string, value any) {
@@ -238,6 +241,59 @@ func (r Repository) ListTraces(ctx context.Context, filter TraceFilter) (TraceLi
 	if filter.StatusCode != 0 {
 		add("t.status_code = $%d", filter.StatusCode)
 	}
+	return where, args
+}
+
+func (r Repository) listTraceRows(ctx context.Context, filter TraceFilter) ([]TraceSummary, error) {
+	if r.db == nil {
+		return nil, ErrAdminDBRequired
+	}
+	page := normalizeTraceListPage(filter.Page)
+	limit := normalizeTraceListLimit(filter.Limit)
+	where, args := traceFilterWhereArgs(filter)
+	offset := (page - 1) * limit
+	listArgs := append(append([]any(nil), args...), limit, offset)
+	query := fmt.Sprintf(`
+SELECT t.trace_id, t.method, t.path, t.route_pattern, t.protocol_family, t.status_code,
+       t.username_snapshot, t.fingerprint_display, t.model_requested,
+       t.usage_prompt_tokens, t.usage_completion_tokens, t.usage_cached_tokens, t.usage_total_tokens,
+       t.created_at::text,
+       EXISTS(SELECT 1 FROM analysis_results WHERE trace_id = t.trace_id AND severity = 'review') AS needs_review
+FROM traces t
+WHERE %s
+ORDER BY t.created_at DESC, t.trace_id DESC
+LIMIT $%d OFFSET $%d`, strings.Join(where, " AND "), len(args)+1, len(args)+2)
+	rows, err := r.db.Query(ctx, query, listArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var traces []TraceSummary
+	for rows.Next() {
+		var trace TraceSummary
+		if err := rows.Scan(
+			&trace.TraceID, &trace.Method, &trace.Path, &trace.RoutePattern, &trace.ProtocolFamily,
+			&trace.StatusCode, &trace.Username, &trace.FingerprintDisplay, &trace.ModelRequested,
+			&trace.UsagePromptTokens, &trace.UsageCompletionTokens, &trace.UsageCachedTokens,
+			&trace.UsageTotalTokens, &trace.CreatedAt, &trace.NeedsReview,
+		); err != nil {
+			return nil, err
+		}
+		traces = append(traces, trace)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return traces, nil
+}
+
+func (r Repository) ListTraces(ctx context.Context, filter TraceFilter) (TraceListResult, error) {
+	if r.db == nil {
+		return TraceListResult{}, ErrAdminDBRequired
+	}
+	page := normalizeTraceListPage(filter.Page)
+	limit := normalizeTraceListLimit(filter.Limit)
+	where, args := traceFilterWhereArgs(filter)
 
 	var totalItems int64
 	countQuery := fmt.Sprintf(`SELECT count(*) FROM traces t WHERE %s`, strings.Join(where, " AND "))
@@ -255,41 +311,10 @@ func (r Repository) ListTraces(ctx context.Context, filter TraceFilter) (TraceLi
 		page = 1
 	}
 
-	offset := 0
-	if totalPages > 0 {
-		offset = (page - 1) * limit
-	}
-
-	listArgs := append(append([]any(nil), args...), limit, offset)
-	query := fmt.Sprintf(`
-SELECT t.trace_id, t.method, t.path, t.route_pattern, t.protocol_family, t.status_code,
-       t.username_snapshot, t.fingerprint_display, t.model_requested,
-       t.usage_prompt_tokens, t.usage_completion_tokens, t.usage_cached_tokens, t.usage_total_tokens,
-       t.created_at::text,
-       EXISTS(SELECT 1 FROM analysis_results WHERE trace_id = t.trace_id AND severity = 'review') AS needs_review
-FROM traces t
-WHERE %s
-ORDER BY t.created_at DESC, t.trace_id DESC
-LIMIT $%d OFFSET $%d`, strings.Join(where, " AND "), len(args)+1, len(args)+2)
-	rows, err := r.db.Query(ctx, query, listArgs...)
+	filter.Page = page
+	filter.Limit = limit
+	traces, err := r.listTraceRows(ctx, filter)
 	if err != nil {
-		return TraceListResult{}, err
-	}
-	defer rows.Close()
-	var traces []TraceSummary
-	for rows.Next() {
-		var trace TraceSummary
-		if err := rows.Scan(
-			&trace.TraceID, &trace.Method, &trace.Path, &trace.RoutePattern, &trace.ProtocolFamily,
-			&trace.StatusCode, &trace.Username, &trace.FingerprintDisplay, &trace.ModelRequested,
-			&trace.UsagePromptTokens, &trace.UsageCompletionTokens, &trace.UsageCachedTokens,
-			&trace.UsageTotalTokens, &trace.CreatedAt, &trace.NeedsReview,
-		); err != nil {
-			return TraceListResult{}, err
-		}
-		traces = append(traces, trace)
-	}
-	if err := rows.Err(); err != nil {
 		return TraceListResult{}, err
 	}
 
@@ -379,15 +404,15 @@ func (r Repository) LookupTokenSummary(ctx context.Context, tokenFingerprint, fi
 SELECT username, new_api_token_id, token_name_raw, token_status
 FROM token_identity_cache
 WHERE token_fingerprint = $1
-LIMIT 1`, tokenFingerprint).Scan(&summary.Username, &summary.NewAPITokenID, &summary.TokenName, &summary.TokenStatus)
+	LIMIT 1`, tokenFingerprint).Scan(&summary.Username, &summary.NewAPITokenID, &summary.TokenName, &summary.TokenStatus)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return LookupSummary{}, err
 	}
-	traceResult, err := r.ListTraces(ctx, TraceFilter{TokenFingerprint: tokenFingerprint, Page: 1, Limit: 20})
+	traces, err := r.listTraceRows(ctx, TraceFilter{TokenFingerprint: tokenFingerprint, Page: 1, Limit: 20})
 	if err != nil {
 		return LookupSummary{}, err
 	}
-	summary.RecentTraces = traceResult.Traces
+	summary.RecentTraces = traces
 	if err := r.db.QueryRow(ctx, `
 SELECT count(*)
 FROM usage_anomalies
