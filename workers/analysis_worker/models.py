@@ -1,8 +1,57 @@
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from enum import StrEnum
 from hashlib import sha256
 from typing import Any
+
+
+class AnalysisStage(StrEnum):
+    CORE = "core"
+    ENRICHMENT = "enrichment"
+
+
+class TaskStatus(StrEnum):
+    QUEUED = "queued"
+    LEASED = "leased"
+    SUCCEEDED = "succeeded"
+    FAILED_RETRYABLE = "failed_retryable"
+    FAILED_TERMINAL = "failed_terminal"
+
+
+class TraceStageStatus(StrEnum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    NOT_REQUIRED = "not_required"
+
+
+@dataclass(frozen=True)
+class StreamEnvelope:
+    trace_id: str
+    stage: AnalysisStage = AnalysisStage.CORE
+    enqueued_at: str = ""
+    attempt: int = 1
+    hints: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class AnalysisTask:
+    trace_id: str
+    stage: AnalysisStage
+    status: TaskStatus
+    attempt_count: int
+    max_attempts: int
+    lease_owner: str = ""
+    lease_expires_at: str = ""
+    stream_name: str = ""
+    stream_message_id: str = ""
+    queued_at: str = ""
+    started_at: str = ""
+    completed_at: str = ""
+    last_error_code: str = ""
+    last_error_message: str = ""
 
 
 @dataclass(frozen=True)

@@ -162,6 +162,34 @@ type OverviewSummary struct {
 	TokenUsageDaily      []TokenUsageDay `json:"token_usage_daily"`
 }
 
+type AnalysisRuntimeSnapshot struct {
+	Stage                   string `json:"stage"`
+	QueueDepth              int64  `json:"queue_depth"`
+	PendingCount            int64  `json:"pending_count"`
+	LeasedCount             int64  `json:"leased_count"`
+	OldestPendingAgeSeconds int64  `json:"oldest_pending_age_seconds"`
+	ThroughputPerMinute     int64  `json:"throughput_per_minute"`
+	QueueWaitP95MS          int64  `json:"queue_wait_p95_ms"`
+	ProcessingP95MS         int64  `json:"processing_p95_ms"`
+}
+
+type AnalysisRuntimeHistoryPoint struct {
+	SampledAt               string `json:"sampled_at"`
+	QueueDepth              int64  `json:"queue_depth"`
+	OldestPendingAgeSeconds int64  `json:"oldest_pending_age_seconds"`
+	QueueWaitP95MS          int64  `json:"queue_wait_p95_ms"`
+	ProcessingP95MS         int64  `json:"processing_p95_ms"`
+}
+
+type AnalysisRuntimeConsumer struct {
+	WorkerID      string `json:"worker_id"`
+	Stage         string `json:"stage"`
+	LeasedCount   int64  `json:"leased_count"`
+	LastSeenAt    string `json:"last_seen_at"`
+	IdleSeconds   int64  `json:"idle_seconds"`
+	LastErrorCode string `json:"last_error_code"`
+}
+
 type TokenUsageDay struct {
 	Date        string `json:"date"`
 	TotalTokens int64  `json:"total_tokens"`
