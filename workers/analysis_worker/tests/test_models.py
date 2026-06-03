@@ -41,6 +41,7 @@ def test_analysis_task_tracks_lease_and_error_fields():
     assert task.lease_owner == ""
     assert task.last_error_code == ""
     assert task.last_error_message == ""
+    assert task.updated_at == ""
 
 
 def test_trace_stage_status_values_match_dual_stage_summary_model():

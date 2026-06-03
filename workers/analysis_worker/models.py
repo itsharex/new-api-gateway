@@ -52,6 +52,7 @@ class AnalysisTask:
     completed_at: str = ""
     last_error_code: str = ""
     last_error_message: str = ""
+    updated_at: str = ""
 
 
 @dataclass(frozen=True)
