@@ -23,8 +23,9 @@ def _task_from_row(row) -> AnalysisTask:
 
 
 class AnalysisTaskStore:
-    def __init__(self, connection):
+    def __init__(self, connection, worker_id: str):
         self.connection = connection
+        self.worker_id = worker_id
 
     def insert_task(
         self,
@@ -53,7 +54,6 @@ class AnalysisTaskStore:
         self,
         trace_id: str,
         stage: str,
-        lease_owner: str,
         lease_seconds: int,
     ) -> AnalysisTask | None:
         cursor = self.connection.cursor()
@@ -79,7 +79,7 @@ class AnalysisTaskStore:
                 queued_at, started_at, completed_at,
                 last_error_code, last_error_message, updated_at
             """,
-            (lease_owner, lease_seconds, trace_id, stage),
+            (self.worker_id, lease_seconds, trace_id, stage),
         )
         row = cursor.fetchone()
         self.connection.commit()

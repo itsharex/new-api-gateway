@@ -426,7 +426,7 @@ def run_core_once(
     stage_processor,
     worker_id: str,
     stream_name: str = "analysis.core",
-    group_name: str = "analysis-core",
+    group_name: str = "analysis-core-workers",
     lease_seconds: int = 300,
     max_attempts: int = 5,
 ):
@@ -436,11 +436,11 @@ def run_core_once(
         group_name=group_name,
         consumer_name=worker_id,
     )
-    message = consumer.read_one()
+    message = consumer.read_one(count=1, block_ms=5000)
     if message is None:
         return None
 
-    task_store = AnalysisTaskStore(connection)
+    task_store = AnalysisTaskStore(connection, worker_id=worker_id)
     task_store.insert_task(
         trace_id=message.envelope.trace_id,
         stage=message.envelope.stage.value,
@@ -451,7 +451,6 @@ def run_core_once(
     task = task_store.claim_task(
         trace_id=message.envelope.trace_id,
         stage=message.envelope.stage.value,
-        lease_owner=worker_id,
         lease_seconds=lease_seconds,
     )
     if task is None:
@@ -462,7 +461,7 @@ def run_core_once(
         trace_id=message.envelope.trace_id,
         stage=message.envelope.stage.value,
     )
-    consumer.ack(message)
+    consumer.ack(message.message_id)
     return result
 
 

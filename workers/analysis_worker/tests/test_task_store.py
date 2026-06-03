@@ -47,12 +47,11 @@ def test_claim_task_transitions_queued_to_leased():
             "2026-06-03T10:00:01+00:00",
         ),
     ]
-    store = AnalysisTaskStore(connection)
+    store = AnalysisTaskStore(connection, worker_id="worker-1")
 
     task = store.claim_task(
         trace_id="trace_1",
         stage="core",
-        lease_owner="worker-1",
         lease_seconds=300,
     )
 

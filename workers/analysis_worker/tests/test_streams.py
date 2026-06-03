@@ -10,7 +10,7 @@ class FakeRedisClient:
         self.added = []
 
     def xreadgroup(self, groupname, consumername, streams, count=1, block=0):
-        assert groupname == "analysis-core"
+        assert groupname == "analysis-core-workers"
         assert consumername == "worker-1"
         assert streams == {"analysis.core": ">"}
         assert count == 1
@@ -47,12 +47,11 @@ def test_stream_consumer_reads_claims_and_acks_message():
     consumer = StreamConsumer(
         client,
         stream_name="analysis.core",
-        group_name="analysis-core",
+        group_name="analysis-core-workers",
         consumer_name="worker-1",
-        block_ms=5000,
     )
 
-    message = consumer.read_one()
+    message = consumer.read_one(count=1, block_ms=5000)
 
     assert message is not None
     assert message.stream_name == "analysis.core"
@@ -62,9 +61,9 @@ def test_stream_consumer_reads_claims_and_acks_message():
     assert message.envelope.attempt == 1
     assert message.envelope.hints == {"protocol_family": "openai_chat"}
 
-    consumer.ack(message)
+    consumer.ack(message.message_id)
 
-    assert client.acked == [("analysis.core", "analysis-core", "1748944471000-0")]
+    assert client.acked == [("analysis.core", "analysis-core-workers", "1748944471000-0")]
 
 
 def test_publish_stream_message_serializes_envelope_for_xadd():

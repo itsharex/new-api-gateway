@@ -1126,73 +1126,240 @@ def test_main_passes_created_llm_judge_to_process_redis_loop(monkeypatch):
 
 
 def test_process_core_stream_message_marks_trace_completed_and_acks(monkeypatch):
+    from core_stage import CoreStageProcessor
     from main import run_core_once
     from models import AnalysisStage, StreamEnvelope
 
+    class FakeCursor:
+        def __init__(self, connection):
+            self.connection = connection
+            self.executed = []
+            self._next_row = None
+
+        def execute(self, query, params):
+            self.executed.append((query, params))
+            normalized = " ".join(query.split())
+            if normalized.startswith("INSERT INTO analysis_tasks"):
+                trace_id, stage, max_attempts, stream_name, stream_message_id = params
+                key = (trace_id, stage)
+                existing = self.connection.tasks.get(key)
+                if existing is None:
+                    self.connection.tasks[key] = {
+                        "trace_id": trace_id,
+                        "stage": stage,
+                        "status": "queued",
+                        "attempt_count": 0,
+                        "max_attempts": max_attempts,
+                        "lease_owner": "",
+                        "lease_expires_at": "",
+                        "stream_name": stream_name,
+                        "stream_message_id": stream_message_id,
+                        "queued_at": "2026-06-03T10:00:00+00:00",
+                        "started_at": "",
+                        "completed_at": "",
+                        "last_error_code": "",
+                        "last_error_message": "",
+                        "updated_at": "2026-06-03T10:00:00+00:00",
+                    }
+                else:
+                    existing["stream_name"] = stream_name
+                    existing["stream_message_id"] = stream_message_id
+                self._next_row = None
+                return
+            if normalized.startswith("UPDATE analysis_tasks SET status = 'leased'"):
+                worker_id, lease_seconds, trace_id, stage = params
+                key = (trace_id, stage)
+                task = self.connection.tasks.get(key)
+                if not task or task["status"] not in {"queued", "failed_retryable"}:
+                    self._next_row = None
+                    return
+                task["status"] = "leased"
+                task["attempt_count"] += 1
+                task["lease_owner"] = worker_id
+                task["lease_expires_at"] = f"+{lease_seconds}s"
+                task["started_at"] = task["started_at"] or "2026-06-03T10:00:01+00:00"
+                task["updated_at"] = "2026-06-03T10:00:01+00:00"
+                self._next_row = (
+                    task["trace_id"],
+                    task["stage"],
+                    task["status"],
+                    task["attempt_count"],
+                    task["max_attempts"],
+                    task["lease_owner"],
+                    task["lease_expires_at"],
+                    task["stream_name"],
+                    task["stream_message_id"],
+                    task["queued_at"],
+                    task["started_at"],
+                    task["completed_at"],
+                    task["last_error_code"],
+                    task["last_error_message"],
+                    task["updated_at"],
+                )
+                return
+            if normalized.startswith("UPDATE analysis_tasks SET status = 'succeeded'"):
+                trace_id, stage = params
+                task = self.connection.tasks[(trace_id, stage)]
+                task["status"] = "succeeded"
+                task["completed_at"] = "2026-06-03T10:00:02+00:00"
+                task["lease_owner"] = ""
+                task["lease_expires_at"] = ""
+                task["updated_at"] = "2026-06-03T10:00:02+00:00"
+                self._next_row = None
+                return
+            if "FROM traces" in normalized and "WHERE trace_id = %s" in normalized:
+                trace = self.connection.traces[params[0]]
+                self._next_row = (
+                    trace["trace_id"],
+                    trace["route_pattern"],
+                    trace["protocol_family"],
+                    trace["capture_mode"],
+                    trace["username_snapshot"],
+                    trace["request_raw_ref"],
+                    trace["request_headers_ref"],
+                    trace["response_raw_ref"],
+                    trace["response_headers_ref"],
+                    trace["model_requested"],
+                    trace["usage_prompt_tokens"],
+                    trace["usage_completion_tokens"],
+                    trace["usage_total_tokens"],
+                    trace["usage_reasoning_tokens"],
+                    trace["usage_cached_tokens"],
+                    trace["token_fingerprint"],
+                    trace["fingerprint_display"],
+                    trace["new_api_token_id_snapshot"],
+                    trace["token_name_snapshot"],
+                    trace["identity_resolution_status"],
+                    trace["client_ip_hash"],
+                    trace["user_agent_hash"],
+                    trace["status_code"],
+                    trace["upstream_status_code"],
+                    trace["stream"],
+                    trace["request_started_at"],
+                    trace["request_body_size"],
+                    trace["response_body_size"],
+                )
+                return
+            if "FROM media_snapshot_jobs" in normalized:
+                trace_id = params[0]
+                self._next_row = (1,) if trace_id in self.connection.media_snapshot_jobs else None
+                return
+            if normalized.startswith("UPDATE traces SET core_status = 'completed'"):
+                enrichment_required, enrichment_status, _queued_flag, trace_id = params
+                trace = self.connection.traces[trace_id]
+                trace["core_status"] = "completed"
+                trace["enrichment_required"] = enrichment_required
+                trace["enrichment_status"] = enrichment_status
+                trace["enrichment_queued_at"] = (
+                    "2026-06-03T10:00:02+00:00" if enrichment_required else None
+                )
+                self._next_row = None
+                return
+            self._next_row = None
+
+        def fetchone(self):
+            return self._next_row
+
     class FakeConnection:
-        pass
+        def __init__(self):
+            self.tasks = {}
+            self.media_snapshot_jobs = {"trace_1"}
+            self.traces = {
+                "trace_1": {
+                    "trace_id": "trace_1",
+                    "route_pattern": "/v1/chat/completions",
+                    "protocol_family": "openai_chat",
+                    "capture_mode": "raw_and_normalized",
+                    "username_snapshot": "alice",
+                    "request_raw_ref": "file:///tmp/request.bin",
+                    "request_headers_ref": "",
+                    "response_raw_ref": "file:///tmp/response.bin",
+                    "response_headers_ref": "",
+                    "model_requested": "gpt-4.1",
+                    "usage_prompt_tokens": 11,
+                    "usage_completion_tokens": 7,
+                    "usage_total_tokens": 18,
+                    "usage_reasoning_tokens": 0,
+                    "usage_cached_tokens": 0,
+                    "token_fingerprint": "tkfp",
+                    "fingerprint_display": "tkfp_display",
+                    "new_api_token_id_snapshot": 42,
+                    "token_name_snapshot": "alice",
+                    "identity_resolution_status": "resolved",
+                    "client_ip_hash": "",
+                    "user_agent_hash": "",
+                    "status_code": 200,
+                    "upstream_status_code": 200,
+                    "stream": False,
+                    "request_started_at": "2026-06-03T10:00:00+00:00",
+                    "request_body_size": 128,
+                    "response_body_size": 256,
+                    "core_status": "pending",
+                    "enrichment_required": False,
+                    "enrichment_status": "not_required",
+                    "enrichment_queued_at": None,
+                }
+            }
+            self.cursor_obj = FakeCursor(self)
+            self.commit_calls = 0
+
+        def cursor(self):
+            return self.cursor_obj
+
+        def commit(self):
+            self.commit_calls += 1
 
     class FakeConsumer:
         def __init__(self, *args, **kwargs):
             self.acked = []
+            self.kwargs = kwargs
 
-        def read_one(self):
+        def read_one(self, count=1, block_ms=5000):
+            assert count == 1
+            assert block_ms == 5000
             return type("Msg", (), {
                 "stream_name": "analysis.core",
                 "message_id": "1748944471000-0",
                 "envelope": StreamEnvelope(trace_id="trace_1", stage=AnalysisStage.CORE),
             })()
 
-        def ack(self, message):
-            self.acked.append((message.stream_name, message.message_id))
-
-    class FakeTaskStore:
-        instances = []
-
-        def __init__(self, connection):
-            self.connection = connection
-            self.inserted = []
-            self.claimed = []
-            self.succeeded = []
-            self.__class__.instances.append(self)
-
-        def insert_task(self, **kwargs):
-            self.inserted.append(kwargs)
-
-        def claim_task(self, **kwargs):
-            self.claimed.append(kwargs)
-            return object()
-
-        def mark_succeeded(self, **kwargs):
-            self.succeeded.append(kwargs)
-
-    class FakeStageProcessor:
-        def __init__(self):
-            self.calls = []
-
-        def process(self, trace_id):
-            self.calls.append(trace_id)
-            return {"accepted_trace_id": trace_id, "worker_status": "processed"}
+        def ack(self, message_id):
+            self.acked.append(("analysis.core", message_id))
 
     consumer = FakeConsumer()
-    processor = FakeStageProcessor()
+    connection = FakeConnection()
+    consumer_factory_calls = {}
 
-    monkeypatch.setattr("main.StreamConsumer", lambda *args, **kwargs: consumer)
-    monkeypatch.setattr("main.AnalysisTaskStore", FakeTaskStore)
+    def fake_process_job_line(*args, **kwargs):
+        return {"accepted_trace_id": "trace_1", "worker_status": "processed"}
+
+    def fake_consumer_factory(*args, **kwargs):
+        consumer_factory_calls["kwargs"] = kwargs
+        return consumer
+
+    monkeypatch.setattr("main.StreamConsumer", fake_consumer_factory)
+    monkeypatch.setattr("core_stage.process_job_line", fake_process_job_line)
+
+    processor = CoreStageProcessor(
+        connection=connection,
+        evidence_store=FilesystemEvidenceStore("/tmp/evidence-unused"),
+        redis_client=None,
+    )
 
     result = run_core_once(
         redis_client=object(),
-        connection=FakeConnection(),
+        connection=connection,
         stage_processor=processor,
         worker_id="worker-1",
     )
 
     assert result == {"accepted_trace_id": "trace_1", "worker_status": "processed"}
-    assert processor.calls == ["trace_1"]
     assert consumer.acked == [("analysis.core", "1748944471000-0")]
-    assert len(FakeTaskStore.instances) == 1
-    assert FakeTaskStore.instances[0].inserted[0]["trace_id"] == "trace_1"
-    assert FakeTaskStore.instances[0].inserted[0]["stream_message_id"] == "1748944471000-0"
-    assert FakeTaskStore.instances[0].claimed[0]["trace_id"] == "trace_1"
-    assert FakeTaskStore.instances[0].claimed[0]["lease_owner"] == "worker-1"
-    assert FakeTaskStore.instances[0].succeeded[0]["trace_id"] == "trace_1"
+    assert consumer_factory_calls["kwargs"]["group_name"] == "analysis-core-workers"
+    task = connection.tasks[("trace_1", "core")]
+    assert task["status"] == "succeeded"
+    assert task["stream_message_id"] == "1748944471000-0"
+    assert connection.traces["trace_1"]["core_status"] == "completed"
+    assert connection.traces["trace_1"]["enrichment_required"] is True
+    assert connection.traces["trace_1"]["enrichment_status"] == "pending"
+    assert connection.traces["trace_1"]["enrichment_queued_at"] == "2026-06-03T10:00:02+00:00"

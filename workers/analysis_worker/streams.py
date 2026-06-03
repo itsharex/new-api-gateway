@@ -18,23 +18,19 @@ class StreamConsumer:
         stream_name: str,
         group_name: str,
         consumer_name: str,
-        block_ms: int = 5000,
-        count: int = 1,
     ):
         self.client = client
         self.stream_name = stream_name
         self.group_name = group_name
         self.consumer_name = consumer_name
-        self.block_ms = block_ms
-        self.count = count
 
-    def read_one(self) -> StreamMessage | None:
+    def read_one(self, count: int = 1, block_ms: int = 5000) -> StreamMessage | None:
         response = self.client.xreadgroup(
             self.group_name,
             self.consumer_name,
             {self.stream_name: ">"},
-            count=self.count,
-            block=self.block_ms,
+            count=count,
+            block=block_ms,
         )
         if not response:
             return None
@@ -55,8 +51,8 @@ class StreamConsumer:
             ),
         )
 
-    def ack(self, message: StreamMessage) -> int:
-        return self.client.xack(message.stream_name, self.group_name, message.message_id)
+    def ack(self, message_id: str) -> int:
+        return self.client.xack(self.stream_name, self.group_name, message_id)
 
 
 def publish_stream_message(
