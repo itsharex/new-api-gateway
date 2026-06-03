@@ -499,7 +499,7 @@ func withAnomalyDisplayReasons(items []AnomalySummary) []AnomalySummary {
 	}
 	result := make([]AnomalySummary, 0, len(items))
 	for _, item := range items {
-		item.DisplayReason = FormatAnomalyDisplayReasonZH(item)
+		item.DisplayReason = formatAnomalyDisplayReasonZH(item)
 		result = append(result, item)
 	}
 	return result

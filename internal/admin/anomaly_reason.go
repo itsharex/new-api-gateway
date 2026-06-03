@@ -2,7 +2,7 @@ package admin
 
 import "strings"
 
-func FormatAnomalyDisplayReasonZH(item AnomalySummary) string {
+func formatAnomalyDisplayReasonZH(item AnomalySummary) string {
 	observed := formatAnomalyDisplayNumber(item.ObservedValue)
 	threshold := formatAnomalyDisplayNumber(item.ThresholdValue)
 
@@ -25,26 +25,43 @@ func formatAnomalyDisplayNumber(value string) string {
 		return value
 	}
 	sign := ""
-	digits := value
-	if strings.HasPrefix(digits, "-") {
-		sign = "-"
-		digits = digits[1:]
+	rest := value
+	if strings.HasPrefix(rest, "-") || strings.HasPrefix(rest, "+") {
+		sign = rest[:1]
+		rest = rest[1:]
 	}
-	if digits == "" {
+	if rest == "" {
 		return value
 	}
-	for _, r := range digits {
-		if r < '0' || r > '9' {
-			return value
-		}
+
+	parts := strings.Split(rest, ".")
+	if len(parts) > 2 {
+		return value
 	}
-	if len(digits) <= 3 {
-		return sign + digits
+	intPart := parts[0]
+	if intPart == "" || !isDecimalDigits(intPart) {
+		return value
 	}
 
+	fracPart := ""
+	if len(parts) == 2 {
+		fracPart = parts[1]
+		if fracPart != "" && !isDecimalDigits(fracPart) {
+			return value
+		}
+		fracPart = strings.TrimRight(fracPart, "0")
+	}
+
+	groupedInt := groupDecimalDigits(intPart)
+	if fracPart == "" {
+		return sign + groupedInt
+	}
+	return sign + groupedInt + "." + fracPart
+}
+
+func groupDecimalDigits(digits string) string {
 	var b strings.Builder
-	b.Grow(len(value) + len(digits)/3)
-	b.WriteString(sign)
+	b.Grow(len(digits) + len(digits)/3)
 	head := len(digits) % 3
 	if head == 0 {
 		head = 3
@@ -55,4 +72,13 @@ func formatAnomalyDisplayNumber(value string) string {
 		b.WriteString(digits[i : i+3])
 	}
 	return b.String()
+}
+
+func isDecimalDigits(value string) bool {
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
