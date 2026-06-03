@@ -456,6 +456,55 @@ table {
   font-size: 14px;
 }
 
+.pagination-bar {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.pagination-summary {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pagination-controls button {
+  min-width: 40px;
+}
+
+.pagination-controls button.active {
+  background: #eff6ff;
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.pagination-controls button:disabled {
+  background: #f8fafc;
+  border-color: var(--line);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.pagination-controls button:disabled:hover {
+  border-color: var(--line);
+  color: var(--muted);
+}
+
+.pagination-ellipsis {
+  color: var(--muted);
+  font-weight: 650;
+}
+
 th,
 td {
   border-bottom: 1px solid var(--line);
@@ -603,6 +652,14 @@ tr:last-child td {
 
   .range-tabs,
   .model-tabs {
+    width: 100%;
+  }
+
+  .pagination-bar {
+    align-items: flex-start;
+  }
+
+  .pagination-controls {
     width: 100%;
   }
 
