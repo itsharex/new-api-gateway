@@ -20,6 +20,7 @@ const state = {
 };
 
 let usageRequestSeq = 0;
+let traceRequestSeq = 0;
 
 const activeCharts = [];
 
@@ -466,9 +467,7 @@ async function loadView() {
     } else if (state.view === "usage") {
       await loadUsage();
     } else if (state.view === "traces") {
-      const params = queryString({ page: state.traces.page });
-      const body = await api(`/traces?${params}`);
-      renderTraces(body);
+      await loadTraces();
     } else if (state.view === "identities") {
       const body = await api("/token-identities");
       renderIdentities(body);
@@ -522,6 +521,25 @@ async function loadUsage() {
   }
   if (requestSeq !== usageRequestSeq) return;
   renderUsage(body);
+}
+
+async function loadTraces() {
+  const requestSeq = ++traceRequestSeq;
+  const requestedPage = Math.max(1, finiteNumber(state.traces.page) || 1);
+  const params = queryString({ page: requestedPage });
+  let body;
+  try {
+    body = await api(`/traces?${params}`);
+  } catch (error) {
+    if (requestSeq !== traceRequestSeq || state.view !== "traces" || state.traces.page !== requestedPage) {
+      return;
+    }
+    throw error;
+  }
+  if (requestSeq !== traceRequestSeq || state.view !== "traces" || state.traces.page !== requestedPage) {
+    return;
+  }
+  renderTraces(body);
 }
 
 async function reloadUsageView() {
@@ -806,11 +824,13 @@ function renderEmployeeUsageChart(points) {
 
 function normalizeTracePagination(pagination) {
   const normalized = pagination || {};
+  const fallbackPage = Math.max(1, finiteNumber(state.traces.page) || 1);
+  const fallbackPageSize = Math.max(1, finiteNumber(state.traces.pageSize) || 50);
   return {
-    page: Math.max(1, Number(normalized.page || state.traces.page || 1)),
-    pageSize: Math.max(1, Number(normalized.page_size || state.traces.pageSize || 50)),
-    totalItems: Math.max(0, Number(normalized.total_items || 0)),
-    totalPages: Math.max(0, Number(normalized.total_pages || 0)),
+    page: Math.max(1, finiteNumber(normalized.page) || fallbackPage),
+    pageSize: Math.max(1, finiteNumber(normalized.page_size) || fallbackPageSize),
+    totalItems: Math.max(0, finiteNumber(normalized.total_items)),
+    totalPages: Math.max(0, finiteNumber(normalized.total_pages)),
     hasPrev: Boolean(normalized.has_prev),
     hasNext: Boolean(normalized.has_next),
   };
