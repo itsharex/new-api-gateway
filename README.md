@@ -215,7 +215,15 @@ NEW_API_POSTGRES_DSN=postgres://root:123456@192.168.1.100:5432/new-api?sslmode=d
 | `LLM_JUDGE_API_KEY` | 可选 API key |
 | `LLM_JUDGE_TIMEOUT_SECONDS` | 可选超时时间，默认 20 秒 |
 
-启用时至少需要同时设置 `LLM_JUDGE_BASE_URL` 和 `LLM_JUDGE_MODEL`。当前默认 Docker Compose **不会**把这些变量透传到 `analysis-worker` / `analysis-batch` 容器；如需在容器内启用 judge，请自行添加 compose override。手动运行 Python worker 时可直接读取这些环境变量。
+启用时至少需要同时设置 `LLM_JUDGE_BASE_URL` 和 `LLM_JUDGE_MODEL`。默认 Docker Compose 会把这些变量透传到 `analysis-worker` / `analysis-batch` 容器，因此在容器部署里只需要把值写进 `--env-file` 指定的 env 文件（例如 `.env.local`）即可；手动运行 Python worker 时同样直接读取这些环境变量。
+
+配置语义如下：
+- 四个 `LLM_JUDGE_*` 变量都不配置：worker 正常启动，LLM judge 关闭，工作相关性仅使用规则与 `context_catalog` 判断。
+- 只配置了部分变量，或 `LLM_JUDGE_TIMEOUT_SECONDS` 不是合法正数：worker 启动时直接退出并报错，不会带着不完整配置继续运行。
+- 配置了 `LLM_JUDGE_BASE_URL` 和 `LLM_JUDGE_MODEL`，但未配置 `LLM_JUDGE_API_KEY`：允许启动，适用于无需鉴权的 OpenAI-compatible 服务。
+- 配置完整但外部 LLM 服务超时、返回 HTTP 错误或响应格式不合法：worker 保持运行，对需要 LLM judge 的 trace 记录 `llm_judge_status=degraded` 并走保守 fallback，不会因为单次请求失败而整体退出。
+
+如果 worker 跑在 Docker 容器里，而 LLM 服务跑在宿主机本地，`LLM_JUDGE_BASE_URL` 不能写 `http://localhost:1234/v1`；容器内应改用 `http://host.docker.internal:1234/v1`。
 
 LLM 不直接写入异常表；它只生成 `work_relevance` analysis result，现有 `rules.py` 继续统一转换 `usage_anomalies`。
 

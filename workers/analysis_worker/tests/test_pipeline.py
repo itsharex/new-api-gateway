@@ -438,6 +438,19 @@ def test_create_llm_judge_from_env_builds_expected_client(monkeypatch):
     assert client.timeout_seconds == 12.5
 
 
+def test_create_llm_judge_from_env_allows_missing_api_key(monkeypatch):
+    monkeypatch.setenv("LLM_JUDGE_BASE_URL", "https://judge.example.com/")
+    monkeypatch.setenv("LLM_JUDGE_MODEL", "judge-model")
+    monkeypatch.delenv("LLM_JUDGE_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_JUDGE_TIMEOUT_SECONDS", raising=False)
+
+    client = create_llm_judge_from_env()
+
+    assert isinstance(client, LLMJudgeClient)
+    assert client.api_key is None
+    assert client.timeout_seconds == 20.0
+
+
 def test_create_llm_judge_from_env_accepts_valid_integer_timeout(monkeypatch):
     monkeypatch.setenv("LLM_JUDGE_BASE_URL", "https://judge.example.com/")
     monkeypatch.setenv("LLM_JUDGE_MODEL", "judge-model")

@@ -216,7 +216,13 @@ Worker 使用 `context_catalog` 的 aliases/keywords、独立 non-work 规则和
 
 LLM judge 只处理工作相关性 assessment，不直接生成 `AnomalyAlert`。异常落库仍由 `rules.py` 中的 `detect_anomalies()` 与 `detect_work_relevance_anomalies()` 统一完成。
 
-默认 Docker Compose 尚未透传 `LLM_JUDGE_*` 到 `analysis-worker` / `analysis-batch` 容器；如需在容器部署中启用外部 judge，需要额外的 compose override 或手动运行 worker。
+默认 Docker Compose 会透传 `LLM_JUDGE_*` 到 `analysis-worker` / `analysis-batch` 容器；容器部署时只需在 `--env-file` 指定的 env 文件中配置这些变量即可。
+
+配置语义：
+- 四个 `LLM_JUDGE_*` 都缺失时，worker 以纯规则模式运行，不报错。
+- 任意 `LLM_JUDGE_*` 已配置但 `LLM_JUDGE_BASE_URL` / `LLM_JUDGE_MODEL` 不完整，或 `LLM_JUDGE_TIMEOUT_SECONDS` 非法时，worker 启动即 `SystemExit`。
+- `LLM_JUDGE_API_KEY` 不是必填项；未配置时会按无鉴权模式请求外部服务。
+- LLM 服务运行中不可用时，worker 会对相关 trace 记录 degraded metadata 并回退到保守规则，不会整体停止。
 
 ## 数据库 Schema
 

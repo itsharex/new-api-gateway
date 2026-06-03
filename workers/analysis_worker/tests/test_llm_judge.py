@@ -54,8 +54,10 @@ def test_posts_openai_compatible_chat_completion_request_with_json_instructions(
     assert recorded["json"]["messages"][0]["role"] == "system"
     assert "JSON" in recorded["json"]["messages"][0]["content"]
     assert "untrusted" in recorded["json"]["messages"][0]["content"]
+    assert "decision, recommended_action, task_category, confidence" in recorded["json"]["messages"][0]["content"]
+    assert "Do not repeat the input" in recorded["json"]["messages"][0]["content"]
     assert recorded["json"]["messages"][1]["role"] == "user"
-    assert recorded["json"]["messages"][1]["content"] == '{"score": 0.91, "trace_id": "trace_1"}'
+    assert recorded["json"]["messages"][1]["content"] == 'Classify this trace bundle: {"score": 0.91, "trace_id": "trace_1"}'
 
 
 def test_accepts_json_wrapped_in_markdown_fence(monkeypatch):
