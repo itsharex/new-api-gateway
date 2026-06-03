@@ -519,7 +519,7 @@ def test_process_job_line_uses_repository_analysis_context(tmp_path: Path):
         "usage": {"total_tokens": 18}
     }), encoding="utf-8")
     repo = RecordingRepository()
-    repo.analysis_context = AnalysisContext(daily_tokens_before=99000, daily_token_limit=100000)
+    repo.analysis_context = AnalysisContext(trace_effective_tokens_p95=30000.0)
     line = json.dumps({
         "type": "trace_captured",
         "trace_id": "trace_context",
@@ -530,7 +530,9 @@ def test_process_job_line_uses_repository_analysis_context(tmp_path: Path):
         "request_raw_ref": "file:///raw/2026/04/28/trace_context/request_body.bin",
         "response_raw_ref": "file:///raw/2026/04/28/trace_context/response_body.bin",
         "model_requested": "gpt-4.1",
-        "usage_total_tokens": 2000,
+        "usage_prompt_tokens": 30000,
+        "usage_completion_tokens": 12000,
+        "usage_total_tokens": 42000,
         "token_fingerprint": "tkfp_raw",
         "status_code": 200,
         "upstream_status_code": 200,
@@ -550,7 +552,6 @@ def test_process_job_line_handles_malformed_timestamp_with_fallback_anomaly_wind
     (evidence_dir / "request_body.bin").write_text("{}", encoding="utf-8")
     (evidence_dir / "response_body.bin").write_text("{}", encoding="utf-8")
     repo = RecordingRepository()
-    repo.analysis_context = AnalysisContext(daily_tokens_before=100000)
     line = json.dumps({
         "type": "trace_captured",
         "trace_id": "trace_bad_time",
@@ -561,7 +562,9 @@ def test_process_job_line_handles_malformed_timestamp_with_fallback_anomaly_wind
         "request_raw_ref": "file:///raw/2026/04/28/trace_bad_time/request_body.bin",
         "response_raw_ref": "file:///raw/2026/04/28/trace_bad_time/response_body.bin",
         "model_requested": "gpt-4.1",
-        "usage_total_tokens": 1,
+        "usage_prompt_tokens": 30000,
+        "usage_completion_tokens": 12000,
+        "usage_total_tokens": 42000,
         "token_fingerprint": "tkfp_raw",
         "status_code": 200,
         "upstream_status_code": 200,
@@ -575,7 +578,9 @@ def test_process_job_line_handles_malformed_timestamp_with_fallback_anomaly_wind
         "1970-01-01T00:00:00+00:00",
         "1970-01-01T00:00:00+00:00",
     ]
-    assert repo.anomalies == []
+    assert [alert.anomaly_type for alert in repo.anomalies] == ["high_trace_tokens"]
+    assert repo.anomalies[0].window_start == "1970-01-01T00:00:00+00:00"
+    assert repo.anomalies[0].window_end == "1970-01-01T00:01:00+00:00"
 
 
 def test_process_job_line_detects_non_work_use_high_cost(tmp_path: Path):
