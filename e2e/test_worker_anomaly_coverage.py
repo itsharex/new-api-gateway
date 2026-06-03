@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """E2E test: analysis worker anomaly & coverage alert detection.
 
-Seeds a trace with high token usage, runs the analysis worker, and verifies
-that usage_anomalies and coverage_alerts are created correctly.
+Seeds a trace that still produces a normalization coverage alert but no
+longer triggers any legacy anomaly rows after the rule cleanup.
 
 Prerequisites:
   - postgres and redis running (docker compose up -d postgres redis)
@@ -126,7 +126,7 @@ def setup(dsn: str) -> None:
 def assert_worker_output(worker_json: dict) -> None:
     print("\n=== Worker output assertions ===")
     eq("worker", "worker_status", worker_json.get("worker_status"), "processed")
-    eq("worker", "anomaly_count", worker_json.get("anomaly_count"), 4)
+    eq("worker", "anomaly_count", worker_json.get("anomaly_count"), 0)
     eq("worker", "coverage_alert_count", worker_json.get("coverage_alert_count"), 1)
 
 
@@ -137,7 +137,7 @@ def assert_db_records(dsn: str) -> None:
             "SELECT count(*) FROM usage_anomalies WHERE %s = ANY(sample_trace_ids)",
             (TRACE_ID,),
         ).fetchone()[0]
-        eq("db", "usage_anomalies_count", anomaly_count, 4)
+        eq("db", "usage_anomalies_count", anomaly_count, 0)
 
         coverage_count = conn.execute(
             "SELECT count(*) FROM coverage_alerts WHERE %s = ANY(sample_trace_ids)",

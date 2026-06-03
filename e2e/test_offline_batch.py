@@ -16,6 +16,8 @@ Usage:
 from __future__ import annotations
 
 import os
+import sys
+from datetime import datetime, timedelta, timezone
 
 import psycopg
 
@@ -51,11 +53,12 @@ def make_test_database() -> str:
 
 
 def seed_traces(dsn: str) -> None:
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     with psycopg.connect(dsn) as conn:
         for i in range(TRACE_COUNT):
             tokens = 1000 + (i * 50)
-            hour = 8 + (i % 12)
             trace_id = f"batch_trace_{i:04d}"
+            trace_time = now - timedelta(hours=i % 72, minutes=i % 60)
             conn.execute(
                 """INSERT INTO traces (
                     trace_id, method, path, route_pattern, protocol_family, capture_mode,
@@ -72,7 +75,7 @@ def seed_traces(dsn: str) -> None:
                 (
                     trace_id, "POST", "/v1/chat/completions", "/v1/chat/completions",
                     "openai_chat", "raw_and_normalized", 200, 200, False,
-                    f"2026-05-18T{hour:02d}:{i % 60:02d}:00Z",
+                    trace_time.isoformat(),
                     100, 200, "", "",
                     TOKEN_FINGERPRINT, "tkfp_display", 42, "", "alice", "resolved",
                     "gpt-4.1", tokens, tokens // 2, tokens // 2,
@@ -82,8 +85,7 @@ def seed_traces(dsn: str) -> None:
         # Seed usage_aggregates so hourly and model baselines have data
         for i in range(20):
             tokens = 1000 + (i * 100)
-            day_offset = i // 12
-            bucket_hour = f"2026-05-{17 + day_offset:02d}T{(8 + i % 12):02d}:00:00+00:00"
+            bucket_hour = now - timedelta(hours=19 - i)
             conn.execute(
                 """INSERT INTO usage_aggregates (
                     bucket_start, bucket_size, token_fingerprint, new_api_token_id,
@@ -98,7 +100,7 @@ def seed_traces(dsn: str) -> None:
                     %s, %s, %s, 0, 0, 0, 0
                 )""",
                 (
-                    bucket_hour, TOKEN_FINGERPRINT, "alice",
+                    bucket_hour.isoformat(), TOKEN_FINGERPRINT, "alice",
                     "gpt-4.1", "/v1/chat/completions", "openai_chat",
                     tokens // 2, tokens // 2, tokens,
                 ),
@@ -165,8 +167,10 @@ def assert_baselines(dsn: str) -> None:
 
         check("baselines", "hourly_tokens_median" in metric_types,
               f"missing hourly_tokens_median, got {metric_types}")
-        check("baselines", "trace_tokens_p95" in metric_types,
-              f"missing trace_tokens_p95, got {metric_types}")
+        check("baselines", "trace_effective_tokens_p95" in metric_types,
+              f"missing trace_effective_tokens_p95, got {metric_types}")
+        check("baselines", "completion_tokens_p95" in metric_types,
+              f"missing completion_tokens_p95, got {metric_types}")
         check("baselines", "model_hourly_median_gpt-4.1" in metric_types,
               f"missing model_hourly_median_gpt-4.1, got {metric_types}")
 

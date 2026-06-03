@@ -287,6 +287,34 @@ make smoke
 
 端到端测试位于 `e2e/` 目录，验证网关代理 → Redis 队列 → Worker 分析 → 数据库写入的完整链路。运行前需确保 postgres、redis、new-api、audit-gateway 均已启动，且数据库迁移已应用。
 
+如果本地已经有常驻 `analysis-worker` 在消费默认队列/库（例如 Docker Compose 启动后的 `redis://redis:6379/0`），worker 类 e2e 不要直接复用默认 `REDIS_URL`，否则测试任务可能会被后台 worker 抢先消费，脚本自己运行的 `--redis-once` 只会拿到 `idle`。推荐做法是：
+
+- 网关链路类 e2e：继续使用默认环境，验证真实的持续消费链路。
+- worker 单进程类 e2e：使用隔离的 Redis DB（例如 `redis://redis:6379/15`），并通过一次性容器运行脚本。
+
+```bash
+# worker 规则相关 e2e：使用隔离 Redis DB，避免被常驻 analysis-worker 抢占
+docker compose -f deploy/docker-compose.yml --env-file .env.local run --rm \
+  -e POSTGRES_DSN='postgres://audit:audit@postgres:5432/audit_gateway?sslmode=disable' \
+  -e REDIS_URL='redis://redis:6379/15' \
+  analysis-worker sh -lc 'cd /workspace/e2e && uv run python test_worker_work_relevance.py'
+
+docker compose -f deploy/docker-compose.yml --env-file .env.local run --rm \
+  -e POSTGRES_DSN='postgres://audit:audit@postgres:5432/audit_gateway?sslmode=disable' \
+  -e REDIS_URL='redis://redis:6379/15' \
+  analysis-worker sh -lc 'cd /workspace/e2e && uv run python test_worker_anomaly_coverage.py'
+
+docker compose -f deploy/docker-compose.yml --env-file .env.local run --rm \
+  -e POSTGRES_DSN='postgres://audit:audit@postgres:5432/audit_gateway?sslmode=disable' \
+  -e REDIS_URL='redis://redis:6379/15' \
+  analysis-worker sh -lc 'cd /workspace/e2e && uv run python test_worker_baseline_anomaly.py'
+
+# offline batch e2e：不消费 Redis，可直接用一次性 worker 容器运行
+docker compose -f deploy/docker-compose.yml --env-file .env.local run --rm \
+  -e POSTGRES_DSN='postgres://audit:audit@postgres:5432/audit_gateway?sslmode=disable' \
+  analysis-worker sh -lc 'cd /workspace/e2e && uv run python test_offline_batch.py'
+```
+
 ```bash
 # OpenAI 协议（/v1/chat/completions、/v1/responses，含流式）
 uv run e2e/test_gateway_openai.py

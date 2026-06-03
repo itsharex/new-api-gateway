@@ -211,7 +211,7 @@ RBAC 角色：`viewer` → `auditor` → `raw_access` → `admin`，权限逐级
 Redis BLPOP (阻塞等待) → 读取证据 → 协议归一化 + 媒体提取 → 工作相关性分类 → 异常检测 → 用量聚合 → 持久化 → 心跳 → 继续等待
 ```
 
-默认启动即进入持续消费模式，收到 SIGTERM/SIGINT 时优雅退出。`--redis-once` 仅处理一个任务后退出，用于 e2e 测试。
+默认启动即进入持续消费模式，收到 SIGTERM/SIGINT 时优雅退出。`--redis-once` 仅处理一个任务后退出，用于 e2e 测试；如果本地同时运行了常驻 worker，worker 类 e2e 应切换到隔离的 `REDIS_URL`（例如不同 Redis DB），避免测试任务被后台消费者抢占。
 
 工作相关性结果会完整写入 `analysis_results.result_json`。当前语义收敛为：
 - 明确非工作相关：`recommended_action=alert_non_work`，并落库 `non_work_use`

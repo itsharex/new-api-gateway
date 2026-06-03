@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """E2E test: analysis worker work-relevance classification.
 
-Seeds a trace with coding-related content, runs the analysis worker, and
-verifies that the work_relevance analysis result is produced with the
-correct label.
+Seeds work, explicit non-work, and unknown traces, runs the analysis worker,
+and verifies that only explicit non-work usage is persisted as an anomaly.
 
 Prerequisites:
   - postgres and redis running (docker compose up -d postgres redis)
@@ -223,8 +222,8 @@ def assert_db_records(dsn: str) -> None:
         for row in rows:
             print(f"    trace_id={row[0]} category={row[1]} label={row[2]} "
                   f"score={row[3]} confidence={row[4]}")
-        assert_anomaly_type(conn, LOW_TOKEN_NON_WORK_TRACE_ID, "non_work_personal_use")
-        assert_anomaly_type(conn, HIGH_TOKEN_UNKNOWN_TRACE_ID, "unknown_high_cost")
+        assert_anomaly_type(conn, LOW_TOKEN_NON_WORK_TRACE_ID, "non_work_use")
+        assert_no_work_relevance_anomaly(conn, HIGH_TOKEN_UNKNOWN_TRACE_ID)
         assert_no_work_relevance_anomaly(conn, TRACE_ID)
 
 
@@ -248,12 +247,7 @@ def assert_no_work_relevance_anomaly(conn, trace_id: str) -> None:
         FROM usage_anomalies
         WHERE %s = ANY(sample_trace_ids)
           AND anomaly_type IN (
-            'non_work_personal_use',
-            'non_work_job_search',
-            'non_work_side_business',
-            'non_work_high_risk',
-            'unknown_high_cost',
-            'work_nonwork_conflict'
+            'non_work_use'
           )
         """,
         (trace_id,),
@@ -287,7 +281,7 @@ def main() -> None:
         assert_worker_output(worker_json)
 
     assert_db_records(dsn)
-    report_results(1)
+    report_results(3)
 
 
 def rm_rf(path: str) -> None:
