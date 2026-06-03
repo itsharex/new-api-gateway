@@ -1770,6 +1770,10 @@ func (r memoryAdminRow) Scan(dest ...any) error {
 		return nil
 	}
 	if strings.Contains(r.sql, "FROM traces") {
+		if len(dest) == 1 {
+			*(dest[0].(*int64)) = 0
+			return nil
+		}
 		*(dest[0].(*int64)) = 0
 		*(dest[1].(*int64)) = 0
 		*(dest[2].(*int64)) = 0
