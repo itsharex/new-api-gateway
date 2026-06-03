@@ -11,6 +11,7 @@ from llm_judge import LLMJudgeClient
 from llm_judge import LLMJudgeUnavailable
 from main import create_llm_judge_from_env, llm_judge_metadata, process_job_line
 from models import AnalysisContext, ContextCatalogEntry
+from work_relevance import ANALYZER_VERSION
 
 
 class RecordingRepository:
@@ -171,7 +172,7 @@ def test_process_job_line_works_with_minimal_dependencies():
     assert response["work_relevance_count"] == 1
     assert response["media_assets_extracted"] == 0
     work_result = next(result for result in repo.results if result.category == "work_relevance")
-    assert work_result.analyzer_version == "work_relevance_mvp_2026_04_28"
+    assert work_result.analyzer_version == ANALYZER_VERSION
     assert work_result.result["evidence"][0]["source"] == "keyword"
 
 
@@ -269,6 +270,9 @@ def test_process_job_line_persists_work_relevance_result(tmp_path: Path):
             "non_work_job_search",
             "non_work_personal_use",
             "non_work_side_business",
+            "identity_unresolved_success",
+            "daily_token_limit_exceeded",
+            "short_window_token_spike",
             "unknown_high_cost",
             "work_nonwork_conflict",
         }
@@ -331,7 +335,7 @@ def test_process_job_line_returns_degraded_llm_fallback_metadata(tmp_path: Path)
     assert response["llm_judge_fallback_count"] == 1
     work_result = next(result for result in repo.results if result.category == "work_relevance")
     assert work_result.result["recommended_action"] == "review_conflict"
-    assert any(alert.anomaly_type == "work_nonwork_conflict" for alert in repo.anomalies)
+    assert repo.anomalies == []
     assert work_result.result["evidence"][-1] == {
         "kind": "llm_unavailable",
         "category": "timeout",
@@ -497,15 +501,9 @@ def test_process_job_line_persists_anomaly_and_coverage_alert(tmp_path: Path):
 
     assert response["worker_status"] == "processed"
     assert response["work_relevance_count"] == 1
-    assert response["anomaly_count"] == 5
+    assert response["anomaly_count"] == 0
     assert response["coverage_alert_count"] == 1
-    assert [alert.anomaly_type for alert in repo.anomalies] == [
-        "identity_unresolved_success",
-        "high_trace_tokens",
-        "short_window_token_spike",
-        "off_hours_high_usage",
-        "unknown_high_cost",
-    ]
+    assert [alert.anomaly_type for alert in repo.anomalies] == []
     assert [alert.alert_code for alert in repo.coverage_alerts] == ["normalization_gap"]
 
 
@@ -542,12 +540,8 @@ def test_process_job_line_uses_repository_analysis_context(tmp_path: Path):
     response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo)
 
     assert repo.context_requests == ["trace_context"]
-    assert response["anomaly_count"] == 2
-    assert [alert.anomaly_type for alert in repo.anomalies] == [
-        "daily_token_limit_exceeded",
-        "off_hours_high_usage",
-    ]
-    assert repo.anomalies[0].observed_value == 101000
+    assert response["anomaly_count"] == 0
+    assert repo.anomalies == []
 
 
 def test_process_job_line_handles_malformed_timestamp_with_fallback_anomaly_window(tmp_path: Path):
@@ -581,15 +575,10 @@ def test_process_job_line_handles_malformed_timestamp_with_fallback_anomaly_wind
         "1970-01-01T00:00:00+00:00",
         "1970-01-01T00:00:00+00:00",
     ]
-    daily_alerts = [
-        alert for alert in repo.anomalies if alert.anomaly_type == "daily_token_limit_exceeded"
-    ]
-    assert len(daily_alerts) == 1
-    assert daily_alerts[0].window_start == "1970-01-01T00:00:00+00:00"
-    assert daily_alerts[0].window_end == "1970-01-01T00:01:00+00:00"
+    assert repo.anomalies == []
 
 
-def test_process_job_line_detects_non_work_personal_use_high_cost(tmp_path: Path):
+def test_process_job_line_detects_non_work_use_high_cost(tmp_path: Path):
     evidence_dir = tmp_path / "raw" / "2026" / "04" / "28" / "trace_personal"
     evidence_dir.mkdir(parents=True)
     (evidence_dir / "request_body.bin").write_text(json.dumps({
@@ -620,12 +609,9 @@ def test_process_job_line_detects_non_work_personal_use_high_cost(tmp_path: Path
 
     response = process_job_line(line, FilesystemEvidenceStore(tmp_path), repo, RecordingContextRepository())
 
-    assert response["anomaly_count"] == 4
+    assert response["anomaly_count"] == 1
     assert [alert.anomaly_type for alert in repo.anomalies] == [
-        "high_trace_tokens",
-        "short_window_token_spike",
-        "off_hours_high_usage",
-        "non_work_personal_use",
+        "non_work_use",
     ]
 
 
@@ -664,7 +650,7 @@ def test_process_job_line_persists_low_token_non_work_alert(tmp_path: Path):
     work_results = [r for r in repo.results if r.category == "work_relevance"]
     assert work_results[0].result["decision"] == "non_work_related"
     assert work_results[0].result["recommended_action"] == "alert_non_work"
-    assert repo.anomalies[0].anomaly_type == "non_work_personal_use"
+    assert repo.anomalies[0].anomaly_type == "non_work_use"
 
 
 def test_contract_example_processes_from_stdin_without_services(monkeypatch):

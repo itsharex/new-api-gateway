@@ -4,7 +4,7 @@ from typing import Any
 from models import ContextCatalogEntry, NormalizedMessage, TraceCapturedJob, WorkRelevanceAssessment
 
 
-ANALYZER_VERSION = "work_relevance_mvp_2026_04_28"
+ANALYZER_VERSION = "work_relevance_mvp_2026_06_03"
 
 LOW_TOKEN_LIMIT = 2_000
 HIGH_TOKEN_LIMIT = 20_000

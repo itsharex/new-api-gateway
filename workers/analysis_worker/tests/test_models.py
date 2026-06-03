@@ -12,6 +12,7 @@ from models import (
     parse_job,
     window_end_from_start,
 )
+from work_relevance import ANALYZER_VERSION
 
 
 def test_parse_job_keeps_gateway_contract_fields():
@@ -134,7 +135,7 @@ def test_work_relevance_assessment_converts_to_analysis_result():
         matched_context=[{"type": "repo", "name": "new-api-gateway", "matched_terms": ["gateway"]}],
         evidence=["Request matched repo context."],
         needs_review=False,
-        analyzer_version="work_relevance_mvp_2026_04_28",
+        analyzer_version=ANALYZER_VERSION,
     )
 
     result = assessment.to_analysis_result()
@@ -163,7 +164,7 @@ def test_work_relevance_assessment_serializes_v2_decision_fields():
             "reason": "Matched job-search terms: resume, interview.",
         }],
         needs_review=False,
-        analyzer_version="work_relevance_mvp_2026_04_28",
+        analyzer_version=ANALYZER_VERSION,
         decision="non_work_related",
         recommended_action="alert_non_work",
         score_breakdown={

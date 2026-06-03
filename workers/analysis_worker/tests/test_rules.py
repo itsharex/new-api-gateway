@@ -1,5 +1,6 @@
 from models import AnalysisContext, NormalizedMessage, TraceCapturedJob, WorkRelevanceAssessment
 from rules import detect_anomalies, detect_coverage_alerts, detect_work_relevance_anomalies
+from work_relevance import ANALYZER_VERSION
 
 
 def job(**overrides):
@@ -140,7 +141,7 @@ def test_llm_judge_work_related_assessment_produces_no_work_relevance_anomaly():
         matched_context=[{"type": "project", "name": "XWallet App", "source": "llm_judge"}],
         evidence=[{"kind": "work_context", "source": "llm_judge", "reason": "project coding task"}],
         needs_review=False,
-        analyzer_version="work_relevance_mvp_2026_04_28+llm",
+        analyzer_version=f"{ANALYZER_VERSION}+llm",
         decision="work_related",
         recommended_action="allow",
         score_breakdown={"work": 0.92, "non_work": 0.0, "risk": 0.0, "conflict": 0.0, "uncertainty": 0.08},
@@ -180,7 +181,7 @@ def test_unknown_high_cost_is_record_only_and_not_an_anomaly():
         matched_context=[],
         evidence=[{"category": "no_match", "reason": "No context matched."}],
         needs_review=False,
-        analyzer_version="work_relevance_mvp_2026_04_28",
+        analyzer_version=ANALYZER_VERSION,
         decision="unknown",
         recommended_action="record_only",
         score_breakdown={"work": 0.0, "non_work": 0.0, "risk": 0.0, "conflict": 0.0, "uncertainty": 1.0},
@@ -201,7 +202,7 @@ def test_record_only_unknown_does_not_alert():
         matched_context=[],
         evidence=[],
         needs_review=False,
-        analyzer_version="work_relevance_mvp_2026_04_28",
+        analyzer_version=ANALYZER_VERSION,
         decision="unknown",
         recommended_action="record_only",
         score_breakdown={"work": 0.0, "non_work": 0.0, "risk": 0.0, "conflict": 0.0, "uncertainty": 1.0},
@@ -342,3 +343,43 @@ def test_off_hours_uses_effective_token_floor_even_with_baseline_context():
     off_hours = [a for a in alerts if a.anomaly_type == "off_hours_high_usage"][0]
     assert off_hours.threshold_value == 20000
     assert off_hours.baseline_value is None
+
+
+def test_off_hours_boundary_starts_at_local_2300():
+    context = AnalysisContext(local_timezone_offset_hours=8)
+
+    before = detect_anomalies(job(
+        request_started_at="2026-04-28T14:59:00Z",
+        usage_prompt_tokens=15000,
+        usage_completion_tokens=5000,
+        usage_total_tokens=20000,
+    ), context=context)
+    at_boundary = detect_anomalies(job(
+        request_started_at="2026-04-28T15:00:00Z",
+        usage_prompt_tokens=15000,
+        usage_completion_tokens=5000,
+        usage_total_tokens=20000,
+    ), context=context)
+
+    assert [alert.anomaly_type for alert in before] == []
+    assert [alert.anomaly_type for alert in at_boundary] == ["off_hours_high_usage"]
+
+
+def test_off_hours_boundary_ends_before_local_0700():
+    context = AnalysisContext(local_timezone_offset_hours=8)
+
+    just_before_end = detect_anomalies(job(
+        request_started_at="2026-04-28T22:59:00Z",
+        usage_prompt_tokens=15000,
+        usage_completion_tokens=5000,
+        usage_total_tokens=20000,
+    ), context=context)
+    at_end = detect_anomalies(job(
+        request_started_at="2026-04-28T23:00:00Z",
+        usage_prompt_tokens=15000,
+        usage_completion_tokens=5000,
+        usage_total_tokens=20000,
+    ), context=context)
+
+    assert [alert.anomaly_type for alert in just_before_end] == ["off_hours_high_usage"]
+    assert [alert.anomaly_type for alert in at_end] == []

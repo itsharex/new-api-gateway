@@ -11,6 +11,8 @@ from models import (
     UsageAggregateDelta,
 )
 from repository import PostgresAnalysisRepository
+from rules import DETECTOR_VERSION
+from work_relevance import ANALYZER_VERSION
 
 
 class SemanticCursor:
@@ -144,7 +146,7 @@ def test_repository_inserts_messages_results_aggregates_anomalies_and_coverage()
     work_relevance_result = AnalysisResult(
         trace_id="trace_1",
         analyzer_name="work_relevance",
-        analyzer_version="work_relevance_mvp_2026_04_28",
+        analyzer_version=ANALYZER_VERSION,
         policy_version="",
         category="work_relevance",
         label="debugging",
@@ -201,7 +203,7 @@ def test_repository_inserts_messages_results_aggregates_anomalies_and_coverage()
         route_pattern="/v1/chat/completions",
         sample_trace_ids=["trace_1"],
         reason="single trace exceeded threshold",
-        detector_version="rules_mvp_2026_04_28",
+        detector_version=DETECTOR_VERSION,
     )
     coverage = CoverageAlert(
         alert_id="cov_normalization_gap_abc",

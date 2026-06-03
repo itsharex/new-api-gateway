@@ -55,9 +55,44 @@ def test_posts_openai_compatible_chat_completion_request_with_json_instructions(
     assert "JSON" in recorded["json"]["messages"][0]["content"]
     assert "untrusted" in recorded["json"]["messages"][0]["content"]
     assert "decision, recommended_action, task_category, confidence" in recorded["json"]["messages"][0]["content"]
+    assert "allow, alert_non_work, review_conflict, record_only" in recorded["json"]["messages"][0]["content"]
+    assert "review_high_cost_unknown" not in recorded["json"]["messages"][0]["content"]
     assert "Do not repeat the input" in recorded["json"]["messages"][0]["content"]
     assert recorded["json"]["messages"][1]["role"] == "user"
     assert recorded["json"]["messages"][1]["content"] == 'Classify this trace bundle: {"score": 0.91, "trace_id": "trace_1"}'
+
+
+def test_system_prompt_recommended_actions_match_current_worker_contract(monkeypatch):
+    recorded = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"recommended_action":"record_only"}',
+                        }
+                    }
+                ]
+            }
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        recorded["prompt"] = json["messages"][0]["content"]
+        return FakeResponse()
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    client = LLMJudgeClient(base_url="https://judge.example.com", model="judge-model")
+
+    client.judge({"trace_id": "trace_actions"})
+
+    prompt = recorded["prompt"]
+    assert "recommended_action must be one of allow, alert_non_work, review_conflict, record_only." in prompt
+    assert "review_high_cost_unknown" not in prompt
 
 
 def test_accepts_json_wrapped_in_markdown_fence(monkeypatch):

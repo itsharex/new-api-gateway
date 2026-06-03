@@ -13,7 +13,7 @@ from models import (
 )
 
 
-DETECTOR_VERSION = "rules_mvp_2026_04_28"
+DETECTOR_VERSION = "rules_mvp_2026_06_03"
 NORMALIZER_VERSION = "normalizer_mvp_2026_04_28"
 
 HIGH_TRACE_TOKEN_THRESHOLD = 40_000
@@ -156,27 +156,6 @@ def detect_coverage_alerts(job: TraceCapturedJob, messages: list[NormalizedMessa
         affected_token_count=1 if job.token_fingerprint else 0,
         affected_user_count=1 if job.username else 0,
     )]
-
-
-def _upstream_success(job: TraceCapturedJob) -> bool:
-    status = job.upstream_status_code or job.status_code
-    return 200 <= status < 400
-
-
-def _max_repeated_prompt_count(messages: list[NormalizedMessage]) -> int:
-    counts: dict[str, int] = {}
-    for message in messages:
-        if message.direction != "request":
-            continue
-        if message.role and message.role != "user":
-            continue
-        key = message.content_text_hash or message.content_text.strip().lower()
-        if not key:
-            continue
-        counts[key] = counts.get(key, 0) + 1
-    return max(counts.values(), default=0)
-
-
 def _is_off_hours(value: str, offset_hours: int) -> bool:
     if not value:
         return False
@@ -194,24 +173,6 @@ def _parse_utc(value: str) -> datetime | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
     except ValueError:
         return None
-
-
-def _day_window(value: str) -> tuple[str | None, str | None]:
-    parsed = _parse_utc(value)
-    if parsed is None:
-        return None, None
-    start = parsed.replace(hour=0, minute=0, second=0, microsecond=0)
-    end = start + timedelta(days=1)
-    return start.isoformat(), end.isoformat()
-
-
-def _relative_window(value: str, seconds: int) -> tuple[str | None, str | None]:
-    parsed = _parse_utc(value)
-    if parsed is None:
-        return None, None
-    return (parsed - timedelta(seconds=seconds)).isoformat(), parsed.isoformat()
-
-
 def _default_anomaly_window(value: str) -> tuple[str, str]:
     parsed = _parse_utc(value)
     if parsed is None:
