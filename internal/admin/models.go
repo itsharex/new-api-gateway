@@ -82,7 +82,22 @@ type TraceFilter struct {
 	RoutePattern     string
 	Model            string
 	StatusCode       int
+	Page             int
 	Limit            int
+}
+
+type TracePagination struct {
+	Page       int   `json:"page"`
+	PageSize   int   `json:"page_size"`
+	TotalItems int64 `json:"total_items"`
+	TotalPages int   `json:"total_pages"`
+	HasPrev    bool  `json:"has_prev"`
+	HasNext    bool  `json:"has_next"`
+}
+
+type TraceListResult struct {
+	Traces     []TraceSummary  `json:"traces"`
+	Pagination TracePagination `json:"pagination"`
 }
 
 type TraceSummary struct {
