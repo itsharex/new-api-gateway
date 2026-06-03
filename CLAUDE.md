@@ -58,6 +58,8 @@ RBAC 四级权限（viewer→auditor→raw_access→admin），HMAC 签名 Cooki
 ## Conventions
 
 - 默认用中文沟通；代码、标识符、错误文本沿用项目现有语言。
+- `main` 分支禁止直接进行功能开发或 bug 修复。遇到这类任务时，如果当前工作区位于 `main`，必须先创建并切换到独立的 git worktree，再开始后续实现、调试、测试与提交。
+- 创建 worktree 时优先复用已存在的 `.worktrees/`（其次 `worktrees/`）目录；如果使用项目内目录，先确认该目录已被 `.gitignore` 忽略，避免误把 worktree 内容纳入版本控制。
 - 不记录、不持久化 plaintext API key；相关逻辑使用 HMAC 指纹、元数据和脱敏证据。
 - 修改 schema 时新增迁移文件（`migrations/` 按编号顺序），不改写已发布迁移。
 - 查找文件与文本优先用 `rg` / `rg --files`。
