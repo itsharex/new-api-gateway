@@ -15,9 +15,12 @@ ALTER TABLE analysis_results
     ADD COLUMN producer TEXT NOT NULL DEFAULT '',
     ADD COLUMN result_key TEXT NOT NULL DEFAULT '';
 
+CREATE UNIQUE INDEX idx_analysis_results_trace_stage_producer_result_key
+    ON analysis_results (trace_id, stage, producer, result_key);
+
 ALTER TABLE raw_evidence_objects
     ADD COLUMN variant TEXT NOT NULL DEFAULT 'original',
-    ADD COLUMN derived_from_object_ref TEXT NOT NULL DEFAULT '';
+    ADD COLUMN derived_from_object_ref TEXT;
 
 CREATE TABLE analysis_tasks (
     trace_id TEXT NOT NULL REFERENCES traces(trace_id) ON DELETE CASCADE,
