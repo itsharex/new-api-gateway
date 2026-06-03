@@ -250,6 +250,16 @@ def test_repository_inserts_messages_results_aggregates_anomalies_and_coverage()
         query for query, _ in conn.cursor_obj.executed if "INSERT INTO analysis_results" in query
     ]
     assert len(analysis_queries) == 2
+    first_analysis_query = analysis_queries[0]
+    assert "stage, producer, result_key" in first_analysis_query
+    assert "ON CONFLICT (trace_id, stage, producer, result_key)" in first_analysis_query
+
+    analysis_params = [
+        params for query, params in conn.cursor_obj.executed if "INSERT INTO analysis_results" in query
+    ]
+    assert analysis_params[0][9] == "core"
+    assert analysis_params[0][10] == "usage_extraction"
+    assert analysis_params[0][11] == "usage_extraction:usage_from_gateway_job"
 
 
 def test_analysis_context_maps_trace_effective_tokens_p95_from_baseline_cache():

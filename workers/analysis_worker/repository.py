@@ -4,6 +4,7 @@ from typing import Iterable
 from urllib.parse import urlparse
 
 from models import (
+    AnalysisStage,
     AnalysisContext,
     AnalysisResult,
     AnomalyAlert,
@@ -23,6 +24,14 @@ def _has_valid_timestamp(value: str) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _analysis_result_identity(result: AnalysisResult) -> tuple[str, str, str]:
+    return (
+        AnalysisStage.CORE.value,
+        result.analyzer_name,
+        f"{result.category}:{result.label}",
+    )
 
 
 class PostgresAnalysisRepository:
@@ -199,12 +208,21 @@ class PostgresAnalysisRepository:
                 ),
             )
         for result in results:
+            stage, producer, result_key = _analysis_result_identity(result)
             cursor.execute(
                 """
                 INSERT INTO analysis_results (
                     trace_id, analyzer_name, analyzer_version, policy_version,
-                    category, label, score, confidence, severity, result_json
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+                    category, label, score, confidence, severity,
+                    stage, producer, result_key, result_json
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+                ON CONFLICT (trace_id, stage, producer, result_key) DO UPDATE SET
+                    analyzer_version = EXCLUDED.analyzer_version,
+                    policy_version = EXCLUDED.policy_version,
+                    score = EXCLUDED.score,
+                    confidence = EXCLUDED.confidence,
+                    severity = EXCLUDED.severity,
+                    result_json = EXCLUDED.result_json
                 """,
                 (
                     result.trace_id,
@@ -216,6 +234,9 @@ class PostgresAnalysisRepository:
                     result.score,
                     result.confidence,
                     result.severity,
+                    stage,
+                    producer,
+                    result_key,
                     json.dumps(result.result, sort_keys=True),
                 ),
             )
