@@ -17,7 +17,6 @@ DECISION_UNKNOWN = "unknown"
 
 ACTION_ALLOW = "allow"
 ACTION_ALERT_NON_WORK = "alert_non_work"
-ACTION_REVIEW_HIGH_COST_UNKNOWN = "review_high_cost_unknown"
 ACTION_REVIEW_CONFLICT = "review_conflict"
 ACTION_RECORD_ONLY = "record_only"
 
@@ -30,7 +29,6 @@ VALID_DECISIONS = {
 VALID_ACTIONS = {
     ACTION_ALLOW,
     ACTION_ALERT_NON_WORK,
-    ACTION_REVIEW_HIGH_COST_UNKNOWN,
     ACTION_REVIEW_CONFLICT,
     ACTION_RECORD_ONLY,
 }
@@ -38,10 +36,8 @@ VALID_DECISION_ACTIONS = {
     DECISION_WORK_RELATED: {ACTION_ALLOW},
     DECISION_NON_WORK_RELATED: {ACTION_ALERT_NON_WORK},
     DECISION_NEEDS_REVIEW: {ACTION_REVIEW_CONFLICT},
-    DECISION_UNKNOWN: {ACTION_RECORD_ONLY, ACTION_REVIEW_HIGH_COST_UNKNOWN},
+    DECISION_UNKNOWN: {ACTION_RECORD_ONLY},
 }
-
-UNKNOWN_HIGH_COST_THRESHOLD = 20_000
 
 TASK_KEYWORDS = {
     "debugging": ["debug", "bug", "error", "failure", "stack trace", "regression", "fix"],
@@ -375,8 +371,6 @@ def _decision_from_scores(job: TraceCapturedJob, score: dict[str, float]) -> tup
         return DECISION_NON_WORK_RELATED, ACTION_ALERT_NON_WORK, False, score["non_work"]
     if score["work"] >= 0.7 and score["non_work"] < 0.3 and score["risk"] < 0.3:
         return DECISION_WORK_RELATED, ACTION_ALLOW, False, score["work"]
-    if job.usage_total_tokens >= UNKNOWN_HIGH_COST_THRESHOLD:
-        return DECISION_UNKNOWN, ACTION_REVIEW_HIGH_COST_UNKNOWN, True, 0.35
     return DECISION_UNKNOWN, ACTION_RECORD_ONLY, False, 0.25
 
 
@@ -506,7 +500,6 @@ def _adapt_llm_result(raw: Any) -> dict[str, Any]:
         "recommended_action": action,
         "needs_review": action in {
             ACTION_REVIEW_CONFLICT,
-            ACTION_REVIEW_HIGH_COST_UNKNOWN,
         },
         "confidence": confidence,
         "work_related_score": work_score,
@@ -566,10 +559,10 @@ def _conservative_llm_fallback(
             confidence=assessment.confidence,
             matched_context=assessment.matched_context,
             evidence=evidence,
-            needs_review=True,
+            needs_review=False,
             analyzer_version=assessment.analyzer_version,
             decision=DECISION_UNKNOWN,
-            recommended_action=ACTION_REVIEW_HIGH_COST_UNKNOWN,
+            recommended_action=ACTION_RECORD_ONLY,
             score_breakdown=assessment.score_breakdown,
         )
     return WorkRelevanceAssessment(

@@ -204,17 +204,16 @@ def test_unknown_low_cost_records_only():
     assert assessment.needs_review is False
 
 
-def test_unknown_high_cost_requires_review():
+def test_unknown_high_cost_no_longer_requires_review():
     assessment = classify_work_relevance(
         job(usage_total_tokens=25000),
-        [message("Explain this idea in a clearer way.")],
-        [context()],
+        messages=[message("tell me something vague")],
+        contexts=[],
     )
 
-    assert assessment.task_category == "unknown"
     assert assessment.decision == "unknown"
-    assert assessment.recommended_action == "review_high_cost_unknown"
-    assert assessment.needs_review is True
+    assert assessment.recommended_action == "record_only"
+    assert assessment.needs_review is False
 
 
 def test_non_work_alert_does_not_require_review():
@@ -341,7 +340,7 @@ def test_llm_unavailable_on_conflict_uses_conservative_fallback():
     }
 
 
-def test_llm_unavailable_on_high_cost_unknown_uses_unknown_review_fallback():
+def test_llm_unavailable_on_high_cost_unknown_records_only():
     judge = StubJudge(error=LLMJudgeUnavailable("http_error", "503"))
 
     assessment = classify_work_relevance(
@@ -353,8 +352,8 @@ def test_llm_unavailable_on_high_cost_unknown_uses_unknown_review_fallback():
 
     assert len(judge.calls) == 1
     assert assessment.decision == "unknown"
-    assert assessment.recommended_action == "review_high_cost_unknown"
-    assert assessment.needs_review is True
+    assert assessment.recommended_action == "record_only"
+    assert assessment.needs_review is False
     assert assessment.evidence[-1]["kind"] == "llm_unavailable"
     assert assessment.evidence[-1]["category"] == "http_error"
     assert assessment.evidence[-1]["source"] == "llm_judge"

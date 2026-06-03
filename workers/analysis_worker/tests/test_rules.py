@@ -1,7 +1,5 @@
-import pytest
-
 from models import AnalysisContext, NormalizedMessage, TraceCapturedJob, WorkRelevanceAssessment
-from rules import DETECTOR_VERSION, detect_anomalies, detect_coverage_alerts, detect_work_relevance_anomalies
+from rules import detect_anomalies, detect_coverage_alerts, detect_work_relevance_anomalies
 
 
 def job(**overrides):
@@ -28,39 +26,32 @@ def job(**overrides):
     return TraceCapturedJob(**values)
 
 
-def test_detects_identity_unresolved_success():
-    alerts = detect_anomalies(job(username="", status_code=200, upstream_status_code=200))
-
-    assert [alert.anomaly_type for alert in alerts] == ["identity_unresolved_success"]
-    assert alerts[0].severity == "high"
-    assert alerts[0].observed_value == 1
-    assert alerts[0].threshold_value == 0
-    assert alerts[0].detector_version == DETECTOR_VERSION
-
-
-def test_anomaly_windows_are_deterministic_without_request_timestamp():
-    alerts = detect_anomalies(job(
+def test_legacy_identity_signals_no_longer_emit_anomalies():
+    assert detect_anomalies(job(username="", status_code=200, upstream_status_code=200)) == []
+    assert detect_anomalies(job(
+        username="alice",
+        token_name_snapshot="Alice API Token",
+        identity_resolution_status="invalid_username",
+    )) == []
+    assert detect_anomalies(job(
         username="",
-        request_started_at="",
+        identity_resolution_status="missing_username",
         status_code=200,
         upstream_status_code=200,
+    )) == []
+
+
+def test_detects_high_trace_tokens_from_effective_tokens():
+    alerts = detect_anomalies(job(
+        usage_prompt_tokens=50000,
+        usage_cached_tokens=20000,
+        usage_completion_tokens=12000,
+        usage_total_tokens=62000,
     ))
 
-    assert [alert.anomaly_type for alert in alerts] == ["identity_unresolved_success"]
-    assert alerts[0].window_start == "1970-01-01T00:00:00+00:00"
-    assert alerts[0].window_end == "1970-01-01T00:01:00+00:00"
-
-
-def test_detects_high_trace_tokens():
-    alerts = detect_anomalies(job(usage_total_tokens=25000))
-
-    assert [alert.anomaly_type for alert in alerts] == [
-        "high_trace_tokens",
-        "short_window_token_spike",
-        "off_hours_high_usage",
-    ]
-    assert alerts[0].observed_value == 25000
-    assert alerts[0].threshold_value == 20000
+    assert [alert.anomaly_type for alert in alerts] == ["high_trace_tokens"]
+    assert alerts[0].observed_value == 42000
+    assert alerts[0].threshold_value == 40000
     assert alerts[0].sample_trace_ids == ["trace_1"]
 
 
@@ -74,40 +65,22 @@ def test_token_name_snapshot_difference_does_not_imply_invalid_username():
     assert [alert.anomaly_type for alert in alerts] == []
 
 
-def test_detects_invalid_username_from_identity_resolution_status():
-    alerts = detect_anomalies(job(
-        username="alice",
-        token_name_snapshot="Alice API Token",
-        identity_resolution_status="invalid_username",
-    ))
-
-    assert [alert.anomaly_type for alert in alerts] == ["invalid_username"]
-    assert alerts[0].severity == "high"
-
-
-def test_detects_raw_only_large_response():
-    alerts = detect_anomalies(job(
+def test_legacy_capture_and_model_signals_no_longer_emit_anomalies():
+    assert detect_anomalies(job(
         capture_mode="raw_only",
         usage_total_tokens=0,
         response_body_size=2 * 1024 * 1024,
         route_pattern="/mj/*",
         protocol_family="midjourney",
-    ))
-
-    assert [alert.anomaly_type for alert in alerts] == ["raw_only_large_response"]
-    assert "raw-only" in alerts[0].reason
-
-
-def test_detects_raw_and_minimal_large_response():
-    alerts = detect_anomalies(job(
+    )) == []
+    assert detect_anomalies(job(
         capture_mode="raw_and_minimal",
         usage_total_tokens=0,
         response_body_size=2 * 1024 * 1024,
         route_pattern="/mj/*",
         protocol_family="midjourney",
-    ))
-
-    assert [alert.anomaly_type for alert in alerts] == ["raw_only_large_response"]
+    )) == []
+    assert detect_anomalies(job(model_requested="o1-pro", usage_total_tokens=500)) == []
 
 
 def test_detects_normalization_gap_when_no_messages_for_normalized_route():
@@ -138,29 +111,23 @@ def test_no_coverage_alert_when_messages_exist():
     assert detect_coverage_alerts(job(), [message]) == []
 
 
-def test_detects_low_work_relevance_high_cost_anomaly():
+def test_work_nonwork_conflict_is_review_only_and_not_an_anomaly():
     assessment = WorkRelevanceAssessment(
-        trace_id="trace_personal",
-        task_category="personal_chat",
-        work_related_score=0.1,
-        personal_use_score=0.8,
-        confidence=0.8,
+        trace_id="trace_conflict",
+        task_category="job_search",
+        work_related_score=0.5,
+        personal_use_score=0.5,
+        confidence=0.65,
         matched_context=[],
-        evidence=["Detected personal category terms: birthday."],
+        evidence=[],
         needs_review=True,
-        analyzer_version="work_relevance_mvp_2026_04_28",
-    )
-    alerts = detect_work_relevance_anomalies(
-        job(trace_id="trace_personal", usage_total_tokens=25000, model_requested="gpt-4.1"),
-        assessment,
+        analyzer_version="test",
+        decision="needs_review",
+        recommended_action="review_conflict",
+        score_breakdown={"work": 0.5, "non_work": 0.5, "risk": 0.0, "conflict": 0.5, "uncertainty": 0.35},
     )
 
-    assert len(alerts) == 1
-    assert alerts[0].anomaly_type == "low_work_relevance_high_cost"
-    assert alerts[0].severity == "high"
-    assert alerts[0].observed_value == 25000
-    assert alerts[0].threshold_value == 20000
-    assert "personal use score" in alerts[0].reason
+    assert detect_work_relevance_anomalies(job(trace_id="trace_conflict"), assessment) == []
 
 
 def test_llm_judge_work_related_assessment_produces_no_work_relevance_anomaly():
@@ -182,93 +149,46 @@ def test_llm_judge_work_related_assessment_produces_no_work_relevance_anomaly():
     assert detect_work_relevance_anomalies(job(usage_total_tokens=25000), assessment) == []
 
 
-def test_llm_judge_conflict_assessment_uses_existing_conflict_anomaly_type():
+def test_explicit_non_work_collapses_to_non_work_use():
     assessment = WorkRelevanceAssessment(
-        trace_id="trace_llm_conflict",
-        task_category="job_search",
-        work_related_score=0.6,
-        personal_use_score=0.6,
-        confidence=0.74,
-        matched_context=[{"type": "repo", "name": "new-api-gateway", "source": "llm_judge"}],
-        evidence=[{"kind": "conflict", "source": "llm_judge", "reason": "project mention but resume intent"}],
-        needs_review=True,
-        analyzer_version="work_relevance_mvp_2026_04_28+llm",
-        decision="needs_review",
-        recommended_action="review_conflict",
-        score_breakdown={"work": 0.6, "non_work": 0.6, "risk": 0.0, "conflict": 0.6, "uncertainty": 0.26},
-    )
-
-    alerts = detect_work_relevance_anomalies(job(usage_total_tokens=5000), assessment)
-
-    assert [alert.anomaly_type for alert in alerts] == ["work_nonwork_conflict"]
-
-
-def test_detects_low_token_non_work_personal_use():
-    assessment = WorkRelevanceAssessment(
-        trace_id="trace_personal",
-        task_category="personal_chat",
-        work_related_score=0.1,
-        personal_use_score=0.8,
-        confidence=0.8,
-        matched_context=[],
-        evidence=[{"category": "personal_chat", "reason": "Matched personal terms."}],
-        needs_review=False,
-        analyzer_version="work_relevance_mvp_2026_04_28",
-        decision="non_work_related",
-        recommended_action="alert_non_work",
-        score_breakdown={"work": 0.0, "non_work": 0.8, "risk": 0.0, "conflict": 0.0, "uncertainty": 0.2},
-    )
-
-    alerts = detect_work_relevance_anomalies(job(usage_total_tokens=100), assessment)
-
-    assert [alert.anomaly_type for alert in alerts] == ["non_work_personal_use"]
-    assert alerts[0].severity == "medium"
-    assert alerts[0].observed_value == 100
-    assert "personal_chat" in alerts[0].reason
-
-
-def test_detects_job_search_non_work_alert():
-    assessment = WorkRelevanceAssessment(
-        trace_id="trace_job_search",
+        trace_id="trace_non_work",
         task_category="job_search",
         work_related_score=0.0,
         personal_use_score=0.9,
         confidence=0.9,
         matched_context=[],
-        evidence=[{"category": "job_search", "reason": "Matched resume terms."}],
+        evidence=[{"reason": "Matched job_search terms: resume."}],
         needs_review=False,
-        analyzer_version="work_relevance_mvp_2026_04_28",
+        analyzer_version="test",
         decision="non_work_related",
         recommended_action="alert_non_work",
         score_breakdown={"work": 0.0, "non_work": 0.9, "risk": 0.0, "conflict": 0.0, "uncertainty": 0.1},
     )
 
-    alerts = detect_work_relevance_anomalies(job(usage_total_tokens=300), assessment)
+    alerts = detect_work_relevance_anomalies(job(trace_id="trace_non_work"), assessment)
 
-    assert [alert.anomaly_type for alert in alerts] == ["non_work_job_search"]
-    assert alerts[0].severity == "high"
+    assert [alert.anomaly_type for alert in alerts] == ["non_work_use"]
 
 
-def test_detects_unknown_high_cost_review_alert():
+def test_unknown_high_cost_is_record_only_and_not_an_anomaly():
     assessment = WorkRelevanceAssessment(
         trace_id="trace_unknown",
         task_category="unknown",
         work_related_score=0.0,
         personal_use_score=0.0,
-        confidence=0.35,
+        confidence=0.25,
         matched_context=[],
         evidence=[{"category": "no_match", "reason": "No context matched."}],
-        needs_review=True,
+        needs_review=False,
         analyzer_version="work_relevance_mvp_2026_04_28",
         decision="unknown",
-        recommended_action="review_high_cost_unknown",
+        recommended_action="record_only",
         score_breakdown={"work": 0.0, "non_work": 0.0, "risk": 0.0, "conflict": 0.0, "uncertainty": 1.0},
     )
 
     alerts = detect_work_relevance_anomalies(job(usage_total_tokens=25000), assessment)
 
-    assert [alert.anomaly_type for alert in alerts] == ["unknown_high_cost"]
-    assert alerts[0].severity == "medium"
+    assert alerts == []
 
 
 def test_record_only_unknown_does_not_alert():
@@ -290,41 +210,17 @@ def test_record_only_unknown_does_not_alert():
     assert detect_work_relevance_anomalies(job(usage_total_tokens=500), assessment) == []
 
 
-def test_detects_missing_username():
-    alerts = detect_anomalies(job(
-        username="",
-        identity_resolution_status="missing_username",
-        status_code=200,
-        upstream_status_code=200,
-    ))
-
-    assert [alert.anomaly_type for alert in alerts] == ["missing_username"]
-    assert alerts[0].severity == "high"
-    assert alerts[0].observed_value == 1
-    assert alerts[0].threshold_value == 0
-
-
-def test_detects_expensive_model_overuse():
-    alerts = detect_anomalies(job(model_requested="o1-pro", usage_total_tokens=500))
-
-    assert [alert.anomaly_type for alert in alerts] == ["expensive_model_overuse"]
-    assert alerts[0].severity == "high"
-    assert alerts[0].observed_value == 500
-    assert alerts[0].threshold_value == 500
-    assert "meeting or exceeding" in alerts[0].reason
-
-
 def test_detects_long_output_anomaly():
-    alerts = detect_anomalies(job(usage_completion_tokens=8000, usage_total_tokens=9000))
+    alerts = detect_anomalies(job(usage_completion_tokens=16000, usage_total_tokens=17000))
 
-    assert [alert.anomaly_type for alert in alerts] == ["long_output_anomaly", "off_hours_high_usage"]
+    assert [alert.anomaly_type for alert in alerts] == ["long_output_anomaly"]
     assert alerts[0].severity == "medium"
-    assert alerts[0].observed_value == 8000
-    assert alerts[0].threshold_value == 8000
+    assert alerts[0].observed_value == 16000
+    assert alerts[0].threshold_value == 16000
     assert "meeting or exceeding" in alerts[0].reason
 
 
-def test_detects_repeated_prompt_within_trace():
+def test_legacy_prompt_and_aggregate_signals_no_longer_emit_anomalies():
     messages = [
         NormalizedMessage(
             trace_id="trace_1",
@@ -342,120 +238,35 @@ def test_detects_repeated_prompt_within_trace():
         )
         for index in range(3)
     ]
+    aggregate_context = AnalysisContext(
+        daily_tokens_before=100000,
+        short_window_tokens_before=10000,
+        distinct_client_hashes_1h=3,
+    )
 
-    alerts = detect_anomalies(job(), messages=messages)
-
-    assert [alert.anomaly_type for alert in alerts] == ["repeated_prompt"]
-    assert alerts[0].severity == "medium"
-    assert alerts[0].observed_value == 3
-    assert alerts[0].threshold_value == 3
-
-
-def test_detects_daily_token_limit_exceeded():
-    context = AnalysisContext(daily_tokens_before=99000, daily_token_limit=100000)
-
-    alerts = detect_anomalies(job(usage_total_tokens=2000), context=context)
-
-    assert [alert.anomaly_type for alert in alerts] == [
-        "daily_token_limit_exceeded",
-        "off_hours_high_usage",
-    ]
-    assert alerts[0].severity == "high"
-    assert alerts[0].observed_value == 101000
-    assert alerts[0].threshold_value == 100000
-    assert alerts[0].window_start == "2026-04-28T00:00:00+00:00"
-    assert alerts[0].window_end == "2026-04-29T00:00:00+00:00"
-    assert "meeting or exceeding" in alerts[0].reason
-
-
-def test_detects_daily_token_limit_at_threshold():
-    context = AnalysisContext(daily_tokens_before=99000, daily_token_limit=100000)
-
-    alerts = detect_anomalies(job(usage_total_tokens=1000), context=context)
-
-    assert [alert.anomaly_type for alert in alerts] == ["daily_token_limit_exceeded"]
-    assert alerts[0].observed_value == 100000
-    assert alerts[0].threshold_value == 100000
-
-
-def test_detects_short_window_token_spike():
-    context = AnalysisContext(short_window_tokens_before=5000, short_window_token_threshold=10000)
-
-    alerts = detect_anomalies(job(usage_total_tokens=6000), context=context)
-
-    assert [alert.anomaly_type for alert in alerts] == [
-        "short_window_token_spike",
-        "off_hours_high_usage",
-    ]
-    assert alerts[0].severity == "medium"
-    assert alerts[0].observed_value == 11000
-    assert alerts[0].threshold_value == 10000
-    assert alerts[0].window_start == "2026-04-28T13:40:22+00:00"
-    assert alerts[0].window_end == "2026-04-28T13:45:22+00:00"
-    assert "meeting or exceeding" in alerts[0].reason
-
-
-def test_detects_short_window_token_spike_at_threshold():
-    context = AnalysisContext(short_window_tokens_before=5000, short_window_token_threshold=10000)
-
-    alerts = detect_anomalies(job(
-        usage_total_tokens=5000,
-        request_started_at="2026-04-28T02:45:22Z",
-    ), context=context)
-
-    assert [alert.anomaly_type for alert in alerts] == ["short_window_token_spike"]
-    assert alerts[0].observed_value == 10000
-    assert alerts[0].threshold_value == 10000
+    assert detect_anomalies(job(), messages=messages) == []
+    assert detect_anomalies(job(usage_total_tokens=1), context=aggregate_context) == []
+    assert detect_anomalies(job(
+        request_started_at="not-a-timestamp",
+        usage_total_tokens=1,
+    ), context=aggregate_context) == []
 
 
 def test_detects_off_hours_high_usage():
     context = AnalysisContext(local_timezone_offset_hours=8)
 
     alerts = detect_anomalies(job(
-        request_started_at="2026-04-28T14:45:22Z",
-        usage_total_tokens=2000,
+        request_started_at="2026-04-28T15:45:22Z",
+        usage_prompt_tokens=15000,
+        usage_completion_tokens=5000,
+        usage_total_tokens=20000,
     ), context=context)
 
     assert [alert.anomaly_type for alert in alerts] == ["off_hours_high_usage"]
     assert alerts[0].severity == "medium"
-    assert alerts[0].observed_value == 2000
-    assert alerts[0].threshold_value == 2000
+    assert alerts[0].observed_value == 20000
+    assert alerts[0].threshold_value == 20000
     assert "meeting or exceeding" in alerts[0].reason
-
-
-def test_detects_possible_token_leak_signal():
-    context = AnalysisContext(distinct_client_hashes_1h=3)
-
-    alerts = detect_anomalies(job(), context=context)
-
-    assert [alert.anomaly_type for alert in alerts] == ["possible_token_leak"]
-    assert alerts[0].severity == "high"
-    assert alerts[0].observed_value == 3
-    assert alerts[0].threshold_value == 3
-    assert alerts[0].window_start == "2026-04-28T12:45:22+00:00"
-    assert alerts[0].window_end == "2026-04-28T13:45:22+00:00"
-
-
-def test_windowed_token_alerts_use_fixed_fallback_for_malformed_timestamp():
-    context = AnalysisContext(
-        daily_tokens_before=100000,
-        short_window_tokens_before=10000,
-        distinct_client_hashes_1h=3,
-    )
-
-    alerts = detect_anomalies(job(
-        request_started_at="not-a-timestamp",
-        usage_total_tokens=1,
-    ), context=context)
-
-    assert [alert.anomaly_type for alert in alerts] == [
-        "daily_token_limit_exceeded",
-        "short_window_token_spike",
-        "possible_token_leak",
-    ]
-    for alert in alerts:
-        assert alert.window_start == "1970-01-01T00:00:00+00:00"
-        assert alert.window_end == "1970-01-01T00:01:00+00:00"
 
 
 def test_does_not_emit_token_scoped_aggregate_alerts_for_empty_token_fingerprint():
@@ -477,80 +288,57 @@ def test_does_not_emit_token_scoped_aggregate_alerts_for_empty_token_fingerprint
 def test_malformed_request_timestamp_is_not_off_hours():
     alerts = detect_anomalies(job(
         request_started_at="not-a-timestamp",
-        usage_total_tokens=2000,
+        usage_prompt_tokens=15000,
+        usage_completion_tokens=5000,
+        usage_total_tokens=20000,
     ))
 
     assert [alert.anomaly_type for alert in alerts] == []
 
 
 def test_high_trace_tokens_uses_p95_baseline():
-    ctx = AnalysisContext(trace_tokens_p95=30000.0)
-    alerts = detect_anomalies(job(usage_total_tokens=35000), context=ctx)
+    ctx = AnalysisContext(trace_effective_tokens_p95=30000.0)
+    alerts = detect_anomalies(job(
+        usage_prompt_tokens=34000,
+        usage_completion_tokens=12000,
+        usage_total_tokens=46000,
+    ), context=ctx)
     high_trace = [a for a in alerts if a.anomaly_type == "high_trace_tokens"][0]
-    assert high_trace.threshold_value == 30000.0
+    assert high_trace.threshold_value == 45000.0
     assert high_trace.baseline_value == 30000.0
 
 
 def test_high_trace_tokens_falls_back_to_default_without_baseline():
-    ctx = AnalysisContext(trace_tokens_p95=None)
-    alerts = detect_anomalies(job(usage_total_tokens=25000), context=ctx)
+    ctx = AnalysisContext(trace_effective_tokens_p95=None)
+    alerts = detect_anomalies(job(
+        usage_prompt_tokens=30000,
+        usage_completion_tokens=12000,
+        usage_total_tokens=42000,
+    ), context=ctx)
     high_trace = [a for a in alerts if a.anomaly_type == "high_trace_tokens"][0]
-    assert high_trace.threshold_value == 20000
-
-
-def test_short_window_uses_personalized_baseline():
-    ctx = AnalysisContext(
-        short_window_tokens_before=500,
-        short_window_baseline=800.0,
-        short_window_mad=200.0,
-    )
-    # short_window_baseline + 3 * MAD = 800 + 600 = 1400
-    # observed = 500 + 1000 = 1500 > 1400
-    alerts = detect_anomalies(job(usage_total_tokens=1000, request_started_at="2026-04-28T02:45:22Z"), context=ctx)
-    spike = [a for a in alerts if a.anomaly_type == "short_window_token_spike"][0]
-    assert spike.threshold_value == pytest.approx(1400.0)
-    assert spike.baseline_value == 800.0
+    assert high_trace.threshold_value == 40000
 
 
 def test_long_output_uses_completion_p95_baseline():
     ctx = AnalysisContext(completion_tokens_p95=12000.0)
-    alerts = detect_anomalies(job(usage_completion_tokens=13000, usage_total_tokens=15000), context=ctx)
+    alerts = detect_anomalies(job(usage_completion_tokens=18000, usage_total_tokens=20000), context=ctx)
     long_out = [a for a in alerts if a.anomaly_type == "long_output_anomaly"][0]
-    assert long_out.threshold_value == 12000.0
+    assert long_out.threshold_value == 18000.0
     assert long_out.baseline_value == 12000.0
 
 
-def test_expensive_model_uses_personalized_baseline():
-    ctx = AnalysisContext(model_baselines={"o1-pro": 800.0})
-    alerts = detect_anomalies(job(model_requested="o1-pro", usage_total_tokens=900), context=ctx)
-    expensive = [a for a in alerts if a.anomaly_type == "expensive_model_overuse"][0]
-    assert expensive.threshold_value == 800.0
-    assert expensive.baseline_value == 800.0
-
-
-def test_off_hours_uses_personalized_baseline():
+def test_off_hours_uses_effective_token_floor_even_with_baseline_context():
     ctx = AnalysisContext(
         off_hours_baseline=500.0,
         off_hours_mad=100.0,
         local_timezone_offset_hours=8,
     )
     alerts = detect_anomalies(job(
-        request_started_at="2026-04-28T14:45:22Z",
-        usage_total_tokens=900,
+        request_started_at="2026-04-28T15:45:22Z",
+        usage_prompt_tokens=15000,
+        usage_completion_tokens=5000,
+        usage_total_tokens=20000,
     ), context=ctx)
     off_hours = [a for a in alerts if a.anomaly_type == "off_hours_high_usage"][0]
-    assert off_hours.threshold_value == pytest.approx(800.0)  # 500 + 3*100
-    assert off_hours.baseline_value == 500.0
-
-
-def test_daily_limit_uses_hourly_baseline():
-    ctx = AnalysisContext(
-        hourly_tokens_baseline=2000.0,
-        daily_tokens_before=40000,
-    )
-    # personalized daily = hourly_baseline * 24 * 2 = 2000 * 48 = 96000
-    # observed = 40000 + 60000 = 100000 > 96000
-    alerts = detect_anomalies(job(usage_total_tokens=60000, request_started_at="2026-04-28T02:45:22Z"), context=ctx)
-    daily = [a for a in alerts if a.anomaly_type == "daily_token_limit_exceeded"][0]
-    assert daily.threshold_value == pytest.approx(96000.0)
-    assert daily.baseline_value == 2000.0
+    assert off_hours.threshold_value == 20000
+    assert off_hours.baseline_value is None
