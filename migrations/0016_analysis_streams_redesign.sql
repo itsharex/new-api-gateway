@@ -8,12 +8,22 @@ ALTER TABLE traces
     ADD COLUMN enrichment_queued_at TIMESTAMPTZ,
     ADD COLUMN enrichment_started_at TIMESTAMPTZ,
     ADD COLUMN enrichment_completed_at TIMESTAMPTZ,
-    ADD COLUMN last_analysis_error_code TEXT NOT NULL DEFAULT '';
+    ADD COLUMN last_analysis_error_code TEXT NOT NULL DEFAULT '',
+    ADD CONSTRAINT chk_traces_core_status
+        CHECK (core_status IN ('pending', 'processing', 'completed', 'failed')),
+    ADD CONSTRAINT chk_traces_enrichment_status
+        CHECK (enrichment_status IN ('not_required', 'pending', 'processing', 'completed', 'failed'));
 
 ALTER TABLE analysis_results
     ADD COLUMN stage TEXT NOT NULL DEFAULT 'core',
     ADD COLUMN producer TEXT NOT NULL DEFAULT '',
     ADD COLUMN result_key TEXT NOT NULL DEFAULT '';
+
+UPDATE analysis_results
+SET producer = COALESCE(NULLIF(analyzer_name, ''), 'legacy'),
+    result_key = 'legacy_' || id::text
+WHERE producer = ''
+  AND result_key = '';
 
 CREATE UNIQUE INDEX idx_analysis_results_trace_stage_producer_result_key
     ON analysis_results (trace_id, stage, producer, result_key);

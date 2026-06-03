@@ -49,6 +49,7 @@ def test_trace_stage_status_values_match_dual_stage_summary_model():
     assert TraceStageStatus.PROCESSING.value == "processing"
     assert TraceStageStatus.COMPLETED.value == "completed"
     assert TraceStageStatus.FAILED.value == "failed"
+    assert TraceStageStatus.NOT_REQUIRED.value == "not_required"
 
 
 def test_parse_job_keeps_gateway_contract_fields():
