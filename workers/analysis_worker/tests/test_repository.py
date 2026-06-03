@@ -271,11 +271,13 @@ def test_analysis_context_maps_trace_effective_tokens_p95_from_baseline_cache():
     ))
 
     assert context.trace_effective_tokens_p95 == 22000.0
+    assert context.trace_tokens_p95 == 22000.0
     assert context.completion_tokens_p95 == 9000.0
     assert context.baseline_computed_at == computed.isoformat()
     query, params = conn.cursor_obj.executed[0]
     assert "baseline_cache" in query
-    assert params == ("fp_1",)
+    assert "metric_type IN (%s, %s)" in query
+    assert params == ("fp_1", "trace_effective_tokens_p95", "completion_tokens_p95")
 
 
 def test_repository_returns_default_context_without_querying_for_empty_token_fingerprint():

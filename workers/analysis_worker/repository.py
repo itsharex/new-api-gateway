@@ -20,14 +20,17 @@ class PostgresAnalysisRepository:
     def analysis_context_for(self, job: TraceCapturedJob) -> AnalysisContext:
         if not job.token_fingerprint:
             return AnalysisContext()
+        metric_types = ("trace_effective_tokens_p95", "completion_tokens_p95")
         cursor = self.connection.cursor()
         cursor.execute(
             """
             SELECT metric_type, metric_value, metadata_json, computed_at
             FROM baseline_cache
-            WHERE fingerprint_key = %s AND expires_at > now()
+            WHERE fingerprint_key = %s
+              AND metric_type IN (%s, %s)
+              AND expires_at > now()
             """,
-            (job.token_fingerprint,),
+            (job.token_fingerprint, *metric_types),
         )
         baseline_rows = cursor.fetchall()
 
@@ -42,6 +45,8 @@ class PostgresAnalysisRepository:
         for metric_type, metric_value, _metadata_json, computed_at in baseline_rows:
             if metric_type in baseline_fields:
                 baseline_kwargs[baseline_fields[metric_type]] = metric_value
+                if metric_type == "trace_effective_tokens_p95":
+                    baseline_kwargs["trace_tokens_p95"] = metric_value
             if computed_at is not None and (max_computed_at is None or computed_at > max_computed_at):
                 max_computed_at = computed_at
         if max_computed_at is not None:

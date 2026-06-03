@@ -186,22 +186,40 @@ def test_work_relevance_assessment_serializes_v2_decision_fields():
     assert result.result["evidence"][0]["category"] == "job_search"
 
 
-def test_analysis_context_accepts_surviving_cost_fields():
+def test_analysis_context_accepts_effective_and_legacy_rule_fields():
     ctx = AnalysisContext(
+        daily_tokens_before=1234,
+        daily_token_limit=200000,
+        short_window_tokens_before=80,
+        short_window_token_threshold=9000,
+        expensive_models={"o1-pro", " gpt-4.5-preview "},
+        expensive_model_token_threshold=600,
         trace_effective_tokens_p95=15000.0,
+        trace_tokens_p95=17000.0,
         completion_tokens_p95=6000.0,
+        off_hours_baseline=1000.0,
+        off_hours_mad=300.0,
+        model_baselines={"o1-pro": 400.0, "gpt-4.5-preview": 350.0},
         baseline_computed_at="2026-05-18T12:00:00+00:00",
     )
+    assert ctx.daily_tokens_before == 1234
+    assert ctx.expensive_model_token_threshold == 600
     assert ctx.trace_effective_tokens_p95 == 15000.0
+    assert ctx.trace_tokens_p95 == 17000.0
     assert ctx.completion_tokens_p95 == 6000.0
+    assert ctx.model_baselines["o1-pro"] == 400.0
+    assert ctx.expensive_model_set() == {"o1-pro", "gpt-4.5-preview"}
     assert ctx.baseline_computed_at is not None
 
 
-def test_analysis_context_defaults_only_keep_surviving_cost_fields():
+def test_analysis_context_defaults_preserve_legacy_rule_fields():
     ctx = AnalysisContext()
 
     assert ctx.trace_effective_tokens_p95 is None
+    assert ctx.trace_tokens_p95 is None
     assert ctx.completion_tokens_p95 is None
-    assert ctx.long_output_token_threshold == 16_000
-    assert ctx.off_hours_token_threshold == 20_000
+    assert ctx.long_output_token_threshold == 8_000
+    assert ctx.off_hours_token_threshold == 2_000
+    assert ctx.repeated_prompt_threshold == 3
+    assert ctx.model_baselines is None
     assert ctx.baseline_computed_at is None
