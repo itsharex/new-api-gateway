@@ -658,43 +658,8 @@ func TestAPIKeyLookupRateLimit(t *testing.T) {
 
 func TestListTracesReturnsTopLevelPagination(t *testing.T) {
 	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleAuditor, "", nil)
-	db.traceList = []TraceSummary{
-		{
-			TraceID:               "trace_001",
-			Method:                http.MethodPost,
-			Path:                  "/v1/chat/completions",
-			RoutePattern:          "/v1/chat/completions",
-			ProtocolFamily:        "openai_chat",
-			StatusCode:            http.StatusOK,
-			Username:              "E10001",
-			FingerprintDisplay:    "fp_001",
-			ModelRequested:        "gpt-5",
-			UsagePromptTokens:     10,
-			UsageCompletionTokens: 5,
-			UsageCachedTokens:     1,
-			UsageTotalTokens:      15,
-			CreatedAt:             "2026-06-03 10:00:00+00",
-			NeedsReview:           false,
-		},
-		{
-			TraceID:               "trace_002",
-			Method:                http.MethodPost,
-			Path:                  "/v1/responses",
-			RoutePattern:          "/v1/responses",
-			ProtocolFamily:        "openai_responses",
-			StatusCode:            http.StatusTooManyRequests,
-			Username:              "E10002",
-			FingerprintDisplay:    "fp_002",
-			ModelRequested:        "gpt-5-mini",
-			UsagePromptTokens:     20,
-			UsageCompletionTokens: 10,
-			UsageCachedTokens:     2,
-			UsageTotalTokens:      30,
-			CreatedAt:             "2026-06-03 11:00:00+00",
-			NeedsReview:           true,
-		},
-	}
-	db.traceTotalItems = int64(len(db.traceList))
+	db.traceList = makeTraceSummaries(60)
+	db.traceTotalItems = 120
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/traces?page=2", nil)
 	req.AddCookie(cookie)
@@ -709,16 +674,16 @@ func TestListTracesReturnsTopLevelPagination(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode body: %v; raw=%s", err, rec.Body.String())
 	}
-	if len(body.Traces) != 2 || body.Traces[1].TraceID != "trace_002" || !body.Traces[1].NeedsReview {
+	if len(body.Traces) != 10 || body.Traces[0].TraceID != "trace_051" || body.Traces[9].TraceID != "trace_060" || body.Traces[0].NeedsReview {
 		t.Fatalf("traces = %#v", body.Traces)
 	}
-	if body.Pagination.Page != 1 || body.Pagination.PageSize != 50 {
+	if body.Pagination.Page != 2 || body.Pagination.PageSize != 50 {
 		t.Fatalf("pagination page = %#v", body.Pagination)
 	}
-	if body.Pagination.TotalItems != 2 || body.Pagination.TotalPages != 1 {
+	if body.Pagination.TotalItems != 120 || body.Pagination.TotalPages != 3 {
 		t.Fatalf("pagination totals = %#v", body.Pagination)
 	}
-	if body.Pagination.HasPrev || body.Pagination.HasNext {
+	if !body.Pagination.HasPrev || !body.Pagination.HasNext {
 		t.Fatalf("pagination nav flags = %#v", body.Pagination)
 	}
 }
@@ -764,6 +729,32 @@ func TestListTracesInvalidPageFallsBackToFirstPage(t *testing.T) {
 	}
 	if len(body.Traces) != 1 || body.Traces[0].TraceID != "trace_001" {
 		t.Fatalf("traces = %#v", body.Traces)
+	}
+}
+
+func TestListTracesIgnoresLimitQueryParameter(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleAuditor, "", nil)
+	db.traceList = makeTraceSummaries(60)
+	db.traceTotalItems = 120
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/traces?page=1&limit=999", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var body TraceListResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v; raw=%s", err, rec.Body.String())
+	}
+	if len(body.Traces) != 50 || body.Traces[0].TraceID != "trace_001" || body.Traces[49].TraceID != "trace_050" {
+		t.Fatalf("traces = %#v", body.Traces)
+	}
+	if body.Pagination.Page != 1 || body.Pagination.PageSize != 50 {
+		t.Fatalf("pagination = %#v, want page 1 size 50", body.Pagination)
 	}
 }
 
@@ -1981,6 +1972,30 @@ func traceDetailWithRawRefs() TraceDetail {
 		IdentityResolutionStatus: "resolved",
 		AnalysisStatus:           "complete",
 	}
+}
+
+func makeTraceSummaries(count int) []TraceSummary {
+	items := make([]TraceSummary, 0, count)
+	for i := 1; i <= count; i++ {
+		items = append(items, TraceSummary{
+			TraceID:               fmt.Sprintf("trace_%03d", i),
+			Method:                http.MethodPost,
+			Path:                  "/v1/chat/completions",
+			RoutePattern:          "/v1/chat/completions",
+			ProtocolFamily:        "openai_chat",
+			StatusCode:            http.StatusOK,
+			Username:              fmt.Sprintf("E%05d", 10000+i),
+			FingerprintDisplay:    fmt.Sprintf("fp_%03d", i),
+			ModelRequested:        "gpt-5",
+			UsagePromptTokens:     i,
+			UsageCompletionTokens: i / 2,
+			UsageCachedTokens:     0,
+			UsageTotalTokens:      i + (i / 2),
+			CreatedAt:             fmt.Sprintf("2026-06-03 %02d:00:00+00", i%24),
+			NeedsReview:           false,
+		})
+	}
+	return items
 }
 
 func rawRefValues() []string {
