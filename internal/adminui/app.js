@@ -9,6 +9,10 @@ const state = {
     range: "30d",
     model: "",
   },
+  traces: {
+    page: 1,
+    pageSize: 50,
+  },
   password: {
     error: "",
     success: "",
@@ -16,6 +20,7 @@ const state = {
 };
 
 let usageRequestSeq = 0;
+let traceRequestSeq = 0;
 
 const activeCharts = [];
 
@@ -462,8 +467,7 @@ async function loadView() {
     } else if (state.view === "usage") {
       await loadUsage();
     } else if (state.view === "traces") {
-      const body = await api("/traces");
-      renderTraces(body);
+      await loadTraces();
     } else if (state.view === "identities") {
       const body = await api("/token-identities");
       renderIdentities(body);
@@ -517,6 +521,25 @@ async function loadUsage() {
   }
   if (requestSeq !== usageRequestSeq) return;
   renderUsage(body);
+}
+
+async function loadTraces() {
+  const requestSeq = ++traceRequestSeq;
+  const requestedPage = Math.max(1, finiteNumber(state.traces.page) || 1);
+  const params = queryString({ page: requestedPage });
+  let body;
+  try {
+    body = await api(`/traces?${params}`);
+  } catch (error) {
+    if (requestSeq !== traceRequestSeq || state.view !== "traces" || state.traces.page !== requestedPage) {
+      return;
+    }
+    throw error;
+  }
+  if (requestSeq !== traceRequestSeq || state.view !== "traces" || state.traces.page !== requestedPage) {
+    return;
+  }
+  renderTraces(body);
 }
 
 async function reloadUsageView() {
@@ -799,8 +822,92 @@ function renderEmployeeUsageChart(points) {
   });
 }
 
+function normalizeTracePagination(pagination) {
+  const normalized = pagination || {};
+  const fallbackPage = Math.max(1, finiteNumber(state.traces.page) || 1);
+  const fallbackPageSize = Math.max(1, finiteNumber(state.traces.pageSize) || 50);
+  return {
+    page: Math.max(1, finiteNumber(normalized.page) || fallbackPage),
+    pageSize: Math.max(1, finiteNumber(normalized.page_size) || fallbackPageSize),
+    totalItems: Math.max(0, finiteNumber(normalized.total_items)),
+    totalPages: Math.max(0, finiteNumber(normalized.total_pages)),
+    hasPrev: Boolean(normalized.has_prev),
+    hasNext: Boolean(normalized.has_next),
+  };
+}
+
+function tracePageNumbers(pagination) {
+  const total = pagination.totalPages;
+  const current = pagination.page;
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, index) => index + 1);
+  }
+  const pages = new Set([1, total, current - 1, current, current + 1]);
+  if (current <= 3) {
+    pages.add(2);
+    pages.add(3);
+    pages.add(4);
+  }
+  if (current >= total - 2) {
+    pages.add(total - 1);
+    pages.add(total - 2);
+    pages.add(total - 3);
+  }
+  return Array.from(pages)
+    .filter((page) => page >= 1 && page <= total)
+    .sort((a, b) => a - b);
+}
+
+function tracePaginationHTML(pagination) {
+  if (pagination.totalItems === 0 || pagination.totalPages === 0) {
+    return `<div class="pagination-bar"><div class="pagination-summary">共 0 条</div></div>`;
+  }
+  const pages = tracePageNumbers(pagination);
+  const pageButtons = [];
+  let previous = 0;
+  pages.forEach((pageNumber) => {
+    if (previous && pageNumber - previous > 1) {
+      pageButtons.push(`<span class="pagination-ellipsis" aria-hidden="true">...</span>`);
+    }
+    pageButtons.push(
+      `<button type="button" data-trace-page="${pageNumber}" class="${pageNumber === pagination.page ? "active" : ""}" ${pageNumber === pagination.page ? 'aria-current="page"' : ""}>${pageNumber}</button>`,
+    );
+    previous = pageNumber;
+  });
+  return `
+    <div class="pagination-bar">
+      <div class="pagination-summary">第 ${formatNumber(pagination.page)} / ${formatNumber(pagination.totalPages)} 页，共 ${formatNumber(pagination.totalItems)} 条</div>
+      <div class="pagination-controls">
+        <button type="button" data-trace-page="1" ${pagination.hasPrev ? "" : "disabled"}>首页</button>
+        <button type="button" data-trace-page="${pagination.page - 1}" ${pagination.hasPrev ? "" : "disabled"}>上一页</button>
+        ${pageButtons.join("")}
+        <button type="button" data-trace-page="${pagination.page + 1}" ${pagination.hasNext ? "" : "disabled"}>下一页</button>
+        <button type="button" data-trace-page="${pagination.totalPages}" ${pagination.hasNext ? "" : "disabled"}>末页</button>
+      </div>
+    </div>
+  `;
+}
+
+function bindTracePagination() {
+  document.querySelectorAll("[data-trace-page]").forEach((button) => {
+    if (button.disabled) return;
+    button.addEventListener("click", async () => {
+      const nextPage = Number(button.dataset.tracePage || 1);
+      if (!Number.isFinite(nextPage) || nextPage < 1 || nextPage === state.traces.page) {
+        return;
+      }
+      state.traces.page = nextPage;
+      renderShell(`<section class="loading-panel">正在加载Trace...</section>`);
+      await loadView();
+    });
+  });
+}
+
 function renderTraces(body) {
   body = body || {};
+  const pagination = normalizeTracePagination(body.pagination);
+  state.traces.page = pagination.page;
+  state.traces.pageSize = pagination.pageSize;
   const rows = arrayValue(body.traces).map((trace) => [
     safeHTML(traceButton(trace.trace_id).html + (trace.needs_review ? badge("review").html : "")),
     formatTime(trace.created_at),
@@ -813,7 +920,13 @@ function renderTraces(body) {
     formatNumber(trace.usage_cached_tokens),
     formatNumber(trace.usage_total_tokens),
   ]);
-  renderShell(page("Trace", `<section class="panel">${table(["Trace", "时间 (UTC+8)", "员工", "Model", "Route", "Status", "Input", "Output", "Cached", "Total"], rows)}</section>`));
+  renderShell(
+    page(
+      "Trace",
+      `<section class="panel">${table(["Trace", "时间 (UTC+8)", "员工", "Model", "Route", "Status", "Input", "Output", "Cached", "Total"], rows)}${tracePaginationHTML(pagination)}</section>`,
+    ),
+  );
+  bindTracePagination();
   document.querySelectorAll("[data-trace-id]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {

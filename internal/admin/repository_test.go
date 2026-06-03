@@ -284,36 +284,176 @@ func TestRepositoryInsertReviewDecision(t *testing.T) {
 	}
 }
 
-func TestRepositoryListTracesBuildsBoundedQuery(t *testing.T) {
-	db := &recordingAdminDB{}
+func TestRepositoryListTracesReturnsPaginationMetadata(t *testing.T) {
+	db := &recordingAdminDB{
+		rowQueue: []pgx.Row{
+			scanFuncRow{scan: func(dest ...any) error {
+				*(dest[0].(*int64)) = int64(120)
+				return nil
+			}},
+		},
+		rowsQueue: []pgx.Rows{
+			&scanRows{scans: []func(dest ...any) error{
+				func(dest ...any) error {
+					*(dest[0].(*string)) = "trace_120"
+					*(dest[1].(*string)) = "POST"
+					*(dest[2].(*string)) = "/v1/chat/completions"
+					*(dest[3].(*string)) = "/v1/chat/completions"
+					*(dest[4].(*string)) = "openai_chat"
+					*(dest[5].(*int)) = 200
+					*(dest[6].(*string)) = "E10001"
+					*(dest[7].(*string)) = "tkfp_abcd"
+					*(dest[8].(*string)) = "gpt-5"
+					*(dest[9].(*int)) = 10
+					*(dest[10].(*int)) = 5
+					*(dest[11].(*int)) = 2
+					*(dest[12].(*int)) = 15
+					*(dest[13].(*string)) = "2026-06-03 10:00:00+00"
+					*(dest[14].(*bool)) = true
+					return nil
+				},
+			}},
+		},
+	}
 	repo := NewRepository(db)
-	db.rows = &fakeRows{}
 
-	_, err := repo.ListTraces(context.Background(), TraceFilter{
-		Username:     "E10001",
-		RoutePattern: "/v1/chat/completions",
-		Limit:        500,
+	result, err := repo.ListTraces(context.Background(), TraceFilter{
+		Page:  3,
+		Limit: 50,
 	})
 
 	if err != nil {
 		t.Fatalf("ListTraces error: %v", err)
 	}
-	if !strings.Contains(db.querySQL, "FROM traces") {
-		t.Fatalf("query = %s", db.querySQL)
+	if len(result.Traces) != 1 {
+		t.Fatalf("trace count = %d, want 1", len(result.Traces))
 	}
-	for _, column := range []string{"t.usage_prompt_tokens", "t.usage_completion_tokens", "t.usage_cached_tokens", "t.usage_total_tokens"} {
-		if !strings.Contains(db.querySQL, column) {
-			t.Fatalf("query missing %s: %s", column, db.querySQL)
-		}
+	if result.Traces[0].TraceID != "trace_120" || !result.Traces[0].NeedsReview {
+		t.Fatalf("trace row = %#v", result.Traces[0])
 	}
-	if strings.Contains(db.querySQL, "500") {
-		t.Fatalf("query interpolated limit instead of binding/capping: %s", db.querySQL)
+	if result.Pagination.Page != 3 || result.Pagination.PageSize != 50 {
+		t.Fatalf("pagination page = %#v", result.Pagination)
 	}
-	if len(db.queryArgs) == 0 {
-		t.Fatal("expected bound query args")
+	if result.Pagination.TotalItems != 120 || result.Pagination.TotalPages != 3 {
+		t.Fatalf("pagination totals = %#v", result.Pagination)
 	}
-	if got := db.queryArgs[len(db.queryArgs)-1]; got != 100 {
-		t.Fatalf("limit arg = %#v, want capped 100", got)
+	if !result.Pagination.HasPrev || result.Pagination.HasNext {
+		t.Fatalf("pagination nav flags = %#v", result.Pagination)
+	}
+	if len(db.querySQLs) != 2 {
+		t.Fatalf("querySQLs = %#v, want count + list queries", db.querySQLs)
+	}
+	if !strings.Contains(db.querySQLs[0], "SELECT count(*)") {
+		t.Fatalf("count query = %s", db.querySQLs[0])
+	}
+	if !strings.Contains(db.querySQLs[1], "ORDER BY t.created_at DESC, t.trace_id DESC") {
+		t.Fatalf("list query = %s", db.querySQLs[1])
+	}
+	if got := db.queryArgsLog[1]; len(got) != 2 || got[0] != 50 || got[1] != 100 {
+		t.Fatalf("list query args = %#v, want [50 100]", got)
+	}
+}
+
+func TestRepositoryListTracesClampsPageToLastPage(t *testing.T) {
+	db := &recordingAdminDB{
+		rowQueue: []pgx.Row{
+			scanFuncRow{scan: func(dest ...any) error {
+				*(dest[0].(*int64)) = int64(60)
+				return nil
+			}},
+		},
+		rowsQueue: []pgx.Rows{&fakeRows{}},
+	}
+	repo := NewRepository(db)
+
+	result, err := repo.ListTraces(context.Background(), TraceFilter{
+		Page:  99,
+		Limit: 50,
+	})
+
+	if err != nil {
+		t.Fatalf("ListTraces error: %v", err)
+	}
+	if result.Pagination.Page != 2 || result.Pagination.TotalPages != 2 {
+		t.Fatalf("pagination = %#v, want last page 2/2", result.Pagination)
+	}
+	if got := db.queryArgsLog[1]; len(got) != 2 || got[0] != 50 || got[1] != 50 {
+		t.Fatalf("list query args = %#v, want [50 50]", got)
+	}
+}
+
+func TestRepositoryListTracesReturnsFirstPageForEmptyResults(t *testing.T) {
+	db := &recordingAdminDB{
+		rowQueue: []pgx.Row{
+			scanFuncRow{scan: func(dest ...any) error {
+				*(dest[0].(*int64)) = int64(0)
+				return nil
+			}},
+		},
+		rowsQueue: []pgx.Rows{&fakeRows{}},
+	}
+	repo := NewRepository(db)
+
+	result, err := repo.ListTraces(context.Background(), TraceFilter{
+		Page:  9,
+		Limit: 50,
+	})
+
+	if err != nil {
+		t.Fatalf("ListTraces error: %v", err)
+	}
+	if result.Pagination.Page != 1 || result.Pagination.TotalPages != 0 || result.Pagination.TotalItems != 0 {
+		t.Fatalf("pagination = %#v, want empty result page 1 with zero totals", result.Pagination)
+	}
+	if result.Pagination.HasPrev || result.Pagination.HasNext {
+		t.Fatalf("pagination nav flags = %#v, want no navigation", result.Pagination)
+	}
+	if got := db.queryArgsLog[1]; len(got) != 2 || got[0] != 50 || got[1] != 0 {
+		t.Fatalf("list query args = %#v, want [50 0]", got)
+	}
+}
+
+func TestRepositoryListTracesBindsFiltersAndCapsLimit(t *testing.T) {
+	db := &recordingAdminDB{
+		rowQueue: []pgx.Row{
+			scanFuncRow{scan: func(dest ...any) error {
+				*(dest[0].(*int64)) = int64(0)
+				return nil
+			}},
+		},
+		rowsQueue: []pgx.Rows{&fakeRows{}},
+	}
+	repo := NewRepository(db)
+
+	_, err := repo.ListTraces(context.Background(), TraceFilter{
+		TraceID:          "trace_123",
+		Username:         "E10001",
+		TokenFingerprint: "fp_123",
+		RoutePattern:     "/v1/chat/completions",
+		Model:            "gpt-5",
+		StatusCode:       429,
+		Limit:            500,
+	})
+
+	if err != nil {
+		t.Fatalf("ListTraces error: %v", err)
+	}
+	if !strings.Contains(db.querySQLs[0], "t.trace_id = $1") ||
+		!strings.Contains(db.querySQLs[0], "t.username_snapshot = $2") ||
+		!strings.Contains(db.querySQLs[0], "t.token_fingerprint = $3") ||
+		!strings.Contains(db.querySQLs[0], "t.route_pattern = $4") ||
+		!strings.Contains(db.querySQLs[0], "t.model_requested = $5") ||
+		!strings.Contains(db.querySQLs[0], "t.status_code = $6") {
+		t.Fatalf("count query filters = %s", db.querySQLs[0])
+	}
+	if strings.Contains(db.querySQLs[1], "500") {
+		t.Fatalf("list query interpolated raw limit: %s", db.querySQLs[1])
+	}
+	if got := db.queryArgsLog[0]; len(got) != 6 {
+		t.Fatalf("count query args = %#v, want 6 filters", got)
+	}
+	if got := db.queryArgsLog[1]; len(got) != 8 || got[6] != 100 || got[7] != 0 {
+		t.Fatalf("list query args = %#v, want filters + [100 0]", got)
 	}
 }
 
@@ -332,10 +472,17 @@ func TestRepositoryLookupTokenSummaryReturnsIdentityScanError(t *testing.T) {
 
 func TestRepositoryLookupTokenSummaryReturnsAnomalyCountScanError(t *testing.T) {
 	db := &recordingAdminDB{
-		rowQueue: []pgx.Row{
-			scanFuncRow{scan: scanTokenIdentity("E10001", 42, "prod key", 1)},
-			scanErrorRow{err: errors.New("anomaly count failed")},
+		queryRowFunc: func(sql string, args ...any) pgx.Row {
+			switch {
+			case strings.Contains(sql, "FROM token_identity_cache"):
+				return scanFuncRow{scan: scanTokenIdentity("E10001", 42, "prod key", 1)}
+			case strings.Contains(sql, "FROM usage_anomalies"):
+				return scanErrorRow{err: errors.New("anomaly count failed")}
+			default:
+				return fakeRow{}
+			}
 		},
+		rowsQueue: []pgx.Rows{&fakeRows{}},
 	}
 	repo := NewRepository(db)
 
@@ -348,10 +495,17 @@ func TestRepositoryLookupTokenSummaryReturnsAnomalyCountScanError(t *testing.T) 
 
 func TestRepositoryLookupTokenSummaryToleratesMissingIdentityCacheRow(t *testing.T) {
 	db := &recordingAdminDB{
-		rowQueue: []pgx.Row{
-			scanErrorRow{err: pgx.ErrNoRows},
-			scanFuncRow{scan: scanAnomalyCount(3)},
+		queryRowFunc: func(sql string, args ...any) pgx.Row {
+			switch {
+			case strings.Contains(sql, "FROM token_identity_cache"):
+				return scanErrorRow{err: pgx.ErrNoRows}
+			case strings.Contains(sql, "FROM usage_anomalies"):
+				return scanFuncRow{scan: scanAnomalyCount(3)}
+			default:
+				return fakeRow{}
+			}
 		},
+		rowsQueue: []pgx.Rows{&fakeRows{}},
 	}
 	repo := NewRepository(db)
 
@@ -368,6 +522,67 @@ func TestRepositoryLookupTokenSummaryToleratesMissingIdentityCacheRow(t *testing
 	}
 	if summary.OpenAnomalyCount != 3 {
 		t.Fatalf("OpenAnomalyCount = %d, want 3", summary.OpenAnomalyCount)
+	}
+}
+
+func TestRepositoryLookupTokenSummaryReturnsRecentTracesWithoutTraceCountQuery(t *testing.T) {
+	db := &recordingAdminDB{
+		queryRowFunc: func(sql string, args ...any) pgx.Row {
+			switch {
+			case strings.Contains(sql, "FROM token_identity_cache"):
+				return scanFuncRow{scan: scanTokenIdentity("E10001", 42, "prod key", 1)}
+			case strings.Contains(sql, "SELECT count(*) FROM traces"):
+				return scanErrorRow{err: errors.New("unexpected trace count query")}
+			case strings.Contains(sql, "FROM usage_anomalies"):
+				return scanFuncRow{scan: scanAnomalyCount(2)}
+			default:
+				return fakeRow{}
+			}
+		},
+		rowsQueue: []pgx.Rows{
+			&scanRows{scans: []func(dest ...any) error{
+				func(dest ...any) error {
+					*(dest[0].(*string)) = "trace_123"
+					*(dest[1].(*string)) = "POST"
+					*(dest[2].(*string)) = "/v1/chat/completions"
+					*(dest[3].(*string)) = "/v1/chat/completions"
+					*(dest[4].(*string)) = "openai_chat"
+					*(dest[5].(*int)) = 200
+					*(dest[6].(*string)) = "E10001"
+					*(dest[7].(*string)) = "tkfp_example"
+					*(dest[8].(*string)) = "gpt-5"
+					*(dest[9].(*int)) = 10
+					*(dest[10].(*int)) = 5
+					*(dest[11].(*int)) = 2
+					*(dest[12].(*int)) = 17
+					*(dest[13].(*string)) = "2026-06-03 10:00:00+00"
+					*(dest[14].(*bool)) = true
+					return nil
+				},
+			}},
+		},
+	}
+	repo := NewRepository(db)
+
+	summary, err := repo.LookupTokenSummary(context.Background(), "fingerprint-value", "tkfp_example")
+
+	if err != nil {
+		t.Fatalf("LookupTokenSummary error: %v", err)
+	}
+	if summary.Username != "E10001" || summary.TokenName != "prod key" || summary.OpenAnomalyCount != 2 {
+		t.Fatalf("summary identity/anomaly fields = %#v", summary)
+	}
+	if len(summary.RecentTraces) != 1 {
+		t.Fatalf("RecentTraces len = %d, want 1", len(summary.RecentTraces))
+	}
+	trace := summary.RecentTraces[0]
+	if trace.TraceID != "trace_123" || trace.ModelRequested != "gpt-5" || !trace.NeedsReview {
+		t.Fatalf("recent trace = %#v", trace)
+	}
+	for _, sql := range db.querySQLs {
+		if strings.Contains(sql, "SELECT count(*) FROM traces") {
+			t.Fatalf("LookupTokenSummary unexpectedly issued trace count query: %s", sql)
+		}
 	}
 }
 
@@ -968,6 +1183,7 @@ type recordingAdminDB struct {
 	queryLog     []string
 	queryArgsLog [][]any
 	querySQLs    []string
+	queryRowFunc func(sql string, args ...any) pgx.Row
 	rows         pgx.Rows
 	rowsQueue    []pgx.Rows
 	row          pgx.Row
@@ -1001,6 +1217,11 @@ func (db *recordingAdminDB) QueryRow(ctx context.Context, sql string, args ...an
 	db.querySQL = sql
 	db.querySQLs = append(db.querySQLs, sql)
 	db.queryArgs = append([]any(nil), args...)
+	db.queryLog = append(db.queryLog, sql)
+	db.queryArgsLog = append(db.queryArgsLog, append([]any(nil), args...))
+	if db.queryRowFunc != nil {
+		return db.queryRowFunc(sql, args...)
+	}
 	if len(db.rowQueue) > 0 {
 		row := db.rowQueue[0]
 		db.rowQueue = db.rowQueue[1:]

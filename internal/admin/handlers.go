@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -257,20 +258,27 @@ func (h Handler) requireCSRF(next http.Handler) http.Handler {
 }
 
 func (h Handler) listTraces(w http.ResponseWriter, r *http.Request) {
+	page := 1
+	if rawPage := strings.TrimSpace(r.URL.Query().Get("page")); rawPage != "" {
+		if parsed, err := strconv.Atoi(rawPage); err == nil && parsed > 0 {
+			page = parsed
+		}
+	}
 	filter := TraceFilter{
 		TraceID:          r.URL.Query().Get("trace_id"),
 		Username:         r.URL.Query().Get("username"),
 		TokenFingerprint: r.URL.Query().Get("token_fingerprint"),
 		RoutePattern:     r.URL.Query().Get("route_pattern"),
 		Model:            r.URL.Query().Get("model"),
-		Limit:            100,
+		Page:             page,
+		Limit:            50,
 	}
 	items, err := h.repo.ListTraces(r.Context(), filter)
 	if err != nil {
 		http.Error(w, "failed to list traces", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"traces": items})
+	writeJSON(w, http.StatusOK, items)
 }
 
 func (h Handler) overview(w http.ResponseWriter, r *http.Request) {
