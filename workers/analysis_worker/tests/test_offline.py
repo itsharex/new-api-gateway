@@ -21,6 +21,9 @@ def test_run_offline_batch_queries_and_upserts():
     assert result["fingerprints_processed"] == 1
     assert result["baselines_written"] == 4  # 1 hourly + 2 trace + 1 model
     assert mock_upsert.call_count == 1
+    written = mock_upsert.call_args.args[1]
+    assert written[1].metric_type == "trace_effective_tokens_p95"
+    assert written[1].metric_value == 15000.0
 
 
 def test_full_offline_pipeline_with_if_training():
@@ -52,3 +55,5 @@ def test_full_offline_pipeline_with_if_training():
 
     assert result["fingerprints_processed"] >= 1
     assert result["baselines_written"] >= 3
+    written = mock_upsert.call_args.args[1]
+    assert any(row.metric_type == "trace_effective_tokens_p95" for row in written)

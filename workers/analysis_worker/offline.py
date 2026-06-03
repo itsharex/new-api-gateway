@@ -23,7 +23,7 @@ def run_offline_batch(connection, lookback_days: int = 7) -> dict:
 
     # 2. Compute trace-level baselines
     cursor.execute(QUERY_TRACE_LEVEL, (str(lookback_days),))
-    columns = ["fingerprint_key", "p95_total", "p95_completion"]
+    columns = ["fingerprint_key", "p95_effective", "p95_completion"]
     trace_rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
     trace_baselines = compute_trace_level_baselines(trace_rows)
 
