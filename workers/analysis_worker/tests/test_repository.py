@@ -538,6 +538,37 @@ def test_analysis_context_for_maps_legacy_and_effective_baseline_metric_types():
     assert context.baseline_computed_at is not None
 
 
+def test_analysis_context_prefers_effective_baseline_over_legacy_trace_p95():
+    from datetime import datetime, timezone
+
+    computed = datetime(2026, 5, 18, 12, 0, 0, tzinfo=timezone.utc)
+    conn = FakeConnection(
+        fetch_values=[(0,), (0,), (0,)],
+        fetchall_rows=[[
+            ("trace_effective_tokens_p95", 18000.0, {}, computed),
+            ("trace_tokens_p95", 32000.0, {}, computed),
+            ("completion_tokens_p95", 4000.0, {}, computed),
+        ]],
+    )
+    repo = PostgresAnalysisRepository(conn)
+    job = TraceCapturedJob(
+        type="trace_captured",
+        trace_id="t1",
+        route_pattern="/v1/chat/completions",
+        protocol_family="openai_chat",
+        capture_mode="raw_and_normalized",
+        username="alice",
+        token_fingerprint="tkfp_raw",
+        request_started_at="2026-05-18T10:00:00Z",
+    )
+
+    context = repo.analysis_context_for(job)
+
+    assert context.trace_effective_tokens_p95 == 18000.0
+    assert context.trace_tokens_p95 == 18000.0
+    assert context.completion_tokens_p95 == 4000.0
+
+
 def test_repository_loads_short_window_context_from_previous_5_minutes_of_traces():
     cursor = SemanticCursor(
         aggregate_rows=[(97000,)],

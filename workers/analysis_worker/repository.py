@@ -119,7 +119,7 @@ class PostgresAnalysisRepository:
             if computed_at is not None and (max_computed_at is None or computed_at > max_computed_at):
                 max_computed_at = computed_at
 
-        if "trace_tokens_p95" not in baseline_kwargs and "trace_effective_tokens_p95" in baseline_kwargs:
+        if "trace_effective_tokens_p95" in baseline_kwargs:
             baseline_kwargs["trace_tokens_p95"] = baseline_kwargs["trace_effective_tokens_p95"]
         if model_baselines:
             baseline_kwargs["model_baselines"] = model_baselines
