@@ -1338,7 +1338,7 @@ def test_process_core_stream_message_marks_trace_completed_and_acks(monkeypatch)
         return consumer
 
     monkeypatch.setattr("main.StreamConsumer", fake_consumer_factory)
-    monkeypatch.setattr("core_stage.process_job_line", fake_process_job_line)
+    monkeypatch.setattr("core_stage.default_process_job_line", fake_process_job_line)
 
     processor = CoreStageProcessor(
         connection=connection,
@@ -1363,3 +1363,289 @@ def test_process_core_stream_message_marks_trace_completed_and_acks(monkeypatch)
     assert connection.traces["trace_1"]["enrichment_required"] is True
     assert connection.traces["trace_1"]["enrichment_status"] == "pending"
     assert connection.traces["trace_1"]["enrichment_queued_at"] == "2026-06-03T10:00:02+00:00"
+
+
+def test_core_stage_queues_enrichment_when_llm_judge_is_degraded(monkeypatch):
+    from core_stage import CoreStageProcessor
+
+    class FakeCursor:
+        def __init__(self, connection):
+            self.connection = connection
+            self._next_row = None
+
+        def execute(self, query, params):
+            normalized = " ".join(query.split())
+            if "FROM traces" in normalized and "WHERE trace_id = %s" in normalized:
+                trace = self.connection.traces[params[0]]
+                self._next_row = (
+                    trace["trace_id"],
+                    trace["route_pattern"],
+                    trace["protocol_family"],
+                    trace["capture_mode"],
+                    trace["username_snapshot"],
+                    trace["request_raw_ref"],
+                    trace["request_headers_ref"],
+                    trace["response_raw_ref"],
+                    trace["response_headers_ref"],
+                    trace["model_requested"],
+                    trace["usage_prompt_tokens"],
+                    trace["usage_completion_tokens"],
+                    trace["usage_total_tokens"],
+                    trace["usage_reasoning_tokens"],
+                    trace["usage_cached_tokens"],
+                    trace["token_fingerprint"],
+                    trace["fingerprint_display"],
+                    trace["new_api_token_id_snapshot"],
+                    trace["token_name_snapshot"],
+                    trace["identity_resolution_status"],
+                    trace["client_ip_hash"],
+                    trace["user_agent_hash"],
+                    trace["status_code"],
+                    trace["upstream_status_code"],
+                    trace["stream"],
+                    trace["request_started_at"],
+                    trace["request_body_size"],
+                    trace["response_body_size"],
+                )
+                return
+            if "FROM media_snapshot_jobs" in normalized:
+                self._next_row = None
+                return
+            if "FROM analysis_results" in normalized:
+                self._next_row = (1,)
+                return
+            if normalized.startswith("UPDATE traces SET core_status = 'completed'"):
+                enrichment_required, enrichment_status, _queued_flag, trace_id = params
+                trace = self.connection.traces[trace_id]
+                trace["core_status"] = "completed"
+                trace["enrichment_required"] = enrichment_required
+                trace["enrichment_status"] = enrichment_status
+                trace["enrichment_queued_at"] = (
+                    "2026-06-03T10:00:02+00:00" if enrichment_status == "pending" else None
+                )
+                self._next_row = None
+                return
+            self._next_row = None
+
+        def fetchone(self):
+            return self._next_row
+
+    class FakeConnection:
+        def __init__(self):
+            self.traces = {
+                "trace_degraded": {
+                    "trace_id": "trace_degraded",
+                    "route_pattern": "/v1/chat/completions",
+                    "protocol_family": "openai_chat",
+                    "capture_mode": "raw_and_normalized",
+                    "username_snapshot": "alice",
+                    "request_raw_ref": "file:///tmp/request.bin",
+                    "request_headers_ref": "",
+                    "response_raw_ref": "file:///tmp/response.bin",
+                    "response_headers_ref": "",
+                    "model_requested": "gpt-4.1",
+                    "usage_prompt_tokens": 11,
+                    "usage_completion_tokens": 7,
+                    "usage_total_tokens": 18,
+                    "usage_reasoning_tokens": 0,
+                    "usage_cached_tokens": 0,
+                    "token_fingerprint": "tkfp",
+                    "fingerprint_display": "tkfp_display",
+                    "new_api_token_id_snapshot": 42,
+                    "token_name_snapshot": "alice",
+                    "identity_resolution_status": "resolved",
+                    "client_ip_hash": "",
+                    "user_agent_hash": "",
+                    "status_code": 200,
+                    "upstream_status_code": 200,
+                    "stream": False,
+                    "request_started_at": "2026-06-03T10:00:00+00:00",
+                    "request_body_size": 128,
+                    "response_body_size": 256,
+                    "core_status": "pending",
+                    "enrichment_required": False,
+                    "enrichment_status": "not_required",
+                    "enrichment_queued_at": None,
+                }
+            }
+            self.cursor_obj = FakeCursor(self)
+            self.commit_calls = 0
+
+        def cursor(self):
+            return self.cursor_obj
+
+        def commit(self):
+            self.commit_calls += 1
+
+    publish_calls = []
+    connection = FakeConnection()
+
+    def fake_process_job_line(*args, **kwargs):
+        return {
+            "accepted_trace_id": "trace_degraded",
+            "worker_status": "processed",
+            "llm_judge_status": "degraded",
+        }
+
+    def fake_publish(*args, **kwargs):
+        publish_calls.append(kwargs)
+        return "1748944471000-9"
+
+    monkeypatch.setattr("core_stage.default_process_job_line", fake_process_job_line)
+    monkeypatch.setattr("core_stage.publish_stream_message", fake_publish)
+
+    processor = CoreStageProcessor(
+        connection=connection,
+        evidence_store=FilesystemEvidenceStore("/tmp/evidence-unused"),
+        redis_client=object(),
+    )
+
+    result = processor.process("trace_degraded")
+
+    assert result["llm_judge_status"] == "degraded"
+    assert connection.traces["trace_degraded"]["enrichment_required"] is True
+    assert connection.traces["trace_degraded"]["enrichment_status"] == "pending"
+    assert connection.traces["trace_degraded"]["enrichment_queued_at"] == "2026-06-03T10:00:02+00:00"
+    assert publish_calls and publish_calls[0]["trace_id"] == "trace_degraded"
+
+
+def test_core_stage_publish_failure_keeps_enrichment_state_truthful(monkeypatch):
+    from core_stage import CoreStageProcessor
+
+    class FakeCursor:
+        def __init__(self, connection):
+            self.connection = connection
+            self._next_row = None
+
+        def execute(self, query, params):
+            normalized = " ".join(query.split())
+            if "FROM traces" in normalized and "WHERE trace_id = %s" in normalized:
+                trace = self.connection.traces[params[0]]
+                self._next_row = (
+                    trace["trace_id"],
+                    trace["route_pattern"],
+                    trace["protocol_family"],
+                    trace["capture_mode"],
+                    trace["username_snapshot"],
+                    trace["request_raw_ref"],
+                    trace["request_headers_ref"],
+                    trace["response_raw_ref"],
+                    trace["response_headers_ref"],
+                    trace["model_requested"],
+                    trace["usage_prompt_tokens"],
+                    trace["usage_completion_tokens"],
+                    trace["usage_total_tokens"],
+                    trace["usage_reasoning_tokens"],
+                    trace["usage_cached_tokens"],
+                    trace["token_fingerprint"],
+                    trace["fingerprint_display"],
+                    trace["new_api_token_id_snapshot"],
+                    trace["token_name_snapshot"],
+                    trace["identity_resolution_status"],
+                    trace["client_ip_hash"],
+                    trace["user_agent_hash"],
+                    trace["status_code"],
+                    trace["upstream_status_code"],
+                    trace["stream"],
+                    trace["request_started_at"],
+                    trace["request_body_size"],
+                    trace["response_body_size"],
+                )
+                return
+            if "FROM media_snapshot_jobs" in normalized:
+                self._next_row = None
+                return
+            if "FROM analysis_results" in normalized:
+                self._next_row = (1,)
+                return
+            if normalized.startswith("UPDATE traces SET core_status = 'completed'"):
+                enrichment_required, enrichment_status, _queued_flag, trace_id = params
+                trace = self.connection.traces[trace_id]
+                trace["core_status"] = "completed"
+                trace["enrichment_required"] = enrichment_required
+                trace["enrichment_status"] = enrichment_status
+                trace["enrichment_queued_at"] = (
+                    "2026-06-03T10:00:02+00:00" if enrichment_status == "pending" else None
+                )
+                self._next_row = None
+                return
+            self._next_row = None
+
+        def fetchone(self):
+            return self._next_row
+
+    class FakeConnection:
+        def __init__(self):
+            self.traces = {
+                "trace_publish_failure": {
+                    "trace_id": "trace_publish_failure",
+                    "route_pattern": "/v1/chat/completions",
+                    "protocol_family": "openai_chat",
+                    "capture_mode": "raw_and_normalized",
+                    "username_snapshot": "alice",
+                    "request_raw_ref": "file:///tmp/request.bin",
+                    "request_headers_ref": "",
+                    "response_raw_ref": "file:///tmp/response.bin",
+                    "response_headers_ref": "",
+                    "model_requested": "gpt-4.1",
+                    "usage_prompt_tokens": 11,
+                    "usage_completion_tokens": 7,
+                    "usage_total_tokens": 18,
+                    "usage_reasoning_tokens": 0,
+                    "usage_cached_tokens": 0,
+                    "token_fingerprint": "tkfp",
+                    "fingerprint_display": "tkfp_display",
+                    "new_api_token_id_snapshot": 42,
+                    "token_name_snapshot": "alice",
+                    "identity_resolution_status": "resolved",
+                    "client_ip_hash": "",
+                    "user_agent_hash": "",
+                    "status_code": 200,
+                    "upstream_status_code": 200,
+                    "stream": False,
+                    "request_started_at": "2026-06-03T10:00:00+00:00",
+                    "request_body_size": 128,
+                    "response_body_size": 256,
+                    "core_status": "pending",
+                    "enrichment_required": False,
+                    "enrichment_status": "not_required",
+                    "enrichment_queued_at": None,
+                }
+            }
+            self.cursor_obj = FakeCursor(self)
+            self.commit_calls = 0
+
+        def cursor(self):
+            return self.cursor_obj
+
+        def commit(self):
+            self.commit_calls += 1
+
+    connection = FakeConnection()
+
+    def fake_process_job_line(*args, **kwargs):
+        return {
+            "accepted_trace_id": "trace_publish_failure",
+            "worker_status": "processed",
+            "llm_judge_status": "degraded",
+        }
+
+    def fail_publish(*args, **kwargs):
+        raise RuntimeError("redis unavailable")
+
+    monkeypatch.setattr("core_stage.default_process_job_line", fake_process_job_line)
+    monkeypatch.setattr("core_stage.publish_stream_message", fail_publish)
+
+    processor = CoreStageProcessor(
+        connection=connection,
+        evidence_store=FilesystemEvidenceStore("/tmp/evidence-unused"),
+        redis_client=object(),
+    )
+
+    with pytest.raises(RuntimeError, match="redis unavailable"):
+        processor.process("trace_publish_failure")
+
+    assert connection.traces["trace_publish_failure"]["core_status"] == "completed"
+    assert connection.traces["trace_publish_failure"]["enrichment_required"] is True
+    assert connection.traces["trace_publish_failure"]["enrichment_status"] == "failed"
+    assert connection.traces["trace_publish_failure"]["enrichment_queued_at"] is None

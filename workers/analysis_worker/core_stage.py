@@ -2,10 +2,15 @@ import json
 from datetime import datetime, timezone
 
 from context_repository import PostgresContextRepository
-from main import process_job_line
 from models import AnalysisStage
 from repository import PostgresAnalysisRepository
 from streams import publish_stream_message
+
+
+def default_process_job_line(*args, **kwargs):
+    from main import process_job_line
+
+    return process_job_line(*args, **kwargs)
 
 
 class CoreStageProcessor:
@@ -17,6 +22,7 @@ class CoreStageProcessor:
         llm_judge=None,
         enrichment_stream_name: str = "analysis.enrichment",
         redis_client=None,
+        process_job_line_fn=None,
     ):
         self.connection = connection
         self.evidence_store = evidence_store
@@ -24,10 +30,11 @@ class CoreStageProcessor:
         self.llm_judge = llm_judge
         self.enrichment_stream_name = enrichment_stream_name
         self.redis_client = redis_client
+        self.process_job_line_fn = process_job_line_fn or default_process_job_line
 
     def process(self, trace_id: str) -> dict:
         payload = _load_trace_job_json(self.connection, trace_id)
-        result = process_job_line(
+        result = self.process_job_line_fn(
             payload,
             self.evidence_store,
             PostgresAnalysisRepository(self.connection),
@@ -35,36 +42,37 @@ class CoreStageProcessor:
             storage_backend=self.storage_backend,
             llm_judge=self.llm_judge,
         )
-        enrichment_required = _trace_needs_enrichment(self.connection, trace_id)
-        cursor = self.connection.cursor()
-        cursor.execute(
-            """
-            UPDATE traces
-            SET core_status = 'completed',
-                core_completed_at = now(),
-                enrichment_required = %s,
-                enrichment_status = %s,
-                enrichment_queued_at = CASE WHEN %s THEN now() ELSE NULL END,
-                updated_at = now()
-            WHERE trace_id = %s
-            """,
-            (
-                enrichment_required,
-                "pending" if enrichment_required else "not_required",
-                enrichment_required,
-                trace_id,
-            ),
+        enrichment_required = _trace_needs_enrichment(self.connection, trace_id, result)
+
+        if enrichment_required and self.redis_client is not None:
+            try:
+                publish_stream_message(
+                    self.redis_client,
+                    stream_name=self.enrichment_stream_name,
+                    trace_id=trace_id,
+                    stage=AnalysisStage.ENRICHMENT,
+                    enqueued_at=datetime.now(timezone.utc).isoformat(),
+                    hints={"source_stage": AnalysisStage.CORE.value},
+                )
+            except Exception:
+                _update_trace_stage_state(
+                    self.connection,
+                    trace_id,
+                    enrichment_required=True,
+                    enrichment_status="failed",
+                    enrichment_queued=False,
+                )
+                self.connection.commit()
+                raise
+
+        _update_trace_stage_state(
+            self.connection,
+            trace_id,
+            enrichment_required=enrichment_required,
+            enrichment_status="pending" if enrichment_required else "not_required",
+            enrichment_queued=enrichment_required,
         )
         self.connection.commit()
-        if enrichment_required and self.redis_client is not None:
-            publish_stream_message(
-                self.redis_client,
-                stream_name=self.enrichment_stream_name,
-                trace_id=trace_id,
-                stage=AnalysisStage.ENRICHMENT,
-                enqueued_at=datetime.now(timezone.utc).isoformat(),
-                hints={"source_stage": AnalysisStage.CORE.value},
-            )
         return result
 
 
@@ -143,7 +151,9 @@ def _load_trace_job_json(connection, trace_id: str) -> str:
     return json.dumps(payload, sort_keys=True)
 
 
-def _trace_needs_enrichment(connection, trace_id: str) -> bool:
+def _trace_needs_enrichment(connection, trace_id: str, result: dict | None = None) -> bool:
+    if (result or {}).get("llm_judge_status") == "degraded":
+        return True
     cursor = connection.cursor()
     cursor.execute(
         """
@@ -155,3 +165,32 @@ def _trace_needs_enrichment(connection, trace_id: str) -> bool:
         (trace_id,),
     )
     return cursor.fetchone() is not None
+
+
+def _update_trace_stage_state(
+    connection,
+    trace_id: str,
+    *,
+    enrichment_required: bool,
+    enrichment_status: str,
+    enrichment_queued: bool,
+) -> None:
+    cursor = connection.cursor()
+    cursor.execute(
+        """
+        UPDATE traces
+        SET core_status = 'completed',
+            core_completed_at = now(),
+            enrichment_required = %s,
+            enrichment_status = %s,
+            enrichment_queued_at = CASE WHEN %s THEN now() ELSE NULL END,
+            updated_at = now()
+        WHERE trace_id = %s
+        """,
+        (
+            enrichment_required,
+            enrichment_status,
+            enrichment_queued,
+            trace_id,
+        ),
+    )
