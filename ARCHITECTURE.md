@@ -123,7 +123,7 @@ Redis 缓存 → PostgreSQL 缓存 → new-api 数据库直查
 
 ### `internal/jobs/` — 任务发布
 
-将 `TraceCapturedJob` JSON 序列化后推送到 Redis `analysis_jobs` 列表，这是 Go 网关与 Python Worker 之间的契约。
+将最小 core envelope 写入 Redis `analysis.core` stream；Python worker 通过 consumer group 消费，并在需要时继续投递 `analysis.enrichment`。
 
 ### `internal/admin/` — 管理 API
 
@@ -174,14 +174,14 @@ RBAC 角色：`viewer` → `auditor` → `raw_access` → `admin`，权限逐级
 
 ## Go 与 Python 职责划分
 
-项目由两个独立进程组成，通过 Redis `analysis_jobs` 列表协作：
+项目由两个独立进程组成，通过 Redis Streams 协作：
 
 | 维度 | Go 网关 (audit-gateway) | Python 分析 Worker (analysis_worker) |
 |------|------------------------|--------------------------------------|
 | 进程类型 | HTTP 长驻服务 | Redis 消费者长驻进程 |
 | 数据方向 | 写入 `traces`、`raw_evidence_objects`、`token_identity_cache`、`coverage_alerts` | 写入 `normalized_messages`、`analysis_results`、`usage_aggregates`、`usage_anomalies`、`worker_heartbeats`、`raw_evidence_objects`（媒体资产）、更新 `traces.request_body_sha256` |
 | 核心能力 | 反向代理、请求/响应采集、身份解析、管理 API + UI | 协议归一化、用量聚合、异常检测、工作相关性分类 |
-| 通信方式 | RPUSH `trace_captured` 任务到 Redis | BLPOP 持续消费 Redis 任务 |
+| 通信方式 | XADD `analysis.core` | XREADGROUP / XAUTOCLAIM / XACK 消费 Redis Streams |
 | 不启动的影响 | 整个系统不可用 | 代理转发正常，但分析、聚合、告警全部不可用，Redis 队列堆积 |
 
 ## Python 分析 Worker
@@ -192,7 +192,7 @@ RBAC 角色：`viewer` → `auditor` → `raw_access` → `admin`，权限逐级
 
 | 文件 | 职责 |
 |------|------|
-| `main.py` | 入口：默认持续 Redis BLPOP 消费；`--redis-once` 单次处理（测试用）；无环境变量时 stdin 合约验证 |
+| `main.py` | 入口：默认持续消费 `analysis.core` stream；`--redis-once` 单次处理（测试用）；无环境变量时 stdin 合约验证 |
 | `models.py` | 数据类：`TraceCapturedJob`, `NormalizedMessage`, `AnalysisResult` 等 |
 | `normalizers.py` | 协议归一化器：OpenAI chat/responses, Claude, Gemini；SSE 流重组 |
 | `rules.py` | 持久化异常收敛层：统一计算 `effective_tokens = max(prompt_tokens - cached_tokens, 0) + completion_tokens`，当前 worker 新写入/收敛为 4 类 anomaly：`high_trace_tokens`、`long_output_anomaly`、`off_hours_high_usage`、`non_work_use` |
@@ -208,10 +208,10 @@ RBAC 角色：`viewer` → `auditor` → `raw_access` → `admin`，权限逐级
 ### 处理管线
 
 ```
-Redis BLPOP (阻塞等待) → 读取证据 → 协议归一化 + 媒体提取 → 工作相关性分类 → 异常检测 → 用量聚合 → 持久化 → 心跳 → 继续等待
+Redis Streams (`XREADGROUP` / `XAUTOCLAIM`) → 读取证据 → 协议归一化 + 媒体提取 → 工作相关性分类 → 异常检测 → 用量聚合 → 持久化 → 心跳 → `XACK`
 ```
 
-默认启动即进入持续消费模式，收到 SIGTERM/SIGINT 时优雅退出。`--redis-once` 仅处理一个任务后退出，用于 e2e 测试；如果本地同时运行了常驻 worker，worker 类 e2e 应切换到隔离的 `REDIS_URL`（例如不同 Redis DB），避免测试任务被后台消费者抢占。
+默认启动即进入持续消费模式，收到 SIGTERM/SIGINT 时优雅退出。`--redis-once` 仅处理一个任务后退出，用于 e2e 测试；如果本地同时运行了常驻 worker，worker 类 e2e 应切换到隔离的 `REDIS_URL`（例如不同 Redis DB），避免测试任务被后台消费者或其他 consumer group 成员抢占。
 
 工作相关性结果会完整写入 `analysis_results.result_json`。当前语义收敛为：
 - 明确非工作相关：`recommended_action=alert_non_work`，并落库 `non_work_use`

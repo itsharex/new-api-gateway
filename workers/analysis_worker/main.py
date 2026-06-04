@@ -293,31 +293,26 @@ def process_redis_once(
     storage_backend: str = "filesystem",
     llm_judge=None,
 ) -> int:
+    from core_stage import CoreStageProcessor
+
     client = redis.Redis.from_url(redis_url, decode_responses=True)
-    item = client.blpop(list_name, timeout=timeout_seconds)
     with connection_factory(postgres_dsn) as connection:
         heartbeat = HeartbeatRepository(connection)
-        if item is None:
-            heartbeat.record(
-                worker_id=worker_id(),
-                worker_kind="analysis",
-                status="idle",
-                queue_name=list_name,
-                processed_count=0,
-                error_count=0,
-                metadata={"poll_result": "idle"},
-            )
-            print(json.dumps({"worker_status": "idle", "list": list_name}, sort_keys=True))
-            return 0
-        _, payload = item
+        processor = CoreStageProcessor(
+            connection=connection,
+            evidence_store=evidence_store,
+            storage_backend=storage_backend,
+            llm_judge=llm_judge,
+            redis_client=client,
+        )
         try:
-            result = process_job_line(
-                payload,
-                evidence_store,
-                PostgresAnalysisRepository(connection),
-                PostgresContextRepository(connection),
-                storage_backend=storage_backend,
-                llm_judge=llm_judge,
+            result = run_core_once(
+                client,
+                connection,
+                processor,
+                worker_id=worker_id(),
+                stream_name=list_name,
+                block_ms=timeout_seconds * 1000,
             )
         except Exception as exc:
             record_heartbeat_safely(
@@ -332,6 +327,18 @@ def process_redis_once(
                 metadata={"error_type": exc.__class__.__name__},
             )
             raise
+        if result is None:
+            heartbeat.record(
+                worker_id=worker_id(),
+                worker_kind="analysis",
+                status="idle",
+                queue_name=list_name,
+                processed_count=0,
+                error_count=0,
+                metadata={"poll_result": "idle"},
+            )
+            print(json.dumps({"worker_status": "idle", "list": list_name}, sort_keys=True))
+            return 0
         heartbeat.record(
             worker_id=worker_id(),
             worker_kind="analysis",
@@ -354,6 +361,8 @@ def process_redis_loop(
     storage_backend: str = "filesystem",
     llm_judge=None,
 ) -> int:
+    from core_stage import CoreStageProcessor
+
     client = redis.Redis.from_url(redis_url, decode_responses=True)
     wid = worker_id()
     running = True
@@ -367,31 +376,23 @@ def process_redis_loop(
     print(json.dumps({"worker_status": "starting", "worker_id": wid, "list": list_name}), flush=True)
 
     while running:
-        item = client.blpop(list_name, timeout=timeout_seconds)
-        if not running:
-            break
         with psycopg.connect(postgres_dsn) as connection:
             heartbeat = HeartbeatRepository(connection)
-            if item is None:
-                heartbeat.record(
-                    worker_id=wid,
-                    worker_kind="analysis",
-                    status="idle",
-                    queue_name=list_name,
-                    processed_count=0,
-                    error_count=0,
-                    metadata={"poll_result": "idle"},
-                )
-                continue
-            _, payload = item
+            processor = CoreStageProcessor(
+                connection=connection,
+                evidence_store=evidence_store,
+                storage_backend=storage_backend,
+                llm_judge=llm_judge,
+                redis_client=client,
+            )
             try:
-                result = process_job_line(
-                    payload,
-                    evidence_store,
-                    PostgresAnalysisRepository(connection),
-                    PostgresContextRepository(connection),
-                    storage_backend=storage_backend,
-                    llm_judge=llm_judge,
+                result = run_core_once(
+                    client,
+                    connection,
+                    processor,
+                    worker_id=wid,
+                    stream_name=list_name,
+                    block_ms=timeout_seconds * 1000,
                 )
             except Exception as exc:
                 record_heartbeat_safely(
@@ -406,6 +407,17 @@ def process_redis_loop(
                     metadata={"error_type": exc.__class__.__name__},
                 )
                 print(json.dumps({"worker_status": "error", "error": str(exc)}), flush=True)
+                continue
+            if result is None:
+                heartbeat.record(
+                    worker_id=wid,
+                    worker_kind="analysis",
+                    status="idle",
+                    queue_name=list_name,
+                    processed_count=0,
+                    error_count=0,
+                    metadata={"poll_result": "idle"},
+                )
                 continue
             heartbeat.record(
                 worker_id=wid,
@@ -429,6 +441,7 @@ def run_core_once(
     worker_id: str,
     stream_name: str = "analysis.core",
     group_name: str = "analysis-core-workers",
+    block_ms: int = 5000,
     lease_seconds: int = 300,
     max_attempts: int = 5,
     dlq_stream_name: str = "analysis.dlq",
@@ -440,7 +453,7 @@ def run_core_once(
         consumer_name=worker_id,
         reclaim_idle_ms=lease_seconds * 1000,
     )
-    message = consumer.read_one(count=1, block_ms=5000)
+    message = consumer.read_one(count=1, block_ms=block_ms)
     if message is None:
         return None
 
@@ -534,7 +547,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--redis-once", action="store_true")
     parser.add_argument("--redis-url", default=os.environ.get("REDIS_URL", "redis://localhost:6379/0"))
-    parser.add_argument("--redis-list", default=os.environ.get("ANALYSIS_REDIS_LIST", "analysis_jobs"))
+    parser.add_argument("--redis-list", default=os.environ.get("ANALYSIS_REDIS_LIST", "analysis.core"))
     parser.add_argument("--redis-timeout-seconds", type=int, default=5)
     parser.add_argument("--postgres-dsn", default=os.environ.get("POSTGRES_DSN", ""))
     parser.add_argument("--offline-batch", action="store_true",

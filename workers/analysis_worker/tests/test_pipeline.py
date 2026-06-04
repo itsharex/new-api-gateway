@@ -729,18 +729,17 @@ def test_arbitrary_stdin_without_services_requires_config(monkeypatch):
 def test_process_redis_once_records_idle_heartbeat(monkeypatch):
     from main import process_redis_once
 
+    client = object()
+
     class FakeRedisClient:
-        def blpop(self, list_name, timeout):
-            assert list_name == "analysis_jobs"
-            assert timeout == 1
-            return None
+        pass
 
     class FakeRedisModule:
         @staticmethod
         def from_url(url, decode_responses):
             assert url == "redis://user:secret@localhost:6379/0"
             assert decode_responses is True
-            return FakeRedisClient()
+            return client
 
     class FakeHeartbeatRepository:
         calls = []
@@ -758,13 +757,20 @@ def test_process_redis_once_records_idle_heartbeat(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
+    def fake_run_core_once(redis_client, connection, stage_processor, worker_id, **kwargs):
+        assert redis_client is client
+        assert worker_id == "worker-test"
+        assert kwargs["stream_name"] == "analysis.core"
+        return None
+
     monkeypatch.setattr("main.redis.Redis", FakeRedisModule)
     monkeypatch.setattr("main.HeartbeatRepository", FakeHeartbeatRepository)
+    monkeypatch.setattr("main.run_core_once", fake_run_core_once)
     monkeypatch.setenv("ANALYSIS_WORKER_ID", "worker-test")
 
     exit_code = process_redis_once(
         "redis://user:secret@localhost:6379/0",
-        "analysis_jobs",
+        "analysis.core",
         FilesystemEvidenceStore("/tmp/evidence-unused"),
         "postgres://unused",
         1,
@@ -774,21 +780,19 @@ def test_process_redis_once_records_idle_heartbeat(monkeypatch):
     assert exit_code == 0
     assert FakeHeartbeatRepository.calls[0]["worker_id"] == "worker-test"
     assert FakeHeartbeatRepository.calls[0]["status"] == "idle"
-    assert FakeHeartbeatRepository.calls[0]["queue_name"] == "analysis_jobs"
+    assert FakeHeartbeatRepository.calls[0]["queue_name"] == "analysis.core"
     assert FakeHeartbeatRepository.calls[0]["metadata"] == {"poll_result": "idle"}
 
 
 def test_process_redis_once_records_degraded_llm_metadata_in_heartbeat(monkeypatch):
     from main import process_redis_once
 
-    class FakeRedisClient:
-        def blpop(self, list_name, timeout):
-            return (list_name, "{\"trace_id\":\"trace-conflict\"}")
+    client = object()
 
     class FakeRedisModule:
         @staticmethod
         def from_url(url, decode_responses):
-            return FakeRedisClient()
+            return client
 
     class FakeHeartbeatRepository:
         calls = []
@@ -808,8 +812,10 @@ def test_process_redis_once_records_degraded_llm_metadata_in_heartbeat(monkeypat
 
     sentinel_judge = object()
 
-    def fake_process_job_line(*args, **kwargs):
-        assert kwargs["llm_judge"] is sentinel_judge
+    def fake_run_core_once(redis_client, connection, stage_processor, worker_id, **kwargs):
+        assert redis_client is client
+        assert stage_processor.llm_judge is sentinel_judge
+        assert stage_processor.redis_client is client
         return {
             "accepted_trace_id": "trace-conflict",
             "worker_status": "processed",
@@ -820,12 +826,12 @@ def test_process_redis_once_records_degraded_llm_metadata_in_heartbeat(monkeypat
 
     monkeypatch.setattr("main.redis.Redis", FakeRedisModule)
     monkeypatch.setattr("main.HeartbeatRepository", FakeHeartbeatRepository)
-    monkeypatch.setattr("main.process_job_line", fake_process_job_line)
+    monkeypatch.setattr("main.run_core_once", fake_run_core_once)
     monkeypatch.setenv("ANALYSIS_WORKER_ID", "worker-test")
 
     exit_code = process_redis_once(
         "redis://localhost:6379/0",
-        "analysis_jobs",
+        "analysis.core",
         FilesystemEvidenceStore("/tmp/evidence-unused"),
         "postgres://unused",
         1,
@@ -847,22 +853,12 @@ def test_process_redis_loop_records_degraded_llm_metadata_in_heartbeat(monkeypat
     from main import process_redis_loop
 
     handlers = {}
-
-    class FakeRedisClient:
-        def __init__(self):
-            self.calls = 0
-
-        def blpop(self, list_name, timeout):
-            self.calls += 1
-            if self.calls == 1:
-                return (list_name, "{\"trace_id\":\"trace-conflict\"}")
-            handlers["SIGTERM"](None, None)
-            return None
+    client = object()
 
     class FakeRedisModule:
         @staticmethod
         def from_url(url, decode_responses):
-            return FakeRedisClient()
+            return client
 
     class FakeHeartbeatRepository:
         calls = []
@@ -884,9 +880,13 @@ def test_process_redis_loop_records_degraded_llm_metadata_in_heartbeat(monkeypat
         handlers[sig.name] = handler
 
     sentinel_judge = object()
+    calls = {"count": 0}
 
-    def fake_process_job_line(*args, **kwargs):
-        assert kwargs["llm_judge"] is sentinel_judge
+    def fake_run_core_once(redis_client, connection, stage_processor, worker_id, **kwargs):
+        calls["count"] += 1
+        assert redis_client is client
+        assert stage_processor.llm_judge is sentinel_judge
+        handlers["SIGTERM"](None, None)
         return {
             "accepted_trace_id": "trace-conflict",
             "worker_status": "processed",
@@ -898,13 +898,13 @@ def test_process_redis_loop_records_degraded_llm_metadata_in_heartbeat(monkeypat
     monkeypatch.setattr("main.redis.Redis", FakeRedisModule)
     monkeypatch.setattr("main.HeartbeatRepository", FakeHeartbeatRepository)
     monkeypatch.setattr("main.psycopg.connect", lambda dsn: FakeConnection())
-    monkeypatch.setattr("main.process_job_line", fake_process_job_line)
+    monkeypatch.setattr("main.run_core_once", fake_run_core_once)
     monkeypatch.setattr("main.signal.signal", fake_signal)
     monkeypatch.setenv("ANALYSIS_WORKER_ID", "worker-test")
 
     exit_code = process_redis_loop(
         "redis://localhost:6379/0",
-        "analysis_jobs",
+        "analysis.core",
         FilesystemEvidenceStore("/tmp/evidence-unused"),
         "postgres://unused",
         1,
@@ -924,14 +924,12 @@ def test_process_redis_loop_records_degraded_llm_metadata_in_heartbeat(monkeypat
 def test_process_redis_once_records_error_heartbeat_without_exception_message(monkeypatch):
     from main import process_redis_once
 
-    class FakeRedisClient:
-        def blpop(self, list_name, timeout):
-            return (list_name, "{\"trace_id\":\"trace-secret\"}")
+    client = object()
 
     class FakeRedisModule:
         @staticmethod
         def from_url(url, decode_responses):
-            return FakeRedisClient()
+            return client
 
     class FakeHeartbeatRepository:
         calls = []
@@ -949,18 +947,18 @@ def test_process_redis_once_records_error_heartbeat_without_exception_message(mo
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    def fail_process_job_line(*args, **kwargs):
+    def fail_run_core_once(*args, **kwargs):
         raise RuntimeError("secret evidence ref raw/2026/04/28/trace-secret/request_body.bin")
 
     monkeypatch.setattr("main.redis.Redis", FakeRedisModule)
     monkeypatch.setattr("main.HeartbeatRepository", FakeHeartbeatRepository)
-    monkeypatch.setattr("main.process_job_line", fail_process_job_line)
+    monkeypatch.setattr("main.run_core_once", fail_run_core_once)
     monkeypatch.setenv("ANALYSIS_WORKER_ID", "worker-test")
 
     try:
         process_redis_once(
             "redis://localhost:6379/0",
-            "analysis_jobs",
+            "analysis.core",
             FilesystemEvidenceStore("/tmp/evidence-unused"),
             "postgres://unused",
             1,
@@ -980,14 +978,12 @@ def test_process_redis_once_records_error_heartbeat_without_exception_message(mo
 def test_process_redis_once_preserves_job_error_when_error_heartbeat_fails(monkeypatch):
     from main import process_redis_once
 
-    class FakeRedisClient:
-        def blpop(self, list_name, timeout):
-            return (list_name, "{\"trace_id\":\"trace-secret\"}")
+    client = object()
 
     class FakeRedisModule:
         @staticmethod
         def from_url(url, decode_responses):
-            return FakeRedisClient()
+            return client
 
     class FakeHeartbeatRepository:
         def __init__(self, connection):
@@ -1012,18 +1008,18 @@ def test_process_redis_once_preserves_job_error_when_error_heartbeat_fails(monke
 
     connection = FakeConnection()
 
-    def fail_process_job_line(*args, **kwargs):
+    def fail_run_core_once(*args, **kwargs):
         raise ValueError("original failure")
 
     monkeypatch.setattr("main.redis.Redis", FakeRedisModule)
     monkeypatch.setattr("main.HeartbeatRepository", FakeHeartbeatRepository)
-    monkeypatch.setattr("main.process_job_line", fail_process_job_line)
+    monkeypatch.setattr("main.run_core_once", fail_run_core_once)
     monkeypatch.setenv("ANALYSIS_WORKER_ID", "worker-test")
 
     try:
         process_redis_once(
             "redis://localhost:6379/0",
-            "analysis_jobs",
+            "analysis.core",
             FilesystemEvidenceStore("/tmp/evidence-unused"),
             "postgres://unused",
             1,
@@ -1049,7 +1045,7 @@ def test_main_passes_created_llm_judge_to_process_redis_once(monkeypatch):
         offline_batch = False
         redis_once = True
         redis_url = "redis://localhost:6379/0"
-        redis_list = "analysis_jobs"
+        redis_list = "analysis.core"
         redis_timeout_seconds = 7
         postgres_dsn = "postgres://db"
 
@@ -1076,7 +1072,7 @@ def test_main_passes_created_llm_judge_to_process_redis_once(monkeypatch):
     assert main() == 0
     assert calls["llm_judge"] is sentinel_judge
     assert calls["redis_url"] == "redis://localhost:6379/0"
-    assert calls["redis_list"] == "analysis_jobs"
+    assert calls["redis_list"] == "analysis.core"
     assert calls["evidence_store"] == "evidence-store"
     assert calls["postgres_dsn"] == "postgres://db"
     assert calls["timeout_seconds"] == 7
@@ -1092,7 +1088,7 @@ def test_main_passes_created_llm_judge_to_process_redis_loop(monkeypatch):
         offline_batch = False
         redis_once = False
         redis_url = "redis://localhost:6379/0"
-        redis_list = "analysis_jobs"
+        redis_list = "analysis.core"
         redis_timeout_seconds = 9
         postgres_dsn = "postgres://db"
 
@@ -1119,7 +1115,7 @@ def test_main_passes_created_llm_judge_to_process_redis_loop(monkeypatch):
     assert main() == 0
     assert calls["llm_judge"] is sentinel_judge
     assert calls["redis_url"] == "redis://localhost:6379/0"
-    assert calls["redis_list"] == "analysis_jobs"
+    assert calls["redis_list"] == "analysis.core"
     assert calls["evidence_store"] == "evidence-store"
     assert calls["postgres_dsn"] == "postgres://db"
     assert calls["timeout_seconds"] == 9
