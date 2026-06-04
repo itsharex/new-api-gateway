@@ -1802,9 +1802,11 @@ def test_run_core_once_marks_retryable_failure_without_ack(monkeypatch):
 
     consumer = FakeConsumer()
     task_store = FakeTaskStore(connection=None, worker_id="worker-1")
+    failed_traces = []
 
     monkeypatch.setattr("main.StreamConsumer", lambda *args, **kwargs: consumer)
     monkeypatch.setattr("main.AnalysisTaskStore", lambda *args, **kwargs: task_store)
+    monkeypatch.setattr("main.mark_trace_core_failed", lambda connection, trace_id, error_code: failed_traces.append((trace_id, error_code)))
 
     with pytest.raises(RuntimeError, match="temporary redis error"):
         run_core_once(
@@ -1822,6 +1824,7 @@ def test_run_core_once_marks_retryable_failure_without_ack(monkeypatch):
         "error_code": "RuntimeError",
         "error_message": "temporary redis error",
     }]
+    assert failed_traces == [("trace_retry", "RuntimeError")]
 
 
 def test_run_core_once_marks_terminal_failure_and_acks_after_retry_exhausted(monkeypatch):
@@ -1869,10 +1872,12 @@ def test_run_core_once_marks_terminal_failure_and_acks_after_retry_exhausted(mon
     consumer = FakeConsumer()
     task_store = FakeTaskStore(connection=None, worker_id="worker-1")
     dlq_calls = []
+    failed_traces = []
 
     monkeypatch.setattr("main.StreamConsumer", lambda *args, **kwargs: consumer)
     monkeypatch.setattr("main.AnalysisTaskStore", lambda *args, **kwargs: task_store)
     monkeypatch.setattr("main.publish_stream_message", lambda *args, **kwargs: dlq_calls.append(kwargs), raising=False)
+    monkeypatch.setattr("main.mark_trace_core_failed", lambda connection, trace_id, error_code: failed_traces.append((trace_id, error_code)))
 
     with pytest.raises(RuntimeError, match="temporary redis error"):
         run_core_once(
@@ -1902,6 +1907,7 @@ def test_run_core_once_marks_terminal_failure_and_acks_after_retry_exhausted(mon
         "source_message_id": "1748944471000-terminal",
         "source_stream": "analysis.core",
     }
+    assert failed_traces == [("trace_terminal", "RuntimeError")]
 
 
 def test_run_core_once_does_not_mark_terminal_before_dlq_publish_succeeds(monkeypatch):

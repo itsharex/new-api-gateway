@@ -181,6 +181,7 @@ def _update_trace_stage_state(
         UPDATE traces
         SET core_status = 'completed',
             core_completed_at = now(),
+            last_analysis_error_code = '',
             enrichment_required = %s,
             enrichment_status = %s,
             enrichment_queued_at = CASE WHEN %s THEN now() ELSE NULL END,

@@ -495,6 +495,7 @@ def run_core_once(
                 error_code=error_code,
                 error_message=error_message,
             )
+            mark_trace_core_failed(connection, message.envelope.trace_id, error_code)
             consumer.ack(message.message_id)
         else:
             task_store.mark_failed_retryable(
@@ -503,6 +504,7 @@ def run_core_once(
                 error_code=error_code,
                 error_message=error_message,
             )
+            mark_trace_core_failed(connection, message.envelope.trace_id, error_code)
         raise
 
     task_store.mark_succeeded(
@@ -511,6 +513,21 @@ def run_core_once(
     )
     consumer.ack(message.message_id)
     return result
+
+
+def mark_trace_core_failed(connection, trace_id: str, error_code: str) -> None:
+    cursor = connection.cursor()
+    cursor.execute(
+        """
+        UPDATE traces
+        SET core_status = 'failed',
+            last_analysis_error_code = %s,
+            updated_at = now()
+        WHERE trace_id = %s
+        """,
+        (error_code, trace_id),
+    )
+    connection.commit()
 
 
 def main() -> int:
