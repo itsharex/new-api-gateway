@@ -1846,3 +1846,67 @@ def test_run_core_once_marks_terminal_failure_and_acks_after_retry_exhausted(mon
         "source_message_id": "1748944471000-terminal",
         "source_stream": "analysis.core",
     }
+
+
+def test_run_core_once_does_not_mark_terminal_before_dlq_publish_succeeds(monkeypatch):
+    from main import run_core_once
+    from models import AnalysisStage, StreamEnvelope
+
+    class FakeConsumer:
+        def __init__(self, *args, **kwargs):
+            self.acked = []
+
+        def read_one(self, count=1, block_ms=5000):
+            return type("Msg", (), {
+                "stream_name": "analysis.core",
+                "message_id": "1748944471000-terminal-dlq",
+                "envelope": StreamEnvelope(trace_id="trace_terminal_dlq", stage=AnalysisStage.CORE),
+            })()
+
+        def ack(self, message_id):
+            self.acked.append(message_id)
+
+    class FakeTaskStore:
+        def __init__(self, connection, worker_id):
+            self.failed_terminal = []
+
+        def insert_task(self, **kwargs):
+            return None
+
+        def claim_task(self, **kwargs):
+            return type("Task", (), {"attempt_count": 3, "max_attempts": 3})()
+
+        def mark_succeeded(self, **kwargs):
+            raise AssertionError("terminal failure must not mark succeeded")
+
+        def mark_failed_retryable(self, **kwargs):
+            raise AssertionError("terminal failure path should not downgrade to retryable")
+
+        def mark_failed_terminal(self, **kwargs):
+            self.failed_terminal.append(kwargs)
+
+    class FailingProcessor:
+        def process(self, trace_id):
+            raise RuntimeError("temporary redis error")
+
+    consumer = FakeConsumer()
+    task_store = FakeTaskStore(connection=None, worker_id="worker-1")
+
+    monkeypatch.setattr("main.StreamConsumer", lambda *args, **kwargs: consumer)
+    monkeypatch.setattr("main.AnalysisTaskStore", lambda *args, **kwargs: task_store)
+
+    def fail_dlq_publish(*args, **kwargs):
+        raise RuntimeError("dlq unavailable")
+
+    monkeypatch.setattr("main.publish_stream_message", fail_dlq_publish, raising=False)
+
+    with pytest.raises(RuntimeError, match="dlq unavailable"):
+        run_core_once(
+            redis_client=object(),
+            connection=object(),
+            stage_processor=FailingProcessor(),
+            worker_id="worker-1",
+        )
+
+    assert consumer.acked == []
+    assert task_store.failed_terminal == []

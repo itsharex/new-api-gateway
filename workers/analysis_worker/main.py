@@ -466,12 +466,6 @@ def run_core_once(
         error_code = exc.__class__.__name__
         error_message = str(exc)
         if task.attempt_count >= task.max_attempts:
-            task_store.mark_failed_terminal(
-                trace_id=message.envelope.trace_id,
-                stage=message.envelope.stage.value,
-                error_code=error_code,
-                error_message=error_message,
-            )
             publish_stream_message(
                 redis_client,
                 stream_name=dlq_stream_name,
@@ -485,6 +479,12 @@ def run_core_once(
                     "source_stream": message.stream_name,
                     "source_message_id": message.message_id,
                 },
+            )
+            task_store.mark_failed_terminal(
+                trace_id=message.envelope.trace_id,
+                stage=message.envelope.stage.value,
+                error_code=error_code,
+                error_message=error_message,
             )
             consumer.ack(message.message_id)
         else:
