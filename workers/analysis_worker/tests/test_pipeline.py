@@ -1812,9 +1812,11 @@ def test_run_core_once_marks_terminal_failure_and_acks_after_retry_exhausted(mon
 
     consumer = FakeConsumer()
     task_store = FakeTaskStore(connection=None, worker_id="worker-1")
+    dlq_calls = []
 
     monkeypatch.setattr("main.StreamConsumer", lambda *args, **kwargs: consumer)
     monkeypatch.setattr("main.AnalysisTaskStore", lambda *args, **kwargs: task_store)
+    monkeypatch.setattr("main.publish_stream_message", lambda *args, **kwargs: dlq_calls.append(kwargs), raising=False)
 
     with pytest.raises(RuntimeError, match="temporary redis error"):
         run_core_once(
@@ -1832,3 +1834,15 @@ def test_run_core_once_marks_terminal_failure_and_acks_after_retry_exhausted(mon
         "error_code": "RuntimeError",
         "error_message": "temporary redis error",
     }]
+    assert len(dlq_calls) == 1
+    assert dlq_calls[0]["stream_name"] == "analysis.dlq"
+    assert dlq_calls[0]["trace_id"] == "trace_terminal"
+    assert dlq_calls[0]["stage"] == AnalysisStage.CORE
+    assert dlq_calls[0]["attempt"] == 3
+    assert dlq_calls[0]["enqueued_at"]
+    assert dlq_calls[0]["hints"] == {
+        "error_code": "RuntimeError",
+        "error_message": "temporary redis error",
+        "source_message_id": "1748944471000-terminal",
+        "source_stream": "analysis.core",
+    }

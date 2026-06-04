@@ -5,6 +5,7 @@ import os
 import signal
 import socket
 import sys
+from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
 
@@ -28,7 +29,7 @@ from models import (
 from normalizers import normalize_json_trace
 from repository import PostgresAnalysisRepository
 from rules import detect_anomalies, detect_coverage_alerts, detect_work_relevance_anomalies
-from streams import StreamConsumer
+from streams import StreamConsumer, publish_stream_message
 from task_store import AnalysisTaskStore
 from work_relevance import classify_work_relevance
 
@@ -429,6 +430,7 @@ def run_core_once(
     group_name: str = "analysis-core-workers",
     lease_seconds: int = 300,
     max_attempts: int = 5,
+    dlq_stream_name: str = "analysis.dlq",
 ):
     consumer = StreamConsumer(
         redis_client,
@@ -469,6 +471,20 @@ def run_core_once(
                 stage=message.envelope.stage.value,
                 error_code=error_code,
                 error_message=error_message,
+            )
+            publish_stream_message(
+                redis_client,
+                stream_name=dlq_stream_name,
+                trace_id=message.envelope.trace_id,
+                stage=message.envelope.stage,
+                enqueued_at=datetime.now(timezone.utc).isoformat(),
+                attempt=task.attempt_count,
+                hints={
+                    "error_code": error_code,
+                    "error_message": error_message,
+                    "source_stream": message.stream_name,
+                    "source_message_id": message.message_id,
+                },
             )
             consumer.ack(message.message_id)
         else:
