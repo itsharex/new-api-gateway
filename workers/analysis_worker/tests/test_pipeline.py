@@ -784,6 +784,62 @@ def test_process_redis_once_records_idle_heartbeat(monkeypatch):
     assert FakeHeartbeatRepository.calls[0]["metadata"] == {"poll_result": "idle"}
 
 
+def test_process_redis_once_records_deferred_heartbeat_when_message_is_left_pending(monkeypatch):
+    from main import process_redis_once
+
+    client = object()
+
+    class FakeRedisModule:
+        @staticmethod
+        def from_url(url, decode_responses):
+            return client
+
+    class FakeHeartbeatRepository:
+        calls = []
+
+        def __init__(self, connection):
+            self.connection = connection
+
+        def record(self, **kwargs):
+            self.calls.append(kwargs)
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_run_core_once(redis_client, connection, stage_processor, worker_id, **kwargs):
+        return {
+            "worker_status": "deferred",
+            "poll_result": "active_lease",
+            "trace_id": "trace-deferred",
+        }
+
+    monkeypatch.setattr("main.redis.Redis", FakeRedisModule)
+    monkeypatch.setattr("main.HeartbeatRepository", FakeHeartbeatRepository)
+    monkeypatch.setattr("main.run_core_once", fake_run_core_once)
+    monkeypatch.setenv("ANALYSIS_WORKER_ID", "worker-test")
+
+    exit_code = process_redis_once(
+        "redis://localhost:6379/0",
+        "analysis.core",
+        FilesystemEvidenceStore("/tmp/evidence-unused"),
+        "postgres://unused",
+        1,
+        connection_factory=lambda dsn: FakeConnection(),
+    )
+
+    assert exit_code == 0
+    assert FakeHeartbeatRepository.calls[0]["status"] == "deferred"
+    assert FakeHeartbeatRepository.calls[0]["queue_name"] == "analysis.core"
+    assert FakeHeartbeatRepository.calls[0]["metadata"] == {
+        "poll_result": "active_lease",
+        "trace_id": "trace-deferred",
+    }
+
+
 def test_process_redis_once_records_degraded_llm_metadata_in_heartbeat(monkeypatch):
     from main import process_redis_once
 
@@ -1697,7 +1753,11 @@ def test_run_core_once_acks_duplicate_message_when_task_cannot_be_claimed(monkey
         worker_id="worker-1",
     )
 
-    assert result is None
+    assert result == {
+        "worker_status": "deferred",
+        "poll_result": "duplicate_acked",
+        "trace_id": "trace_dup",
+    }
     assert consumer.acked == ["1748944471000-dup"]
 
 
@@ -1750,7 +1810,11 @@ def test_run_core_once_keeps_reclaimed_message_pending_when_db_lease_still_activ
         worker_id="worker-1",
     )
 
-    assert result is None
+    assert result == {
+        "worker_status": "deferred",
+        "poll_result": "active_lease",
+        "trace_id": "trace_reclaimed",
+    }
     assert consumer.acked == []
 
 

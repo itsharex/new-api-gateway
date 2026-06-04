@@ -327,7 +327,7 @@ def process_redis_once(
                 metadata={"error_type": exc.__class__.__name__},
             )
             raise
-        if result is None:
+        if result is None or result.get("worker_status") == "idle":
             heartbeat.record(
                 worker_id=worker_id(),
                 worker_kind="analysis",
@@ -338,6 +338,21 @@ def process_redis_once(
                 metadata={"poll_result": "idle"},
             )
             print(json.dumps({"worker_status": "idle", "list": list_name}, sort_keys=True))
+            return 0
+        if result.get("worker_status") == "deferred":
+            heartbeat.record(
+                worker_id=worker_id(),
+                worker_kind="analysis",
+                status="deferred",
+                queue_name=list_name,
+                processed_count=0,
+                error_count=0,
+                metadata={
+                    "poll_result": result.get("poll_result", "deferred"),
+                    "trace_id": result.get("trace_id", ""),
+                },
+            )
+            print(json.dumps(result, sort_keys=True))
             return 0
         heartbeat.record(
             worker_id=worker_id(),
@@ -408,7 +423,7 @@ def process_redis_loop(
                 )
                 print(json.dumps({"worker_status": "error", "error": str(exc)}), flush=True)
                 continue
-            if result is None:
+            if result is None or result.get("worker_status") == "idle":
                 heartbeat.record(
                     worker_id=wid,
                     worker_kind="analysis",
@@ -418,6 +433,21 @@ def process_redis_loop(
                     error_count=0,
                     metadata={"poll_result": "idle"},
                 )
+                continue
+            if result.get("worker_status") == "deferred":
+                heartbeat.record(
+                    worker_id=wid,
+                    worker_kind="analysis",
+                    status="deferred",
+                    queue_name=list_name,
+                    processed_count=0,
+                    error_count=0,
+                    metadata={
+                        "poll_result": result.get("poll_result", "deferred"),
+                        "trace_id": result.get("trace_id", ""),
+                    },
+                )
+                print(json.dumps(result, sort_keys=True), flush=True)
                 continue
             heartbeat.record(
                 worker_id=wid,
@@ -480,7 +510,16 @@ def run_core_once(
             TaskStatus.FAILED_TERMINAL,
         }:
             consumer.ack(message.message_id)
-        return None
+            return {
+                "worker_status": "deferred",
+                "poll_result": "duplicate_acked",
+                "trace_id": message.envelope.trace_id,
+            }
+        return {
+            "worker_status": "deferred",
+            "poll_result": "active_lease",
+            "trace_id": message.envelope.trace_id,
+        }
 
     try:
         result = stage_processor.process(message.envelope.trace_id)
