@@ -68,6 +68,7 @@ class AnalysisTaskStore:
                 updated_at = now()
             WHERE trace_id = %s
               AND stage = %s
+              AND attempt_count < max_attempts
               AND (
                   status = 'queued'
                   OR status = 'failed_retryable'
@@ -100,5 +101,52 @@ class AnalysisTaskStore:
             WHERE trace_id = %s AND stage = %s
             """,
             (trace_id, stage),
+        )
+        self.connection.commit()
+
+    def mark_failed_retryable(
+        self,
+        trace_id: str,
+        stage: str,
+        error_code: str,
+        error_message: str,
+    ) -> None:
+        cursor = self.connection.cursor()
+        cursor.execute(
+            """
+            UPDATE analysis_tasks
+            SET status = 'failed_retryable',
+                lease_owner = '',
+                lease_expires_at = NULL,
+                last_error_code = %s,
+                last_error_message = %s,
+                updated_at = now()
+            WHERE trace_id = %s AND stage = %s
+            """,
+            (error_code, error_message, trace_id, stage),
+        )
+        self.connection.commit()
+
+    def mark_failed_terminal(
+        self,
+        trace_id: str,
+        stage: str,
+        error_code: str,
+        error_message: str,
+    ) -> None:
+        cursor = self.connection.cursor()
+        cursor.execute(
+            """
+            UPDATE analysis_tasks
+            SET status = 'failed_terminal',
+                completed_at = now(),
+                lease_owner = '',
+                lease_expires_at = NULL,
+                last_error_code = %s,
+                last_error_message = %s,
+                updated_at = now()
+            WHERE trace_id = %s AND stage = %s
+            """,
+            (error_code, error_message, trace_id, stage),
         )
         self.connection.commit()

@@ -435,6 +435,7 @@ def run_core_once(
         stream_name=stream_name,
         group_name=group_name,
         consumer_name=worker_id,
+        reclaim_idle_ms=lease_seconds * 1000,
     )
     message = consumer.read_one(count=1, block_ms=5000)
     if message is None:
@@ -454,9 +455,31 @@ def run_core_once(
         lease_seconds=lease_seconds,
     )
     if task is None:
+        consumer.ack(message.message_id)
         return None
 
-    result = stage_processor.process(message.envelope.trace_id)
+    try:
+        result = stage_processor.process(message.envelope.trace_id)
+    except Exception as exc:
+        error_code = exc.__class__.__name__
+        error_message = str(exc)
+        if task.attempt_count >= task.max_attempts:
+            task_store.mark_failed_terminal(
+                trace_id=message.envelope.trace_id,
+                stage=message.envelope.stage.value,
+                error_code=error_code,
+                error_message=error_message,
+            )
+            consumer.ack(message.message_id)
+        else:
+            task_store.mark_failed_retryable(
+                trace_id=message.envelope.trace_id,
+                stage=message.envelope.stage.value,
+                error_code=error_code,
+                error_message=error_message,
+            )
+        raise
+
     task_store.mark_succeeded(
         trace_id=message.envelope.trace_id,
         stage=message.envelope.stage.value,

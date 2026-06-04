@@ -72,3 +72,48 @@ def test_claim_task_transitions_queued_to_leased():
     assert params[1] == 300
     assert params[2] == "trace_1"
     assert params[3] == "core"
+
+
+def test_mark_failed_retryable_clears_lease_and_persists_error():
+    connection = FakeConnection()
+    store = AnalysisTaskStore(connection, worker_id="worker-1")
+
+    store.mark_failed_retryable(
+        trace_id="trace_1",
+        stage="core",
+        error_code="redis_timeout",
+        error_message="redis unavailable",
+    )
+
+    query, params = connection.cursor_obj.executed[0]
+    assert "UPDATE analysis_tasks" in query
+    assert "status = 'failed_retryable'" in query
+    assert "lease_owner = ''" in query
+    assert "lease_expires_at = NULL" in query
+    assert "last_error_code = %s" in query
+    assert "last_error_message = %s" in query
+    assert params == ("redis_timeout", "redis unavailable", "trace_1", "core")
+    assert connection.committed is True
+
+
+def test_mark_failed_terminal_sets_completed_at_and_persists_error():
+    connection = FakeConnection()
+    store = AnalysisTaskStore(connection, worker_id="worker-1")
+
+    store.mark_failed_terminal(
+        trace_id="trace_1",
+        stage="core",
+        error_code="max_attempts_exhausted",
+        error_message="redis unavailable",
+    )
+
+    query, params = connection.cursor_obj.executed[0]
+    assert "UPDATE analysis_tasks" in query
+    assert "status = 'failed_terminal'" in query
+    assert "completed_at = now()" in query
+    assert "lease_owner = ''" in query
+    assert "lease_expires_at = NULL" in query
+    assert "last_error_code = %s" in query
+    assert "last_error_message = %s" in query
+    assert params == ("max_attempts_exhausted", "redis unavailable", "trace_1", "core")
+    assert connection.committed is True

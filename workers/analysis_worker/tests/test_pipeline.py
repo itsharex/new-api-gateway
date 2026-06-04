@@ -1356,6 +1356,7 @@ def test_process_core_stream_message_marks_trace_completed_and_acks(monkeypatch)
     assert result == {"accepted_trace_id": "trace_1", "worker_status": "processed"}
     assert consumer.acked == [("analysis.core", "1748944471000-0")]
     assert consumer_factory_calls["kwargs"]["group_name"] == "analysis-core-workers"
+    assert consumer_factory_calls["kwargs"]["reclaim_idle_ms"] == 300000
     task = connection.tasks[("trace_1", "core")]
     assert task["status"] == "succeeded"
     assert task["stream_message_id"] == "1748944471000-0"
@@ -1491,13 +1492,13 @@ def test_core_stage_queues_enrichment_when_llm_judge_is_degraded(monkeypatch):
         publish_calls.append(kwargs)
         return "1748944471000-9"
 
-    monkeypatch.setattr("core_stage.default_process_job_line", fake_process_job_line)
     monkeypatch.setattr("core_stage.publish_stream_message", fake_publish)
 
     processor = CoreStageProcessor(
         connection=connection,
         evidence_store=FilesystemEvidenceStore("/tmp/evidence-unused"),
         redis_client=object(),
+        process_job_line_fn=fake_process_job_line,
     )
 
     result = processor.process("trace_degraded")
@@ -1633,13 +1634,13 @@ def test_core_stage_publish_failure_keeps_enrichment_state_truthful(monkeypatch)
     def fail_publish(*args, **kwargs):
         raise RuntimeError("redis unavailable")
 
-    monkeypatch.setattr("core_stage.default_process_job_line", fake_process_job_line)
     monkeypatch.setattr("core_stage.publish_stream_message", fail_publish)
 
     processor = CoreStageProcessor(
         connection=connection,
         evidence_store=FilesystemEvidenceStore("/tmp/evidence-unused"),
         redis_client=object(),
+        process_job_line_fn=fake_process_job_line,
     )
 
     with pytest.raises(RuntimeError, match="redis unavailable"):
@@ -1649,3 +1650,185 @@ def test_core_stage_publish_failure_keeps_enrichment_state_truthful(monkeypatch)
     assert connection.traces["trace_publish_failure"]["enrichment_required"] is True
     assert connection.traces["trace_publish_failure"]["enrichment_status"] == "failed"
     assert connection.traces["trace_publish_failure"]["enrichment_queued_at"] is None
+
+
+def test_run_core_once_acks_duplicate_message_when_task_cannot_be_claimed(monkeypatch):
+    from main import run_core_once
+    from models import AnalysisStage, StreamEnvelope
+
+    class FakeConsumer:
+        def __init__(self, *args, **kwargs):
+            self.acked = []
+
+        def read_one(self, count=1, block_ms=5000):
+            return type("Msg", (), {
+                "stream_name": "analysis.core",
+                "message_id": "1748944471000-dup",
+                "envelope": StreamEnvelope(trace_id="trace_dup", stage=AnalysisStage.CORE),
+            })()
+
+        def ack(self, message_id):
+            self.acked.append(message_id)
+
+    class FakeTaskStore:
+        def __init__(self, connection, worker_id):
+            self.inserted = []
+            self.claimed = []
+
+        def insert_task(self, **kwargs):
+            self.inserted.append(kwargs)
+
+        def claim_task(self, **kwargs):
+            self.claimed.append(kwargs)
+            return None
+
+    class FailingProcessor:
+        def process(self, trace_id):
+            raise AssertionError("should not process when lease is not acquired")
+
+    consumer = FakeConsumer()
+
+    monkeypatch.setattr("main.StreamConsumer", lambda *args, **kwargs: consumer)
+    monkeypatch.setattr("main.AnalysisTaskStore", FakeTaskStore)
+
+    result = run_core_once(
+        redis_client=object(),
+        connection=object(),
+        stage_processor=FailingProcessor(),
+        worker_id="worker-1",
+    )
+
+    assert result is None
+    assert consumer.acked == ["1748944471000-dup"]
+
+
+def test_run_core_once_marks_retryable_failure_without_ack(monkeypatch):
+    from main import run_core_once
+    from models import AnalysisStage, StreamEnvelope
+
+    class FakeConsumer:
+        def __init__(self, *args, **kwargs):
+            self.acked = []
+
+        def read_one(self, count=1, block_ms=5000):
+            return type("Msg", (), {
+                "stream_name": "analysis.core",
+                "message_id": "1748944471000-retry",
+                "envelope": StreamEnvelope(trace_id="trace_retry", stage=AnalysisStage.CORE),
+            })()
+
+        def ack(self, message_id):
+            self.acked.append(message_id)
+
+    class FakeTaskStore:
+        def __init__(self, connection, worker_id):
+            self.failed_retryable = []
+            self.failed_terminal = []
+
+        def insert_task(self, **kwargs):
+            return None
+
+        def claim_task(self, **kwargs):
+            return type("Task", (), {"attempt_count": 1, "max_attempts": 3})()
+
+        def mark_succeeded(self, **kwargs):
+            raise AssertionError("retryable failure must not mark succeeded")
+
+        def mark_failed_retryable(self, **kwargs):
+            self.failed_retryable.append(kwargs)
+
+        def mark_failed_terminal(self, **kwargs):
+            self.failed_terminal.append(kwargs)
+
+    class FailingProcessor:
+        def process(self, trace_id):
+            raise RuntimeError("temporary redis error")
+
+    consumer = FakeConsumer()
+    task_store = FakeTaskStore(connection=None, worker_id="worker-1")
+
+    monkeypatch.setattr("main.StreamConsumer", lambda *args, **kwargs: consumer)
+    monkeypatch.setattr("main.AnalysisTaskStore", lambda *args, **kwargs: task_store)
+
+    with pytest.raises(RuntimeError, match="temporary redis error"):
+        run_core_once(
+            redis_client=object(),
+            connection=object(),
+            stage_processor=FailingProcessor(),
+            worker_id="worker-1",
+        )
+
+    assert consumer.acked == []
+    assert task_store.failed_terminal == []
+    assert task_store.failed_retryable == [{
+        "trace_id": "trace_retry",
+        "stage": "core",
+        "error_code": "RuntimeError",
+        "error_message": "temporary redis error",
+    }]
+
+
+def test_run_core_once_marks_terminal_failure_and_acks_after_retry_exhausted(monkeypatch):
+    from main import run_core_once
+    from models import AnalysisStage, StreamEnvelope
+
+    class FakeConsumer:
+        def __init__(self, *args, **kwargs):
+            self.acked = []
+
+        def read_one(self, count=1, block_ms=5000):
+            return type("Msg", (), {
+                "stream_name": "analysis.core",
+                "message_id": "1748944471000-terminal",
+                "envelope": StreamEnvelope(trace_id="trace_terminal", stage=AnalysisStage.CORE),
+            })()
+
+        def ack(self, message_id):
+            self.acked.append(message_id)
+
+    class FakeTaskStore:
+        def __init__(self, connection, worker_id):
+            self.failed_retryable = []
+            self.failed_terminal = []
+
+        def insert_task(self, **kwargs):
+            return None
+
+        def claim_task(self, **kwargs):
+            return type("Task", (), {"attempt_count": 3, "max_attempts": 3})()
+
+        def mark_succeeded(self, **kwargs):
+            raise AssertionError("terminal failure must not mark succeeded")
+
+        def mark_failed_retryable(self, **kwargs):
+            self.failed_retryable.append(kwargs)
+
+        def mark_failed_terminal(self, **kwargs):
+            self.failed_terminal.append(kwargs)
+
+    class FailingProcessor:
+        def process(self, trace_id):
+            raise RuntimeError("temporary redis error")
+
+    consumer = FakeConsumer()
+    task_store = FakeTaskStore(connection=None, worker_id="worker-1")
+
+    monkeypatch.setattr("main.StreamConsumer", lambda *args, **kwargs: consumer)
+    monkeypatch.setattr("main.AnalysisTaskStore", lambda *args, **kwargs: task_store)
+
+    with pytest.raises(RuntimeError, match="temporary redis error"):
+        run_core_once(
+            redis_client=object(),
+            connection=object(),
+            stage_processor=FailingProcessor(),
+            worker_id="worker-1",
+        )
+
+    assert consumer.acked == ["1748944471000-terminal"]
+    assert task_store.failed_retryable == []
+    assert task_store.failed_terminal == [{
+        "trace_id": "trace_terminal",
+        "stage": "core",
+        "error_code": "RuntimeError",
+        "error_message": "temporary redis error",
+    }]
