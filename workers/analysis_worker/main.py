@@ -20,6 +20,7 @@ from llm_judge import LLMJudgeClient
 from models import (
     AnalysisContext,
     ContextCatalogEntry,
+    TaskStatus,
     TraceCapturedJob,
     UsageAggregateDelta,
     bucket_start_day,
@@ -457,7 +458,15 @@ def run_core_once(
         lease_seconds=lease_seconds,
     )
     if task is None:
-        consumer.ack(message.message_id)
+        existing_task = task_store.get_task(
+            trace_id=message.envelope.trace_id,
+            stage=message.envelope.stage.value,
+        )
+        if existing_task is not None and existing_task.status in {
+            TaskStatus.SUCCEEDED,
+            TaskStatus.FAILED_TERMINAL,
+        }:
+            consumer.ack(message.message_id)
         return None
 
     try:

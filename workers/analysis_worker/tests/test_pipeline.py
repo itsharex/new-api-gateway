@@ -1654,7 +1654,7 @@ def test_core_stage_publish_failure_keeps_enrichment_state_truthful(monkeypatch)
 
 def test_run_core_once_acks_duplicate_message_when_task_cannot_be_claimed(monkeypatch):
     from main import run_core_once
-    from models import AnalysisStage, StreamEnvelope
+    from models import AnalysisStage, StreamEnvelope, TaskStatus
 
     class FakeConsumer:
         def __init__(self, *args, **kwargs):
@@ -1682,6 +1682,9 @@ def test_run_core_once_acks_duplicate_message_when_task_cannot_be_claimed(monkey
             self.claimed.append(kwargs)
             return None
 
+        def get_task(self, **kwargs):
+            return type("Task", (), {"status": TaskStatus.SUCCEEDED})()
+
     class FailingProcessor:
         def process(self, trace_id):
             raise AssertionError("should not process when lease is not acquired")
@@ -1700,6 +1703,59 @@ def test_run_core_once_acks_duplicate_message_when_task_cannot_be_claimed(monkey
 
     assert result is None
     assert consumer.acked == ["1748944471000-dup"]
+
+
+def test_run_core_once_keeps_reclaimed_message_pending_when_db_lease_still_active(monkeypatch):
+    from main import run_core_once
+    from models import AnalysisStage, StreamEnvelope, TaskStatus
+
+    class FakeConsumer:
+        def __init__(self, *args, **kwargs):
+            self.acked = []
+
+        def read_one(self, count=1, block_ms=5000):
+            return type("Msg", (), {
+                "stream_name": "analysis.core",
+                "message_id": "1748944471000-reclaimed",
+                "envelope": StreamEnvelope(trace_id="trace_reclaimed", stage=AnalysisStage.CORE),
+            })()
+
+        def ack(self, message_id):
+            self.acked.append(message_id)
+
+    class FakeTaskStore:
+        def __init__(self, connection, worker_id):
+            self.inserted = []
+            self.claimed = []
+
+        def insert_task(self, **kwargs):
+            self.inserted.append(kwargs)
+
+        def claim_task(self, **kwargs):
+            self.claimed.append(kwargs)
+            return None
+
+        def get_task(self, **kwargs):
+            return type("Task", (), {"status": TaskStatus.LEASED})()
+
+    class FailingProcessor:
+        def process(self, trace_id):
+            raise AssertionError("should not process when another valid lease still owns the task")
+
+    consumer = FakeConsumer()
+
+    monkeypatch.setattr("main.StreamConsumer", lambda *args, **kwargs: consumer)
+    monkeypatch.setattr("main.AnalysisTaskStore", FakeTaskStore)
+
+    result = run_core_once(
+        redis_client=object(),
+        connection=object(),
+        stage_processor=FailingProcessor(),
+        worker_id="worker-1",
+    )
+
+    assert result is None
+    assert consumer.acked == []
 
 
 def test_run_core_once_marks_retryable_failure_without_ack(monkeypatch):

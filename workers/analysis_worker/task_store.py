@@ -88,6 +88,25 @@ class AnalysisTaskStore:
             return None
         return _task_from_row(row)
 
+    def get_task(self, trace_id: str, stage: str) -> AnalysisTask | None:
+        cursor = self.connection.cursor()
+        cursor.execute(
+            """
+            SELECT
+                trace_id, stage, status, attempt_count, max_attempts,
+                lease_owner, lease_expires_at, stream_name, stream_message_id,
+                queued_at, started_at, completed_at,
+                last_error_code, last_error_message, updated_at
+            FROM analysis_tasks
+            WHERE trace_id = %s AND stage = %s
+            """,
+            (trace_id, stage),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return _task_from_row(row)
+
     def mark_succeeded(self, trace_id: str, stage: str) -> None:
         cursor = self.connection.cursor()
         cursor.execute(
