@@ -11,3 +11,4 @@ workers/analysis_worker/uv.lock
 audit-gateway
 .codegraph/
 .cursor/
+.playwright-mcp/
