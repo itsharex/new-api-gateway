@@ -314,6 +314,23 @@ function traceButton(traceID) {
   return safeHTML(`<button type="button" data-trace-id="${escapeHTML(traceID)}">${escapeHTML(traceID)}</button>`);
 }
 
+function renderTraceAnalysisResults(items) {
+  const helper = window.AdminAnalysisResultCards;
+  if (helper && typeof helper.renderAnalysisResultCards === "function") {
+    return helper.renderAnalysisResultCards(arrayValue(items));
+  }
+  const rows = arrayValue(items).map((item) => [
+    item.analyzer_name,
+    item.category,
+    item.label,
+    item.score,
+    item.confidence,
+    badge(item.severity),
+    formatTime(item.created_at),
+  ]);
+  return table(["分析器", "分类", "标签", "分数", "置信度", "Severity", "时间 (UTC+8)"], rows);
+}
+
 function rawEvidenceLink(traceID, objectType) {
   const safeTraceID = encodeURIComponent(traceID || "");
   const safeObjectType = encodeURIComponent(objectType || "");
@@ -1261,15 +1278,6 @@ function renderTraceDetail(body) {
     truncate(item.content_text || item.media_url),
     formatNumber(item.token_count_estimate),
   ]);
-  const analysis = arrayValue(trace.analysis_results).map((item) => [
-    item.analyzer_name,
-    item.category,
-    item.label,
-    item.score,
-    item.confidence,
-    badge(item.severity),
-    formatTime(item.created_at),
-  ]);
   const anomalies = arrayValue(trace.anomalies).map((item) => [
     item.anomaly_id,
     formatTime(item.created_at),
@@ -1285,7 +1293,7 @@ function renderTraceDetail(body) {
       `
         <section class="panel"><div class="meta-grid">${meta}</div></section>
         <section class="panel"><h2>归一化消息</h2>${table(["序号", "方向", "角色", "模态", "类型", "内容", "Token"], messages)}</section>
-        <section class="panel"><h2>分析结果</h2>${table(["分析器", "分类", "标签", "分数", "置信度", "Severity", "时间 (UTC+8)"], analysis)}</section>
+        <section class="panel"><h2>分析结果</h2>${renderTraceAnalysisResults(trace.analysis_results)}</section>
         <section class="panel"><h2>关联异常</h2>${table(["ID", "时间 (UTC+8)", "Severity", "类型", "状态", "员工", "原因"], anomalies)}</section>
       `,
       `<button type="button" id="back-to-traces">返回</button>`,
