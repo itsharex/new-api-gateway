@@ -5,9 +5,14 @@ const state = {
   view: "overview",
   error: "",
   usage: {
-    username: "",
+    selectedEmployee: "",
+    searchQuery: "",
+    searchResults: [],
+    searchError: "",
     range: "30d",
     model: "",
+    body: null,
+    error: "",
   },
   traces: {
     page: 1,
@@ -24,9 +29,11 @@ const state = {
 };
 
 let usageRequestSeq = 0;
+let usageSearchSeq = 0;
 let traceRequestSeq = 0;
 
 const activeCharts = [];
+let usageSearchTimer = null;
 
 const chartColors = {
   total: "#2563eb",
@@ -514,7 +521,7 @@ async function loadView() {
       ]);
       renderAnalysisRuntime(snapshotBody, historyBody, consumersBody);
     } else if (state.view === "usage") {
-      await loadUsage();
+      await reloadUsageView();
     } else if (state.view === "traces") {
       await loadTraces();
     } else if (state.view === "identities") {
@@ -550,26 +557,66 @@ async function loadView() {
 
 async function loadUsage() {
   const requestSeq = ++usageRequestSeq;
-  const username = String(state.usage.username || "").trim();
-  if (!username) {
-    if (requestSeq === usageRequestSeq) renderUsage({});
-    return;
-  }
-  const params = queryString({
+  const username = String(state.usage.selectedEmployee || "").trim();
+  const params = queryString(username ? {
     username,
     range: state.usage.range || "30d",
     model: state.usage.model || "",
-    bucket_size: "day",
-  });
+  } : {});
   let body;
   try {
-    body = await api(`/usage?${params}`);
+    body = await api(`/usage${params ? `?${params}` : ""}`);
   } catch (error) {
     if (requestSeq !== usageRequestSeq) return;
+    state.usage.error = error.message || "加载用量失败。";
+    const cachedBody = state.usage.body || {};
+    const cachedDetail = cachedBody.employee_usage;
+    if (cachedBody.global_usage) {
+      renderUsage({
+        ...cachedBody,
+        employee_usage: cachedDetail && cachedDetail.username === username ? cachedDetail : null,
+      });
+      return;
+    }
     throw error;
   }
   if (requestSeq !== usageRequestSeq) return;
-  renderUsage(body);
+  state.usage.error = "";
+  state.usage.body = body || {};
+  renderUsage(state.usage.body);
+}
+
+async function loadUsageSearchResults(query) {
+  const requestSeq = ++usageSearchSeq;
+  const normalized = String(query || "").trim();
+  state.usage.searchQuery = normalized;
+  if (!normalized) {
+    state.usage.searchResults = [];
+    state.usage.searchError = "";
+    if (state.view === "usage" && state.usage.body) renderUsage(state.usage.body);
+    return;
+  }
+  try {
+    const body = await api(`/usage-employees?${queryString({ q: normalized })}`);
+    if (requestSeq !== usageSearchSeq) return;
+    state.usage.searchResults = arrayValue(body?.employees);
+    state.usage.searchError = "";
+  } catch (error) {
+    if (requestSeq !== usageSearchSeq) return;
+    state.usage.searchResults = [];
+    state.usage.searchError = error.message || "搜索员工失败。";
+  }
+  if (state.view === "usage" && state.usage.body) renderUsage(state.usage.body);
+}
+
+async function selectUsageEmployee(username) {
+  state.usage.selectedEmployee = String(username || "").trim();
+  state.usage.searchQuery = state.usage.selectedEmployee;
+  state.usage.searchResults = [];
+  state.usage.searchError = "";
+  state.usage.model = "";
+  state.usage.error = "";
+  await reloadUsageView();
 }
 
 async function loadTraces() {
@@ -592,7 +639,9 @@ async function loadTraces() {
 }
 
 async function reloadUsageView() {
-  renderShell(`<section class="loading-panel">正在加载用量...</section>`);
+  if (!state.usage.body) {
+    renderShell(`<section class="loading-panel">正在加载用量...</section>`);
+  }
   try {
     await loadUsage();
   } catch (error) {
@@ -916,124 +965,71 @@ function renderAnalysisRuntime(snapshotBody = {}, historyBody = {}, consumersBod
 }
 
 function renderUsage(body = {}) {
-  const trend = body.employee_usage || null;
-  const summary = trend ? trend.summary || {} : {};
-  const username = trend?.username || state.usage.username || "";
-  const range = trend?.range || state.usage.range || "30d";
-  const selectedModel = trend?.selected_model || state.usage.model || "";
-  const models = arrayValue(trend?.models);
-  const daily = arrayValue(trend?.daily);
-  const modelSummary = arrayValue(trend?.model_summary);
-  const ranges = ["1d", "7d", "30d"];
-  const rangeTabs = ranges
-    .map(
-      (item) => `
-        <button type="button" data-usage-range="${escapeHTML(item)}" class="${item === range ? "active" : ""}" aria-pressed="${item === range ? "true" : "false"}">
-          ${escapeHTML(item)}
-        </button>
-      `,
-    )
-    .join("");
-  const modelTabs = [
-    `<button type="button" data-usage-model="" class="${selectedModel ? "" : "active"}" aria-pressed="${selectedModel ? "false" : "true"}">全部</button>`,
-    ...models.map((model) => {
-      const value = String(model || "");
-      return `
-        <button type="button" data-usage-model="${escapeHTML(value)}" class="${value === selectedModel ? "active" : ""}" aria-pressed="${value === selectedModel ? "true" : "false"}">
-          ${escapeHTML(value || "unknown")}
-        </button>
-      `;
-    }),
-  ].join("");
-  const searchPanel = `
-    <section class="panel">
-      <form id="usage-search" class="employee-search">
-        <div class="field">
-          <label for="usage-username">员工</label>
-          <input id="usage-username" name="username" value="${escapeHTML(username)}" placeholder="输入员工用户名" autocomplete="off">
-        </div>
-        <button class="primary" type="submit">查询</button>
-      </form>
-    </section>
-  `;
+  const helper = window.UsagePage;
+  const globalUsage = body.global_usage || {};
+  const employeeUsage = body.employee_usage || null;
+  const hadSearchFocus = typeof document !== "undefined" && document.activeElement?.matches?.("[data-usage-search-input]");
+  const selectionStart = hadSearchFocus ? document.activeElement.selectionStart : null;
+  const selectionEnd = hadSearchFocus ? document.activeElement.selectionEnd : null;
+  const content = helper && typeof helper.renderUsagePage === "function"
+    ? helper.renderUsagePage({
+        global_usage: globalUsage,
+        employee_usage: employeeUsage,
+        usageState: state.usage,
+      })
+    : `<section class="panel error">用量页面模板加载失败。</section>`;
+  const errorHTML = state.usage.error ? `<section class="panel error-inline">${escapeHTML(state.usage.error)}</section>` : "";
 
-  if (!username || !trend) {
-    renderShell(
-      page(
-        "用量",
-        `
-          ${searchPanel}
-          <section class="panel empty-chart">选择员工后查看最近 30 天 token 与 model 使用趋势。</section>
-        `,
-      ),
-    );
-    bindUsageSearch();
-    return;
-  }
-
-  const cards = [
-    ["请求数", summary.request_count],
-    ["Input", summary.prompt_tokens],
-    ["Output", summary.completion_tokens],
-    ["Cache", summary.cached_tokens],
-    ["Total", summary.total_tokens],
-  ]
-    .map(
-      ([label, value]) => `
-        <article class="metric">
-          <div class="label">${escapeHTML(label)}</div>
-          <div class="value">${compactNumber(value)}</div>
-        </article>
-      `,
-    )
-    .join("");
-  const rows = modelSummary.map((item) => [
-    item.model || "unknown",
-    formatNumber(item.request_count),
-    formatNumber(item.prompt_tokens),
-    formatNumber(item.completion_tokens),
-    formatNumber(item.cached_tokens),
-    formatNumber(item.total_tokens),
-  ]);
-
-  renderShell(
-    page(
-      "用量",
-      `
-        ${searchPanel}
-        <section class="cards usage-summary">${cards}</section>
-        <section class="panel usage-chart">
-          <div class="chart-head">
-            <div>
-              <h2>${escapeHTML(username)} Token 使用趋势</h2>
-              <div class="muted">按天汇总，默认展示最近 30 天</div>
-            </div>
-            <div class="range-tabs" aria-label="时间范围">${rangeTabs}</div>
-          </div>
-          <div class="model-tabs" aria-label="Model 筛选">${modelTabs}</div>
-          ${usageChart(daily)}
-        </section>
-        <section class="panel">
-          <h2>Model 汇总</h2>
-          ${table(["Model", "请求数", "Input", "Output", "Cache", "Total"], rows)}
-        </section>
-      `,
-    ),
-  );
+  renderShell(page("用量", `${errorHTML}${content}`));
   bindUsageSearch();
+  bindUsageGlobalInteractions();
   bindUsageControls();
-  renderEmployeeUsageChart(daily);
+  if (employeeUsage) {
+    renderEmployeeUsageChart(employeeUsage.points);
+  }
+  if (hadSearchFocus) {
+    const input = document.querySelector("[data-usage-search-input]");
+    if (input) {
+      input.focus();
+      if (typeof input.setSelectionRange === "function" && selectionStart !== null && selectionEnd !== null) {
+        input.setSelectionRange(selectionStart, selectionEnd);
+      }
+    }
+  }
 }
 
 function bindUsageSearch() {
-  const form = document.querySelector("#usage-search");
-  if (!form) return;
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const username = String(new FormData(event.currentTarget).get("username") || "").trim();
-    state.usage.username = username;
-    state.usage.model = "";
-    await reloadUsageView();
+  const input = document.querySelector("[data-usage-search-input]");
+  if (!input) return;
+  input.addEventListener("input", () => {
+    const query = String(input.value || "");
+    state.usage.searchQuery = query.trim();
+    state.usage.searchError = "";
+    if (usageSearchTimer) clearTimeout(usageSearchTimer);
+    usageSearchTimer = setTimeout(() => {
+      loadUsageSearchResults(query);
+    }, 180);
+  });
+}
+
+function bindUsageGlobalInteractions() {
+  document.querySelectorAll("[data-usage-select]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await selectUsageEmployee(button.dataset.usageSelect || "");
+    });
+  });
+  document.querySelectorAll("[data-usage-top-employee]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await selectUsageEmployee(button.dataset.usageTopEmployee || "");
+    });
+  });
+  document.querySelectorAll("[data-usage-clear]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      state.usage.selectedEmployee = "";
+      state.usage.model = "";
+      state.usage.error = "";
+      await reloadUsageView();
+    });
   });
 }
 
@@ -1041,12 +1037,14 @@ function bindUsageControls() {
   document.querySelectorAll("[data-usage-range]").forEach((button) => {
     button.addEventListener("click", async () => {
       state.usage.range = button.dataset.usageRange || "30d";
+      state.usage.error = "";
       await reloadUsageView();
     });
   });
   document.querySelectorAll("[data-usage-model]").forEach((button) => {
     button.addEventListener("click", async () => {
       state.usage.model = button.dataset.usageModel || "";
+      state.usage.error = "";
       await reloadUsageView();
     });
   });
@@ -1057,9 +1055,22 @@ function finiteNumber(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
+function usagePointLabel(point) {
+  const bucketStart = String(point?.bucket_start || point?.date || "");
+  if (!bucketStart) return "";
+  const bucketSize = String(point?.bucket_size || "").toLowerCase();
+  if (bucketSize === "hour") {
+    const match = bucketStart.match(/T(\d{2}:\d{2})/);
+    if (match) return match[1];
+  }
+  const dayMatch = bucketStart.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (dayMatch) return dayMatch[1];
+  return bucketStart;
+}
+
 function usageChart(points) {
   const items = arrayValue(points).map((item) => ({
-    label: String(item.date || item.bucket_start || ""),
+    label: usagePointLabel(item),
     total: finiteNumber(item.total_tokens),
     input: finiteNumber(item.prompt_tokens),
     output: finiteNumber(item.completion_tokens),
@@ -1084,7 +1095,7 @@ function usageChart(points) {
 
 function renderEmployeeUsageChart(points) {
   const items = arrayValue(points).map((item) => ({
-    label: String(item.date || item.bucket_start || ""),
+    label: usagePointLabel(item),
     total: finiteNumber(item.total_tokens),
     input: finiteNumber(item.prompt_tokens),
     output: finiteNumber(item.completion_tokens),
