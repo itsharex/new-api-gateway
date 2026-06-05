@@ -1,4 +1,4 @@
-(function attachRuntimeCopy(globalObject) {
+(function attachRuntimeCopy() {
   const rangeLabels = {
     "15m": "近 15 分钟",
     "1h": "近 1 小时",
@@ -29,9 +29,11 @@
     runtimeSamplingTooltip,
   };
 
-  globalObject.AdminRuntimeCopy = api;
+  if (typeof window !== "undefined") {
+    window.AdminRuntimeCopy = api;
+  }
 
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
   }
-})(typeof window !== "undefined" ? window : globalThis);
+})();
