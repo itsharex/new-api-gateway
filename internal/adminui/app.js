@@ -42,6 +42,7 @@ const state = {
 
 let usageRequestSeq = 0;
 let traceRequestSeq = 0;
+let runtimeSamplingSummarySeq = 0;
 
 const activeCharts = [];
 
@@ -491,6 +492,7 @@ function renderShell(content) {
     removeTooltip();
     tooltip = document.createElement("div");
     tooltip.className = "cell-tooltip";
+    tooltip.setAttribute("aria-hidden", "true");
     tooltip.textContent = text;
     document.body.appendChild(tooltip);
     const rect = el.getBoundingClientRect();
@@ -744,13 +746,14 @@ function renderOverviewChart(points) {
 function runtimeSamplingSummaryHTML(range, count) {
   const summary = runtimeCopy.runtimeSamplingSummary(range, count);
   const tooltip = runtimeCopy.runtimeSamplingTooltip();
+  const descriptionID = `chart-summary-description-${++runtimeSamplingSummarySeq}`;
   return `
     <strong
       class="chart-summary"
       tabindex="0"
       data-tooltip="${escapeHTML(tooltip)}"
-      aria-label="${escapeHTML(`${summary}。查看采样次数说明`)}"
-    >${escapeHTML(summary)}</strong>
+      aria-describedby="${descriptionID}"
+    >${escapeHTML(summary)}<span id="${descriptionID}" class="visually-hidden">${escapeHTML(tooltip)}</span></strong>
   `;
 }
 
