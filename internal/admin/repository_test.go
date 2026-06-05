@@ -716,11 +716,12 @@ func TestRepositoryEmployeeUsageTrendBuildsBoundedDailyQueries(t *testing.T) {
 	end := time.Date(2026, 5, 31, 0, 0, 0, 0, time.UTC)
 
 	_, err := repo.EmployeeUsageTrend(context.Background(), EmployeeUsageFilter{
-		Username: "E10001",
-		Range:    "30d",
-		Model:    "gpt-5.2",
-		Start:    start,
-		End:      end,
+		Username:   "E10001",
+		Range:      "30d",
+		Model:      "gpt-5.2",
+		Start:      start,
+		End:        end,
+		BucketSize: "day",
 	})
 
 	if err != nil {
@@ -731,7 +732,7 @@ func TestRepositoryEmployeeUsageTrendBuildsBoundedDailyQueries(t *testing.T) {
 		t.Fatalf("expected 3 usage_aggregates queries, got:\n%s", joined)
 	}
 	for _, required := range []string{
-		"bucket_size = 'day'",
+		"bucket_size = $4",
 		"username = $1",
 		"bucket_start >= $2",
 		"bucket_start < $3",
@@ -755,10 +756,19 @@ func TestRepositoryEmployeeUsageTrendBuildsBoundedDailyQueries(t *testing.T) {
 			t.Fatalf("args[%d] = %#v", i, args)
 		}
 	}
-	if got := db.queryArgsLog[1][3]; got != "gpt-5.2" {
+	if got := db.queryArgsLog[0][3]; got != "day" {
+		t.Fatalf("distinct model bucket arg = %#v, want day", got)
+	}
+	if got := db.queryArgsLog[1][3]; got != "day" {
+		t.Fatalf("points bucket arg = %#v, want day", got)
+	}
+	if got := db.queryArgsLog[1][4]; got != "gpt-5.2" {
 		t.Fatalf("daily model arg = %#v, want gpt-5.2", got)
 	}
-	if got := db.queryArgsLog[2][3]; got != "gpt-5.2" {
+	if got := db.queryArgsLog[2][3]; got != "day" {
+		t.Fatalf("model summary bucket arg = %#v, want day", got)
+	}
+	if got := db.queryArgsLog[2][4]; got != "gpt-5.2" {
 		t.Fatalf("model summary arg = %#v, want gpt-5.2", got)
 	}
 }
@@ -805,10 +815,11 @@ func TestRepositoryEmployeeUsageTrendScansModelsDailyAndSummary(t *testing.T) {
 	repo := NewRepository(db)
 
 	trend, err := repo.EmployeeUsageTrend(context.Background(), EmployeeUsageFilter{
-		Username: "E10001",
-		Range:    "30d",
-		Start:    time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
-		End:      time.Date(2026, 5, 31, 0, 0, 0, 0, time.UTC),
+		Username:   "E10001",
+		Range:      "30d",
+		Start:      time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		End:        time.Date(2026, 5, 31, 0, 0, 0, 0, time.UTC),
+		BucketSize: "day",
 	})
 
 	if err != nil {
@@ -820,8 +831,8 @@ func TestRepositoryEmployeeUsageTrendScansModelsDailyAndSummary(t *testing.T) {
 	if got := strings.Join(trend.Models, ","); got != "gpt-5.2,claude-4-sonnet" {
 		t.Fatalf("models = %q", got)
 	}
-	if len(trend.Daily) != 1 || trend.Daily[0].PromptTokens != 1200 || trend.Daily[0].TotalTokens != 1540 {
-		t.Fatalf("daily = %#v", trend.Daily)
+	if len(trend.Points) != 1 || trend.Points[0].PromptTokens != 1200 || trend.Points[0].TotalTokens != 1540 {
+		t.Fatalf("points = %#v", trend.Points)
 	}
 	if len(trend.ModelSummary) != 1 || trend.ModelSummary[0].Model != "gpt-5.2" {
 		t.Fatalf("model summary = %#v", trend.ModelSummary)
@@ -880,11 +891,12 @@ func TestRepositoryEmployeeUsageTrendIncludesBlankModelSummary(t *testing.T) {
 	repo := NewRepository(db)
 
 	trend, err := repo.EmployeeUsageTrend(context.Background(), EmployeeUsageFilter{
-		Username: "E10001",
-		Range:    "30d",
-		Model:    "   ",
-		Start:    time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
-		End:      time.Date(2026, 5, 31, 0, 0, 0, 0, time.UTC),
+		Username:   "E10001",
+		Range:      "30d",
+		Model:      "   ",
+		Start:      time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		End:        time.Date(2026, 5, 31, 0, 0, 0, 0, time.UTC),
+		BucketSize: "day",
 	})
 
 	if err != nil {
@@ -917,6 +929,150 @@ func TestRepositoryEmployeeUsageTrendIncludesBlankModelSummary(t *testing.T) {
 	}
 	if total != trend.Summary.TotalTokens {
 		t.Fatalf("model summary total = %d, summary total = %d", total, trend.Summary.TotalTokens)
+	}
+}
+
+func TestRepositoryEmployeeUsageTrendPadsHourlyPointsFor1D(t *testing.T) {
+	start := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+	db := &recordingAdminDB{rowsQueue: []pgx.Rows{
+		&scanRows{scans: []func(dest ...any) error{
+			func(dest ...any) error {
+				*(dest[0].(*string)) = "gpt-5.2"
+				return nil
+			},
+		}},
+		&scanRows{scans: []func(dest ...any) error{
+			func(dest ...any) error {
+				*(dest[0].(*string)) = "2026-06-04T15:00:00Z"
+				*(dest[1].(*int64)) = 2
+				*(dest[2].(*int64)) = 2
+				*(dest[3].(*int64)) = 0
+				*(dest[4].(*int64)) = 100
+				*(dest[5].(*int64)) = 40
+				*(dest[6].(*int64)) = 0
+				*(dest[7].(*int64)) = 140
+				return nil
+			},
+		}},
+		&scanRows{scans: []func(dest ...any) error{
+			func(dest ...any) error {
+				*(dest[0].(*string)) = "gpt-5.2"
+				*(dest[1].(*int64)) = 2
+				*(dest[2].(*int64)) = 2
+				*(dest[3].(*int64)) = 0
+				*(dest[4].(*int64)) = 100
+				*(dest[5].(*int64)) = 40
+				*(dest[6].(*int64)) = 0
+				*(dest[7].(*int64)) = 140
+				return nil
+			},
+		}},
+	}}
+	repo := NewRepository(db)
+
+	trend, err := repo.EmployeeUsageTrend(context.Background(), EmployeeUsageFilter{
+		Username:        "roy.zhang",
+		Range:           "1d",
+		Start:           start,
+		End:             end,
+		BucketSize:      "hour",
+		ExpectedBuckets: 24,
+	})
+	if err != nil {
+		t.Fatalf("EmployeeUsageTrend error: %v", err)
+	}
+	if trend.BucketSize != "hour" {
+		t.Fatalf("BucketSize=%q, want hour", trend.BucketSize)
+	}
+	if len(trend.Points) != 24 {
+		t.Fatalf("len(Points)=%d, want 24", len(trend.Points))
+	}
+	if trend.ActiveBucketCount != 1 {
+		t.Fatalf("ActiveBucketCount=%d, want 1", trend.ActiveBucketCount)
+	}
+	if trend.Points[3].TotalTokens != 140 {
+		t.Fatalf("Points[3].TotalTokens=%d, want 140", trend.Points[3].TotalTokens)
+	}
+	if trend.Points[0].TotalTokens != 0 || trend.Points[23].TotalTokens != 0 {
+		t.Fatalf("expected zero-filled edges, got first=%d last=%d", trend.Points[0].TotalTokens, trend.Points[23].TotalTokens)
+	}
+}
+
+func TestRepositoryGlobalUsageSummaryBuildsTopEmployeeAndModelLists(t *testing.T) {
+	db := &recordingAdminDB{rowsQueue: []pgx.Rows{
+		&scanRows{scans: []func(dest ...any) error{
+			func(dest ...any) error {
+				*(dest[0].(*int64)) = 18420
+				*(dest[1].(*int64)) = 17
+				*(dest[2].(*int64)) = 42
+				*(dest[3].(*int64)) = 6
+				return nil
+			},
+		}},
+		&scanRows{scans: []func(dest ...any) error{
+			func(dest ...any) error {
+				*(dest[0].(*string)) = "roy.zhang"
+				*(dest[1].(*string)) = "Roy Zhang"
+				*(dest[2].(*string)) = "Platform"
+				*(dest[3].(*int64)) = 9000
+				*(dest[4].(*int64)) = 12
+				*(dest[5].(*string)) = "2026-06-05 08:00:00+00"
+				return nil
+			},
+		}},
+		&scanRows{scans: []func(dest ...any) error{
+			func(dest ...any) error {
+				*(dest[0].(*string)) = "gpt-5.2"
+				*(dest[1].(*int64)) = 12000
+				*(dest[2].(*int64)) = 21
+				return nil
+			},
+		}},
+	}}
+	repo := NewRepository(db)
+
+	summary, err := repo.GlobalUsageSummary(context.Background(), time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("GlobalUsageSummary error: %v", err)
+	}
+	if summary.TotalTokens != 18420 || summary.ActiveEmployees != 17 || summary.RequestCount != 42 || summary.ActiveModels != 6 {
+		t.Fatalf("summary=%#v", summary)
+	}
+	if len(summary.TopEmployees) != 1 || summary.TopEmployees[0].Username != "roy.zhang" {
+		t.Fatalf("TopEmployees=%#v", summary.TopEmployees)
+	}
+	if len(summary.TopModels) != 1 || summary.TopModels[0].Model != "gpt-5.2" {
+		t.Fatalf("TopModels=%#v", summary.TopModels)
+	}
+}
+
+func TestRepositorySearchUsageEmployeesMatchesUsernameAndDisplayName(t *testing.T) {
+	db := &recordingAdminDB{rowsQueue: []pgx.Rows{
+		&scanRows{scans: []func(dest ...any) error{
+			func(dest ...any) error {
+				*(dest[0].(*string)) = "roy.zhang"
+				*(dest[1].(*string)) = "Roy Zhang"
+				*(dest[2].(*string)) = "Platform"
+				*(dest[3].(*string)) = "2026-06-05 08:00:00+00"
+				return nil
+			},
+		}},
+	}}
+	repo := NewRepository(db)
+
+	results, err := repo.SearchUsageEmployees(context.Background(), UsageEmployeeSearchFilter{
+		Query: "roy",
+		Limit: 8,
+	})
+	if err != nil {
+		t.Fatalf("SearchUsageEmployees error: %v", err)
+	}
+	if len(results) != 1 || results[0].DisplayName != "Roy Zhang" {
+		t.Fatalf("results=%#v", results)
+	}
+	if !strings.Contains(db.querySQL, "ILIKE") {
+		t.Fatalf("expected ILIKE fuzzy search, query=%s", db.querySQL)
 	}
 }
 
@@ -1275,6 +1431,11 @@ func (db *recordingAdminDB) QueryRow(ctx context.Context, sql string, args ...an
 		db.rowQueue = db.rowQueue[1:]
 		return row
 	}
+	if len(db.rowsQueue) > 0 {
+		rows := db.rowsQueue[0]
+		db.rowsQueue = db.rowsQueue[1:]
+		return rowsToRow{rows: rows}
+	}
 	if db.row != nil {
 		return db.row
 	}
@@ -1301,6 +1462,17 @@ func (r *fakeRows) Scan(dest ...any) error                       { return pgx.Er
 func (r *fakeRows) Values() ([]any, error)                       { return nil, nil }
 func (r *fakeRows) RawValues() [][]byte                          { return nil }
 func (r *fakeRows) Conn() *pgx.Conn                              { return nil }
+
+type rowsToRow struct {
+	rows pgx.Rows
+}
+
+func (r rowsToRow) Scan(dest ...any) error {
+	if r.rows == nil || !r.rows.Next() {
+		return pgx.ErrNoRows
+	}
+	return r.rows.Scan(dest...)
+}
 
 type fakeRow struct{}
 

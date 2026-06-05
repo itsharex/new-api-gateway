@@ -247,11 +247,44 @@ type UsageBucket struct {
 }
 
 type EmployeeUsageFilter struct {
-	Username string
-	Range    string
-	Model    string
-	Start    time.Time
-	End      time.Time
+	Username        string
+	Range           string
+	Model           string
+	Start           time.Time
+	End             time.Time
+	BucketSize      string
+	ExpectedBuckets int
+}
+
+type UsageEmployeeSearchFilter struct {
+	Query string
+	Limit int
+}
+
+type UsageEmployeeSearchResult struct {
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name"`
+	Department  string `json:"department"`
+	LastSeenAt  string `json:"last_seen_at"`
+}
+
+type GlobalUsageEmployee struct {
+	Username     string `json:"username"`
+	DisplayName  string `json:"display_name"`
+	Department   string `json:"department"`
+	TotalTokens  int64  `json:"total_tokens"`
+	RequestCount int64  `json:"request_count"`
+	LastSeenAt   string `json:"last_seen_at"`
+}
+
+type GlobalUsageSummary struct {
+	Window          string                `json:"window"`
+	TotalTokens     int64                 `json:"total_tokens"`
+	ActiveEmployees int64                 `json:"active_employees"`
+	RequestCount    int64                 `json:"request_count"`
+	ActiveModels    int64                 `json:"active_models"`
+	TopEmployees    []GlobalUsageEmployee `json:"top_employees"`
+	TopModels       []UsageModelSummary   `json:"top_models"`
 }
 
 type UsageTokenSummary struct {
@@ -264,8 +297,9 @@ type UsageTokenSummary struct {
 	TotalTokens      int64 `json:"total_tokens"`
 }
 
-type UsageDailyPoint struct {
+type UsageTrendPoint struct {
 	BucketStart      string `json:"bucket_start"`
+	BucketSize       string `json:"bucket_size"`
 	RequestCount     int64  `json:"request_count"`
 	SuccessCount     int64  `json:"success_count"`
 	ErrorCount       int64  `json:"error_count"`
@@ -287,13 +321,16 @@ type UsageModelSummary struct {
 }
 
 type EmployeeUsageTrend struct {
-	Username      string              `json:"username"`
-	Range         string              `json:"range"`
-	SelectedModel string              `json:"selected_model"`
-	Models        []string            `json:"models"`
-	Summary       UsageTokenSummary   `json:"summary"`
-	Daily         []UsageDailyPoint   `json:"daily"`
-	ModelSummary  []UsageModelSummary `json:"model_summary"`
+	Username            string              `json:"username"`
+	Range               string              `json:"range"`
+	BucketSize          string              `json:"bucket_size"`
+	ExpectedBucketCount int                 `json:"expected_bucket_count"`
+	ActiveBucketCount   int                 `json:"active_bucket_count"`
+	SelectedModel       string              `json:"selected_model"`
+	Models              []string            `json:"models"`
+	Summary             UsageTokenSummary   `json:"summary"`
+	Points              []UsageTrendPoint   `json:"points"`
+	ModelSummary        []UsageModelSummary `json:"model_summary"`
 }
 
 type TokenIdentityFilter struct {

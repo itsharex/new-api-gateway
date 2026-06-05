@@ -521,6 +521,136 @@ ORDER BY (bucket_start AT TIME ZONE 'UTC')::date`, startDay, endDay.AddDate(0, 0
 	return points, nil
 }
 
+func (r Repository) GlobalUsageSummary(ctx context.Context, now time.Time) (GlobalUsageSummary, error) {
+	if r.db == nil {
+		return GlobalUsageSummary{}, ErrAdminDBRequired
+	}
+	start := now.UTC().AddDate(0, 0, -30)
+	var summary GlobalUsageSummary
+	summary.Window = "30d"
+	err := r.db.QueryRow(ctx, `
+SELECT
+  COALESCE(SUM(total_tokens), 0),
+  COUNT(DISTINCT username),
+  COALESCE(SUM(request_count), 0),
+  COUNT(DISTINCT model)
+FROM usage_aggregates
+WHERE bucket_size = 'day'
+  AND bucket_start >= $1
+  AND bucket_start < $2`, start, now.UTC()).Scan(
+		&summary.TotalTokens,
+		&summary.ActiveEmployees,
+		&summary.RequestCount,
+		&summary.ActiveModels,
+	)
+	if err != nil {
+		return summary, err
+	}
+	rows, err := r.db.Query(ctx, `
+SELECT username, COALESCE(MAX(token_name_snapshot), ''), COALESCE(MAX(route_pattern), ''), COALESCE(SUM(total_tokens), 0), COALESCE(SUM(request_count), 0), MAX(bucket_start)::text
+FROM usage_aggregates
+WHERE bucket_size = 'day'
+  AND bucket_start >= $1
+  AND bucket_start < $2
+  AND username <> ''
+GROUP BY username
+ORDER BY SUM(total_tokens) DESC, username ASC
+LIMIT 10`, start, now.UTC())
+	if err != nil {
+		return summary, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item GlobalUsageEmployee
+		if err := rows.Scan(&item.Username, &item.DisplayName, &item.Department, &item.TotalTokens, &item.RequestCount, &item.LastSeenAt); err != nil {
+			return summary, err
+		}
+		summary.TopEmployees = append(summary.TopEmployees, item)
+	}
+	if err := rows.Err(); err != nil {
+		return summary, err
+	}
+	modelRows, err := r.db.Query(ctx, `
+SELECT model, COALESCE(SUM(request_count), 0), COALESCE(SUM(success_count), 0), COALESCE(SUM(error_count), 0), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0), COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(total_tokens), 0)
+FROM usage_aggregates
+WHERE bucket_size = 'day'
+  AND bucket_start >= $1
+  AND bucket_start < $2
+GROUP BY model
+ORDER BY SUM(total_tokens) DESC, model ASC
+LIMIT 10`, start, now.UTC())
+	if err != nil {
+		return summary, err
+	}
+	defer modelRows.Close()
+	for modelRows.Next() {
+		var item UsageModelSummary
+		if err := modelRows.Scan(&item.Model, &item.RequestCount, &item.SuccessCount, &item.ErrorCount, &item.PromptTokens, &item.CompletionTokens, &item.CachedTokens, &item.TotalTokens); err != nil {
+			return summary, err
+		}
+		summary.TopModels = append(summary.TopModels, item)
+	}
+	return summary, modelRows.Err()
+}
+
+func (r Repository) SearchUsageEmployees(ctx context.Context, filter UsageEmployeeSearchFilter) ([]UsageEmployeeSearchResult, error) {
+	if r.db == nil {
+		return nil, ErrAdminDBRequired
+	}
+	limit := filter.Limit
+	if limit <= 0 || limit > 8 {
+		limit = 8
+	}
+	query := "%" + strings.TrimSpace(filter.Query) + "%"
+	rows, err := r.db.Query(ctx, `
+SELECT c.username, COALESCE(s.display_name, ''), COALESCE(s.department, c.department), MAX(c.last_seen_at)::text
+FROM token_identity_cache c
+LEFT JOIN audit_subjects s ON s.username = c.username
+WHERE c.username ILIKE $1 OR COALESCE(s.display_name, '') ILIKE $1
+GROUP BY c.username, COALESCE(s.display_name, ''), COALESCE(s.department, c.department)
+ORDER BY MAX(c.last_seen_at) DESC, c.username ASC
+LIMIT $2`, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []UsageEmployeeSearchResult{}
+	for rows.Next() {
+		var item UsageEmployeeSearchResult
+		if err := rows.Scan(&item.Username, &item.DisplayName, &item.Department, &item.LastSeenAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func fillUsageTrendPoints(start time.Time, expectedBuckets int, bucketSize string, raw []UsageTrendPoint) ([]UsageTrendPoint, int) {
+	step := 24 * time.Hour
+	layout := time.RFC3339
+	if bucketSize == "hour" {
+		step = time.Hour
+	}
+	byBucket := make(map[string]UsageTrendPoint, len(raw))
+	active := 0
+	for _, point := range raw {
+		byBucket[point.BucketStart] = point
+		if point.TotalTokens > 0 || point.RequestCount > 0 {
+			active++
+		}
+	}
+	points := make([]UsageTrendPoint, 0, expectedBuckets)
+	for i := 0; i < expectedBuckets; i++ {
+		bucketStart := start.Add(time.Duration(i) * step).UTC().Format(layout)
+		point, ok := byBucket[bucketStart]
+		if !ok {
+			point = UsageTrendPoint{BucketStart: bucketStart, BucketSize: bucketSize}
+		}
+		points = append(points, point)
+	}
+	return points, active
+}
+
 func (r Repository) ListUsageAggregates(ctx context.Context, filter UsageFilter) ([]UsageBucket, error) {
 	if r.db == nil {
 		return nil, ErrAdminDBRequired
@@ -595,13 +725,19 @@ func (r Repository) EmployeeUsageTrend(ctx context.Context, filter EmployeeUsage
 		return EmployeeUsageTrend{}, ErrAdminDBRequired
 	}
 	selectedModel := strings.TrimSpace(filter.Model)
+	bucketSize := strings.TrimSpace(filter.BucketSize)
+	if bucketSize == "" {
+		bucketSize = "day"
+	}
 	trend := EmployeeUsageTrend{
-		Username:      filter.Username,
-		Range:         filter.Range,
-		SelectedModel: selectedModel,
-		Models:        []string{},
-		Daily:         []UsageDailyPoint{},
-		ModelSummary:  []UsageModelSummary{},
+		Username:            filter.Username,
+		Range:               filter.Range,
+		BucketSize:          bucketSize,
+		ExpectedBucketCount: filter.ExpectedBuckets,
+		SelectedModel:       selectedModel,
+		Models:              []string{},
+		Points:              []UsageTrendPoint{},
+		ModelSummary:        []UsageModelSummary{},
 	}
 	if strings.TrimSpace(filter.Username) == "" {
 		return trend, nil
@@ -610,12 +746,12 @@ func (r Repository) EmployeeUsageTrend(ctx context.Context, filter EmployeeUsage
 	rows, err := r.db.Query(ctx, `
 SELECT DISTINCT model
 FROM usage_aggregates
-WHERE bucket_size = 'day'
+WHERE bucket_size = $4
   AND username = $1
   AND bucket_start >= $2
   AND bucket_start < $3
   AND model <> ''
-ORDER BY model`, filter.Username, filter.Start, filter.End)
+ORDER BY model`, filter.Username, filter.Start, filter.End, bucketSize)
 	if err != nil {
 		return trend, err
 	}
@@ -631,16 +767,16 @@ ORDER BY model`, filter.Username, filter.Start, filter.End)
 		return trend, err
 	}
 
-	dailyWhere := []string{
-		"bucket_size = 'day'",
+	pointWhere := []string{
+		"bucket_size = $4",
 		"username = $1",
 		"bucket_start >= $2",
 		"bucket_start < $3",
 	}
-	dailyArgs := []any{filter.Username, filter.Start, filter.End}
+	pointArgs := []any{filter.Username, filter.Start, filter.End, bucketSize}
 	if selectedModel != "" {
-		dailyArgs = append(dailyArgs, selectedModel)
-		dailyWhere = append(dailyWhere, fmt.Sprintf("model = $%d", len(dailyArgs)))
+		pointArgs = append(pointArgs, selectedModel)
+		pointWhere = append(pointWhere, fmt.Sprintf("model = $%d", len(pointArgs)))
 	}
 	rows, err = r.db.Query(ctx, fmt.Sprintf(`
 SELECT bucket_start::text,
@@ -654,13 +790,14 @@ SELECT bucket_start::text,
 FROM usage_aggregates
 WHERE %s
 GROUP BY bucket_start
-ORDER BY bucket_start`, strings.Join(dailyWhere, " AND ")), dailyArgs...)
+ORDER BY bucket_start`, strings.Join(pointWhere, " AND ")), pointArgs...)
 	if err != nil {
 		return trend, err
 	}
 	defer rows.Close()
+	rawPoints := []UsageTrendPoint{}
 	for rows.Next() {
-		var point UsageDailyPoint
+		var point UsageTrendPoint
 		if err := rows.Scan(
 			&point.BucketStart,
 			&point.RequestCount,
@@ -673,7 +810,8 @@ ORDER BY bucket_start`, strings.Join(dailyWhere, " AND ")), dailyArgs...)
 		); err != nil {
 			return trend, err
 		}
-		trend.Daily = append(trend.Daily, point)
+		point.BucketSize = bucketSize
+		rawPoints = append(rawPoints, point)
 		trend.Summary.RequestCount += point.RequestCount
 		trend.Summary.SuccessCount += point.SuccessCount
 		trend.Summary.ErrorCount += point.ErrorCount
@@ -685,14 +823,24 @@ ORDER BY bucket_start`, strings.Join(dailyWhere, " AND ")), dailyArgs...)
 	if err := rows.Err(); err != nil {
 		return trend, err
 	}
+	if filter.ExpectedBuckets > 0 {
+		trend.Points, trend.ActiveBucketCount = fillUsageTrendPoints(filter.Start, filter.ExpectedBuckets, bucketSize, rawPoints)
+	} else {
+		trend.Points = rawPoints
+		for _, point := range rawPoints {
+			if point.TotalTokens > 0 || point.RequestCount > 0 {
+				trend.ActiveBucketCount++
+			}
+		}
+	}
 
 	summaryWhere := []string{
-		"bucket_size = 'day'",
+		"bucket_size = $4",
 		"username = $1",
 		"bucket_start >= $2",
 		"bucket_start < $3",
 	}
-	summaryArgs := []any{filter.Username, filter.Start, filter.End}
+	summaryArgs := []any{filter.Username, filter.Start, filter.End, bucketSize}
 	if selectedModel != "" {
 		summaryArgs = append(summaryArgs, selectedModel)
 		summaryWhere = append(summaryWhere, fmt.Sprintf("model = $%d", len(summaryArgs)))
