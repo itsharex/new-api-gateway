@@ -1,4 +1,21 @@
 const app = document.querySelector("#app");
+const runtimeCopy = window.AdminRuntimeCopy || {
+  runtimeSamplingRangeLabel(range) {
+    const normalized = String(range || "").trim();
+    if (normalized === "15m") return "近 15 分钟";
+    if (normalized === "24h") return "近 24 小时";
+    return "近 1 小时";
+  },
+  runtimeSamplingSummary(range, sampleCount) {
+    const label = this.runtimeSamplingRangeLabel(range);
+    const count = Number(sampleCount);
+    if (!Number.isFinite(count) || count <= 0) return `${label}暂无采样`;
+    return `${label}采样 ${count.toLocaleString()} 次`;
+  },
+  runtimeSamplingTooltip() {
+    return "采样次数表示当前时间范围内记录到的运行采样数量，不代表请求数、队列长度或时延值。采样通常按固定间隔生成；如果 worker 重启、暂停或采样间隔调整，次数可能不是固定值。";
+  },
+};
 
 const state = {
   user: null,
@@ -25,6 +42,7 @@ const state = {
 
 let usageRequestSeq = 0;
 let traceRequestSeq = 0;
+let runtimeSamplingSummarySeq = 0;
 
 const activeCharts = [];
 
@@ -473,13 +491,30 @@ function renderShell(content) {
 
   let tooltip = null;
   const main = document.querySelector(".main");
-  main.addEventListener("pointerenter", (e) => {
-    const el = e.target.closest(".cell-truncate");
-    if (!el) return;
-    if (el.scrollWidth <= el.clientWidth) return;
+
+  function removeTooltip() {
+    if (tooltip) {
+      tooltip.remove();
+      tooltip = null;
+    }
+  }
+
+  function tooltipTextForElement(el) {
+    if (!el) return "";
+    const explicit = el.getAttribute("data-tooltip");
+    if (explicit) return explicit;
+    if (el.matches(".cell-truncate") && el.scrollWidth > el.clientWidth) {
+      return el.textContent;
+    }
+    return "";
+  }
+
+  function showTooltipForElement(el, text) {
+    removeTooltip();
     tooltip = document.createElement("div");
     tooltip.className = "cell-tooltip";
-    tooltip.textContent = el.textContent;
+    tooltip.setAttribute("aria-hidden", "true");
+    tooltip.textContent = text;
     document.body.appendChild(tooltip);
     const rect = el.getBoundingClientRect();
     const tipRect = tooltip.getBoundingClientRect();
@@ -490,10 +525,30 @@ function renderShell(content) {
     if (left < 8) left = 8;
     tooltip.style.top = top + "px";
     tooltip.style.left = left + "px";
+  }
+
+  main.addEventListener("pointerenter", (e) => {
+    const el = e.target.closest("[data-tooltip], .cell-truncate");
+    const text = tooltipTextForElement(el);
+    if (!text) return;
+    showTooltipForElement(el, text);
   }, true);
+
   main.addEventListener("pointerleave", (e) => {
-    if (!e.target.closest(".cell-truncate")) return;
-    if (tooltip) { tooltip.remove(); tooltip = null; }
+    if (!e.target.closest("[data-tooltip], .cell-truncate")) return;
+    removeTooltip();
+  }, true);
+
+  main.addEventListener("focusin", (e) => {
+    const el = e.target.closest("[data-tooltip]");
+    const text = tooltipTextForElement(el);
+    if (!text) return;
+    showTooltipForElement(el, text);
+  }, true);
+
+  main.addEventListener("focusout", (e) => {
+    if (!e.target.closest("[data-tooltip]")) return;
+    removeTooltip();
   }, true);
 }
 
@@ -709,6 +764,20 @@ function renderOverviewChart(points) {
   });
 }
 
+function runtimeSamplingSummaryHTML(range, count) {
+  const summary = runtimeCopy.runtimeSamplingSummary(range, count);
+  const tooltip = runtimeCopy.runtimeSamplingTooltip();
+  const descriptionID = `chart-summary-description-${++runtimeSamplingSummarySeq}`;
+  return `
+    <strong
+      class="chart-summary"
+      tabindex="0"
+      data-tooltip="${escapeHTML(tooltip)}"
+      aria-describedby="${descriptionID}"
+    >${escapeHTML(summary)}<span id="${descriptionID}" class="visually-hidden">${escapeHTML(tooltip)}</span></strong>
+  `;
+}
+
 function runtimeQueueChart(points) {
   const items = arrayValue(points).map((item) => ({
     label: formatTime(item.sampled_at || ""),
@@ -725,7 +794,7 @@ function runtimeQueueChart(points) {
           <h2>${escapeHTML(stageLabel)} 队列趋势</h2>
           <div class="muted">队列深度与最老待处理时长</div>
         </div>
-        <strong>${formatNumber(items.length)} 点</strong>
+        ${runtimeSamplingSummaryHTML(state.analysisRuntime.range, items.length)}
       </div>
       <div class="chart-frame">
         ${hasData ? `<canvas id="analysis-runtime-queue-chart" aria-label="${escapeHTML(stageLabel)} 队列趋势" role="img"></canvas>` : `<div class="chart-empty">暂无队列采样数据</div>`}
@@ -750,7 +819,7 @@ function runtimeLatencyChart(points) {
           <h2>${escapeHTML(stageLabel)} 时延趋势</h2>
           <div class="muted">队列等待 P95 与处理耗时 P95</div>
         </div>
-        <strong>${formatNumber(items.length)} 点</strong>
+        ${runtimeSamplingSummaryHTML(state.analysisRuntime.range, items.length)}
       </div>
       <div class="chart-frame">
         ${hasData ? `<canvas id="analysis-runtime-latency-chart" aria-label="${escapeHTML(stageLabel)} 时延趋势" role="img"></canvas>` : `<div class="chart-empty">暂无时延采样数据</div>`}
