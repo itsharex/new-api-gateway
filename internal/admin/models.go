@@ -163,17 +163,27 @@ type OverviewSummary struct {
 }
 
 type AnalysisRuntimeSnapshot struct {
-	Stage                   string `json:"stage"`
-	QueueDepth              int64  `json:"queue_depth"`
-	PendingCount            int64  `json:"pending_count"`
-	LeasedCount             int64  `json:"leased_count"`
-	OldestPendingAgeSeconds int64  `json:"oldest_pending_age_seconds"`
-	ThroughputPerMinute     int64  `json:"throughput_per_minute"`
-	QueueWaitP95MS          int64  `json:"queue_wait_p95_ms"`
-	ProcessingP95MS         int64  `json:"processing_p95_ms"`
+	Available               bool    `json:"available"`
+	Error                   string  `json:"error,omitempty"`
+	Stage                   string  `json:"stage"`
+	QueueDepth              int64   `json:"queue_depth"`
+	PendingCount            int64   `json:"pending_count"`
+	LeasedCount             int64   `json:"leased_count"`
+	ActiveConsumers         int64   `json:"active_consumers"`
+	OldestPendingAgeSeconds int64   `json:"oldest_pending_age_seconds"`
+	ThroughputPerMinute     int64   `json:"throughput_per_minute"`
+	SuccessRate             float64 `json:"success_rate"`
+	RetryableFailRate       float64 `json:"retryable_fail_rate"`
+	TerminalFailRate        float64 `json:"terminal_fail_rate"`
+	LLMJudgeTimeoutRate     float64 `json:"llm_judge_timeout_rate"`
+	QueueWaitP50MS          int64   `json:"queue_wait_p50_ms"`
+	QueueWaitP95MS          int64   `json:"queue_wait_p95_ms"`
+	ProcessingP50MS         int64   `json:"processing_p50_ms"`
+	ProcessingP95MS         int64   `json:"processing_p95_ms"`
 }
 
 type AnalysisRuntimeHistoryPoint struct {
+	Stage                   string `json:"stage"`
 	SampledAt               string `json:"sampled_at"`
 	QueueDepth              int64  `json:"queue_depth"`
 	OldestPendingAgeSeconds int64  `json:"oldest_pending_age_seconds"`

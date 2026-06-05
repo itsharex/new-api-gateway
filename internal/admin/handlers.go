@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -17,19 +18,21 @@ import (
 )
 
 type HandlerConfig struct {
-	Repo          Repository
-	Auth          Auth
-	AuditSecret   string
-	EvidenceStore evidence.Store
+	Repo            Repository
+	Auth            Auth
+	AuditSecret     string
+	EvidenceStore   evidence.Store
+	RuntimeProvider RuntimeProvider
 }
 
 type Handler struct {
-	repo          Repository
-	auth          Auth
-	auditSecret   string
-	evidenceStore evidence.Store
-	lookupLimiter RateLimiter
-	rawLimiter    RateLimiter
+	repo            Repository
+	auth            Auth
+	auditSecret     string
+	evidenceStore   evidence.Store
+	runtimeProvider RuntimeProvider
+	lookupLimiter   RateLimiter
+	rawLimiter      RateLimiter
 }
 
 func NewHandler(cfg HandlerConfig) Handler {
@@ -38,12 +41,16 @@ func NewHandler(cfg HandlerConfig) Handler {
 		auth.Repo = cfg.Repo
 	}
 	h := Handler{
-		repo:          cfg.Repo,
-		auth:          auth,
-		auditSecret:   cfg.AuditSecret,
-		evidenceStore: cfg.EvidenceStore,
-		lookupLimiter: NewMemoryRateLimiter(20, time.Hour),
-		rawLimiter:    NewMemoryRateLimiter(120, time.Hour),
+		repo:            cfg.Repo,
+		auth:            auth,
+		auditSecret:     cfg.AuditSecret,
+		evidenceStore:   cfg.EvidenceStore,
+		runtimeProvider: cfg.RuntimeProvider,
+		lookupLimiter:   NewMemoryRateLimiter(20, time.Hour),
+		rawLimiter:      NewMemoryRateLimiter(120, time.Hour),
+	}
+	if h.runtimeProvider == nil {
+		h.runtimeProvider = noopRuntimeProvider{}
 	}
 	return h
 }
@@ -54,6 +61,9 @@ func (h Handler) routes() *http.ServeMux {
 	mux.Handle("GET /admin/api/me", h.auth.Middleware(http.HandlerFunc(h.me)))
 	mux.Handle("POST /admin/api/me/password", h.auth.Middleware(h.requireCSRF(http.HandlerFunc(h.changePassword))))
 	mux.Handle("GET /admin/api/overview", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.overview))))
+	mux.Handle("GET /admin/api/analysis-runtime", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.analysisRuntimeSnapshot))))
+	mux.Handle("GET /admin/api/analysis-runtime/history", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.analysisRuntimeHistory))))
+	mux.Handle("GET /admin/api/analysis-runtime/consumers", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.analysisRuntimeConsumers))))
 	mux.Handle("GET /admin/api/usage", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.listUsage))))
 	mux.Handle("GET /admin/api/traces/{trace_id}", h.auth.Middleware(h.auth.Require(PermissionViewNormalizedTraces, http.HandlerFunc(h.getTraceDetail))))
 	mux.Handle("GET /admin/api/context-catalog", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.listContextCatalog))))
@@ -199,6 +209,60 @@ func (h Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h Handler) analysisRuntimeSnapshot(w http.ResponseWriter, r *http.Request) {
+	stage, err := runtimeStageFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	snapshot, err := h.runtimeProvider.Snapshot(r.Context(), stage)
+	if err != nil {
+		http.Error(w, "failed to load analysis runtime snapshot", http.StatusInternalServerError)
+		return
+	}
+	snapshot = markRuntimeSnapshotAvailable(snapshot)
+	writeJSON(w, http.StatusOK, map[string]any{"snapshot": snapshot})
+}
+
+func (h Handler) analysisRuntimeHistory(w http.ResponseWriter, r *http.Request) {
+	stage, err := runtimeStageFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	rangeName := strings.TrimSpace(r.URL.Query().Get("range"))
+	historyRange, err := normalizeRuntimeHistoryRange(rangeName)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	items, err := h.runtimeProvider.History(r.Context(), stage, historyRange.name)
+	if err != nil {
+		http.Error(w, "failed to load analysis runtime history", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"history": items})
+}
+
+func (h Handler) analysisRuntimeConsumers(w http.ResponseWriter, r *http.Request) {
+	stage, err := runtimeStageFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	items, err := h.runtimeProvider.Consumers(r.Context(), stage)
+	if err != nil {
+		http.Error(w, "failed to load analysis runtime consumers", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"consumers": items})
+}
+
+func runtimeStageFromRequest(r *http.Request) (string, error) {
+	stage, _, _, err := normalizeRuntimeStage(r.URL.Query().Get("stage"))
+	return stage, err
+}
+
 func (h Handler) logout(w http.ResponseWriter, r *http.Request) {
 	now := h.auth.now()
 	http.SetCookie(w, h.auth.clearCookie())
@@ -279,7 +343,21 @@ func (h Handler) overview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to load overview", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"overview": summary})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"overview": summary,
+		"analysis_runtime": map[string]AnalysisRuntimeSnapshot{
+			"core":       summaryRuntimeSnapshot(h.runtimeProvider, r.Context(), "core"),
+			"enrichment": summaryRuntimeSnapshot(h.runtimeProvider, r.Context(), "enrichment"),
+		},
+	})
+}
+
+func summaryRuntimeSnapshot(provider RuntimeProvider, ctx context.Context, stage string) AnalysisRuntimeSnapshot {
+	snapshot, err := provider.Snapshot(ctx, stage)
+	if err != nil {
+		return unavailableRuntimeSnapshot(stage, err)
+	}
+	return markRuntimeSnapshotAvailable(snapshot)
 }
 
 func usageRangeWindow(value string, now time.Time) (string, time.Time, time.Time) {

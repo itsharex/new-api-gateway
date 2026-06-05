@@ -28,6 +28,10 @@ func (m *memoryRepository) InsertRawEvidence(ctx context.Context, object RawEvid
 	return nil
 }
 
+func (m *memoryRepository) MarkTraceCoreQueued(ctx context.Context, traceID string, queuedAt time.Time) error {
+	return nil
+}
+
 func TestRepositoryContractStoresTraceAndEvidence(t *testing.T) {
 	repo := &memoryRepository{}
 	trace := Trace{TraceID: "trace_1", Method: "POST", Path: "/v1/chat/completions", CreatedAt: time.Now().UTC()}
@@ -220,6 +224,26 @@ func TestPostgresRepositoryValidatesRequiredRawEvidenceTimestamp(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "created_at is required") {
 		t.Fatalf("InsertRawEvidence error = %v, want created_at validation error", err)
 	}
+}
+
+func TestPostgresRepositoryMarksCoreQueuedAt(t *testing.T) {
+	execer := &recordingExecer{}
+	repo := PostgresRepository{execer: execer}
+	queuedAt := time.Date(2026, 6, 3, 10, 5, 0, 0, time.UTC)
+
+	if err := repo.MarkTraceCoreQueued(context.Background(), "trace_queued", queuedAt); err != nil {
+		t.Fatalf("MarkTraceCoreQueued error: %v", err)
+	}
+
+	if !strings.Contains(execer.query, "UPDATE traces") || !strings.Contains(execer.query, "core_queued_at") {
+		t.Fatalf("query = %q, want traces core_queued_at update", execer.query)
+	}
+	assertPlaceholderAlignment(t, execer.query, execer.args)
+	if len(execer.args) != 2 {
+		t.Fatalf("arg count = %d, want 2", len(execer.args))
+	}
+	assertArg(t, execer.args, 0, queuedAt)
+	assertArg(t, execer.args, 1, "trace_queued")
 }
 
 func validTrace() Trace {

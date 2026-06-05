@@ -1,10 +1,6 @@
-import json
-from datetime import datetime, timezone
-
 from context_repository import PostgresContextRepository
 from models import AnalysisStage
-from repository import PostgresAnalysisRepository
-from streams import publish_stream_message
+from repository import CoreStageAnalysisRepository
 
 
 def default_process_job_line(*args, **kwargs):
@@ -28,130 +24,41 @@ class CoreStageProcessor:
         self.evidence_store = evidence_store
         self.storage_backend = storage_backend
         self.llm_judge = llm_judge
-        self.enrichment_stream_name = enrichment_stream_name
         self.redis_client = redis_client
         self.process_job_line_fn = process_job_line_fn or default_process_job_line
 
     def process(self, trace_id: str) -> dict:
-        payload = _load_trace_job_json(self.connection, trace_id)
+        repository = CoreStageAnalysisRepository(self.connection)
+        payload = repository.load_trace_job_json(trace_id)
         result = self.process_job_line_fn(
             payload,
             self.evidence_store,
-            PostgresAnalysisRepository(self.connection),
+            repository,
             PostgresContextRepository(self.connection),
             storage_backend=self.storage_backend,
             llm_judge=self.llm_judge,
+            allow_llm=False,
+            enable_media_derivation=False,
         )
+        enrichment_reasons = _effective_enrichment_reasons(result, llm_judge=self.llm_judge)
+        result["enrichment_required"] = bool(enrichment_reasons)
+        result["enrichment_reasons"] = enrichment_reasons
         enrichment_required = _trace_needs_enrichment(self.connection, trace_id, result)
-
-        if enrichment_required and self.redis_client is not None:
-            try:
-                publish_stream_message(
-                    self.redis_client,
-                    stream_name=self.enrichment_stream_name,
-                    trace_id=trace_id,
-                    stage=AnalysisStage.ENRICHMENT,
-                    enqueued_at=datetime.now(timezone.utc).isoformat(),
-                    hints={"source_stage": AnalysisStage.CORE.value},
-                )
-            except Exception:
-                _update_trace_stage_state(
-                    self.connection,
-                    trace_id,
-                    enrichment_required=True,
-                    enrichment_status="failed",
-                    enrichment_queued=False,
-                )
-                self.connection.commit()
-                raise
+        result["enrichment_required"] = enrichment_required
 
         _update_trace_stage_state(
             self.connection,
             trace_id,
             enrichment_required=enrichment_required,
             enrichment_status="pending" if enrichment_required else "not_required",
-            enrichment_queued=enrichment_required,
+            enrichment_queued=False,
         )
-        self.connection.commit()
         return result
 
 
-def _load_trace_job_json(connection, trace_id: str) -> str:
-    cursor = connection.cursor()
-    cursor.execute(
-        """
-        SELECT
-            trace_id,
-            route_pattern,
-            protocol_family,
-            capture_mode,
-            username_snapshot,
-            request_raw_ref,
-            request_headers_ref,
-            response_raw_ref,
-            response_headers_ref,
-            model_requested,
-            usage_prompt_tokens,
-            usage_completion_tokens,
-            usage_total_tokens,
-            usage_reasoning_tokens,
-            usage_cached_tokens,
-            token_fingerprint,
-            fingerprint_display,
-            new_api_token_id_snapshot,
-            token_name_snapshot,
-            identity_resolution_status,
-            client_ip_hash,
-            user_agent_hash,
-            status_code,
-            upstream_status_code,
-            stream,
-            request_started_at,
-            request_body_size,
-            response_body_size
-        FROM traces
-        WHERE trace_id = %s
-        """,
-        (trace_id,),
-    )
-    row = cursor.fetchone()
-    if row is None:
-        raise ValueError(f"trace not found: {trace_id}")
-    payload = {
-        "type": "trace_captured",
-        "trace_id": row[0],
-        "route_pattern": row[1],
-        "protocol_family": row[2],
-        "capture_mode": row[3],
-        "username": row[4],
-        "request_raw_ref": row[5],
-        "request_headers_ref": row[6],
-        "response_raw_ref": row[7],
-        "response_headers_ref": row[8],
-        "model_requested": row[9],
-        "usage_prompt_tokens": row[10],
-        "usage_completion_tokens": row[11],
-        "usage_total_tokens": row[12],
-        "usage_reasoning_tokens": row[13],
-        "usage_cached_tokens": row[14],
-        "token_fingerprint": row[15],
-        "fingerprint_display": row[16],
-        "new_api_token_id": row[17],
-        "token_name_snapshot": row[18],
-        "identity_resolution_status": row[19],
-        "client_ip_hash": row[20],
-        "user_agent_hash": row[21],
-        "status_code": row[22],
-        "upstream_status_code": row[23],
-        "stream": row[24],
-        "request_started_at": row[25].isoformat() if hasattr(row[25], "isoformat") else (row[25] or ""),
-        "request_body_size": row[26],
-        "response_body_size": row[27],
-    }
-    return json.dumps(payload, sort_keys=True)
-
-
 def _trace_needs_enrichment(connection, trace_id: str, result: dict | None = None) -> bool:
+    if (result or {}).get("enrichment_required"):
+        return True
     if (result or {}).get("llm_judge_status") == "degraded":
         return True
     cursor = connection.cursor()
@@ -167,6 +74,16 @@ def _trace_needs_enrichment(connection, trace_id: str, result: dict | None = Non
     return cursor.fetchone() is not None
 
 
+def _effective_enrichment_reasons(result: dict | None, *, llm_judge) -> list[str]:
+    reasons = list((result or {}).get("enrichment_reasons") or [])
+    filtered: list[str] = []
+    for reason in reasons:
+        if reason == "llm_judge" and llm_judge is None:
+            continue
+        filtered.append(reason)
+    return filtered
+
+
 def _update_trace_stage_state(
     connection,
     trace_id: str,
@@ -174,6 +91,7 @@ def _update_trace_stage_state(
     enrichment_required: bool,
     enrichment_status: str,
     enrichment_queued: bool,
+    last_error_code: str = "",
 ) -> None:
     cursor = connection.cursor()
     cursor.execute(
@@ -181,7 +99,7 @@ def _update_trace_stage_state(
         UPDATE traces
         SET core_status = 'completed',
             core_completed_at = now(),
-            last_analysis_error_code = '',
+            last_analysis_error_code = %s,
             enrichment_required = %s,
             enrichment_status = %s,
             enrichment_queued_at = CASE WHEN %s THEN now() ELSE NULL END,
@@ -189,6 +107,7 @@ def _update_trace_stage_state(
         WHERE trace_id = %s
         """,
         (
+            last_error_code,
             enrichment_required,
             enrichment_status,
             enrichment_queued,

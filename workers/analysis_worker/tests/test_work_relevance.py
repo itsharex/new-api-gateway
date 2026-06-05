@@ -423,3 +423,28 @@ def test_weak_match_with_non_work_and_llm_unavailable_uses_review_conflict_fallb
     assert assessment.evidence[-1]["kind"] == "llm_unavailable"
     assert assessment.evidence[-1]["category"] == "timeout"
     assert assessment.evidence[-1]["source"] == "llm_judge"
+
+
+def test_allow_llm_false_skips_judge_but_marks_enrichment_request_for_conflict():
+    judge = StubJudge({
+        "decision": "work_related",
+        "recommended_action": "allow",
+        "task_category": "debugging",
+        "confidence": 0.91,
+    })
+
+    assessment = classify_work_relevance(
+        job(usage_total_tokens=1200),
+        [message("In the gateway repo, rewrite my resume bullet and interview summary.")],
+        [context()],
+        llm_judge=judge,
+        allow_llm=False,
+    )
+
+    assert judge.calls == []
+    assert assessment.decision == "needs_review"
+    assert assessment.recommended_action == "review_conflict"
+    assert assessment.needs_review is True
+    assert assessment.llm_judge_requested is True
+    assert assessment.llm_judge_reason == "mixed_signals"
+    assert not any(item.get("source") == "llm_judge" for item in assessment.evidence if isinstance(item, dict))

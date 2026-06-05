@@ -229,11 +229,12 @@ def test_repository_inserts_messages_results_aggregates_anomalies_and_coverage()
     queries = "\n".join(query for query, _ in conn.cursor_obj.executed)
     assert "INSERT INTO normalized_messages" in queries
     assert "INSERT INTO analysis_results" in queries
-    assert "INSERT INTO usage_aggregates" in queries
+    assert "INSERT INTO trace_usage_facts" in queries
+    assert "INSERT INTO usage_aggregates" not in queries
     assert "INSERT INTO usage_anomalies" in queries
     assert "INSERT INTO coverage_alerts" in queries
     assert "ON CONFLICT" in queries
-    assert conn.committed is True
+    assert conn.committed is False
 
     coverage_queries = [
         query for query, _ in conn.cursor_obj.executed if "INSERT INTO coverage_alerts" in query
@@ -258,8 +259,125 @@ def test_repository_inserts_messages_results_aggregates_anomalies_and_coverage()
         params for query, params in conn.cursor_obj.executed if "INSERT INTO analysis_results" in query
     ]
     assert analysis_params[0][9] == "core"
-    assert analysis_params[0][10] == "usage_extraction"
-    assert analysis_params[0][11] == "usage_extraction:usage_from_gateway_job"
+
+
+def test_save_trace_analysis_writes_trace_usage_fact_instead_of_usage_aggregate_upsert():
+    conn = FakeConnection()
+    repo = PostgresAnalysisRepository(conn)
+    message = NormalizedMessage(
+        trace_id="trace_1",
+        direction="request",
+        sequence_index=0,
+        role="user",
+        modality="text",
+        content_text="Summarize incident",
+        content_text_hash="abc",
+        media_url="",
+        source_path="request.messages[0]",
+        protocol_item_type="openai_chat_message",
+        token_count_estimate=2,
+        metadata={"protocol_family": "openai_chat"},
+    )
+    result = AnalysisResult(
+        trace_id="trace_1",
+        analyzer_name="usage_extraction",
+        analyzer_version="normalizer_mvp_2026_04_28",
+        policy_version="",
+        category="usage_extraction",
+        label="usage_from_gateway_job",
+        score=18,
+        confidence=1.0,
+        severity="",
+        result={"total_tokens": 18},
+    )
+    aggregate = UsageAggregateDelta(
+        bucket_start="2026-04-28T13:00:00+00:00",
+        bucket_size="hour",
+        token_fingerprint="tkfp_raw",
+        new_api_token_id=42,
+        username="alice",
+        token_name_snapshot="alice",
+        model="gpt-4.1",
+        route_pattern="/v1/chat/completions",
+        protocol_family="openai_chat",
+        request_count=1,
+        success_count=1,
+        error_count=0,
+        stream_count=0,
+        prompt_tokens=11,
+        completion_tokens=7,
+        total_tokens=18,
+        reasoning_tokens=2,
+        cached_tokens=3,
+        request_body_bytes=128,
+        response_body_bytes=256,
+    )
+
+    repo.save_trace_analysis([message], [result], [aggregate])
+
+    queries = "\n".join(query for query, _ in conn.cursor_obj.executed)
+    assert "INSERT INTO trace_usage_facts" in queries
+    assert "INSERT INTO usage_aggregates" not in queries
+
+
+def test_repository_uses_explicit_stage_producer_and_result_key_for_analysis_results():
+    conn = FakeConnection()
+    repo = PostgresAnalysisRepository(conn)
+    result = AnalysisResult(
+        trace_id="trace_enrichment",
+        analyzer_name="work_relevance",
+        analyzer_version=ANALYZER_VERSION,
+        policy_version="",
+        category="work_relevance",
+        label="job_search",
+        score=0.2,
+        confidence=0.7,
+        severity="review",
+        result={"decision": "needs_review"},
+        stage="enrichment",
+        producer="llm_judge",
+        result_key="work_relevance_secondary",
+    )
+
+    repo.save_trace_analysis([], [result], [])
+
+    analysis_params = [
+        params for query, params in conn.cursor_obj.executed if "INSERT INTO analysis_results" in query
+    ]
+    assert len(analysis_params) == 1
+    assert analysis_params[0][9] == "enrichment"
+    assert analysis_params[0][10] == "llm_judge"
+    assert analysis_params[0][11] == "work_relevance_secondary"
+
+
+def test_repository_save_trace_usage_fact_upserts_trace_fact_row():
+    conn = FakeConnection()
+    repo = PostgresAnalysisRepository(conn)
+
+    repo.save_trace_usage_fact(
+        trace_id="trace_1",
+        token_fingerprint="fp_1",
+        username="alice",
+        model="gpt-4.1",
+        route_pattern="/v1/chat/completions",
+        protocol_family="openai_chat",
+        request_started_at="2026-06-03T00:00:00+00:00",
+        request_count=1,
+        success_count=1,
+        error_count=0,
+        stream_count=0,
+        prompt_tokens=10,
+        completion_tokens=12,
+        cached_tokens=2,
+        total_tokens=22,
+        reasoning_tokens=0,
+        request_body_bytes=128,
+        response_body_bytes=512,
+    )
+
+    queries = "\n".join(query for query, _ in conn.cursor_obj.executed)
+    assert "INSERT INTO trace_usage_facts" in queries
+    assert "ON CONFLICT (trace_id) DO UPDATE" in queries
 
 
 def test_analysis_context_maps_trace_effective_tokens_p95_from_baseline_cache():
@@ -433,7 +551,7 @@ def test_repository_inserts_media_asset_records():
         ),
     ]
 
-    repo.save_media_assets("trace_1", assets)
+    repo.save_media_assets("trace_1", assets, derived_from="file:///raw/trace_1/request_body.bin")
 
     media_queries = [
         (query, params)
@@ -451,13 +569,17 @@ def test_repository_inserts_media_asset_records():
         "media_asset_000002",
         "raw/2026/05/05/trace_1/media_asset_000002.bin",
     )
+    assert media_queries[0][1][6:] == (
+        "derived_media",
+        "file:///raw/trace_1/request_body.bin",
+    )
 
 
 def test_repository_skips_media_assets_when_empty():
     conn = FakeConnection()
     repo = PostgresAnalysisRepository(conn)
 
-    repo.save_media_assets("trace_1", [])
+    repo.save_media_assets("trace_1", [], derived_from="file:///raw/trace_1/request_body.bin")
 
     media_queries = [
         query for query, _ in conn.cursor_obj.executed

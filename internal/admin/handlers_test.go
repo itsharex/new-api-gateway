@@ -15,6 +15,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/redis/go-redis/v9"
 	"github.com/your-company/new-api-gateway/internal/evidence"
 	"github.com/your-company/new-api-gateway/internal/fingerprint"
 )
@@ -275,6 +276,266 @@ func TestChangeCurrentUserPasswordRevokeFailureDoesNotUpdatePassword(t *testing.
 	}
 	if got := strings.Join(db.passwordChangeOps, ","); got != "" {
 		t.Fatalf("passwordChangeOps = %s, want no committed password change ops", got)
+	}
+}
+
+type stubRuntimeProvider struct {
+	snapshot         AnalysisRuntimeSnapshot
+	snapshots        map[string]AnalysisRuntimeSnapshot
+	snapshotErr      error
+	snapshotErrs     map[string]error
+	history          []AnalysisRuntimeHistoryPoint
+	consumers        []AnalysisRuntimeConsumer
+	lastHistoryStage string
+	lastHistoryRange string
+}
+
+func (s *stubRuntimeProvider) Snapshot(_ context.Context, stage string) (AnalysisRuntimeSnapshot, error) {
+	if err, ok := s.snapshotErrs[stage]; ok {
+		return AnalysisRuntimeSnapshot{}, err
+	}
+	if s.snapshotErr != nil {
+		return AnalysisRuntimeSnapshot{}, s.snapshotErr
+	}
+	if item, ok := s.snapshots[stage]; ok {
+		return item, nil
+	}
+	return s.snapshot, nil
+}
+
+func (s *stubRuntimeProvider) History(_ context.Context, stage string, rangeName string) ([]AnalysisRuntimeHistoryPoint, error) {
+	s.lastHistoryStage = stage
+	s.lastHistoryRange = rangeName
+	return s.history, nil
+}
+
+func (s *stubRuntimeProvider) Consumers(context.Context, string) ([]AnalysisRuntimeConsumer, error) {
+	return s.consumers, nil
+}
+
+func TestAnalysisRuntimeSnapshotHandlerReturnsCoreMetrics(t *testing.T) {
+	handler, _, cookie := newAuthenticatedAdminHandler(t, RoleViewer, "", nil)
+	handler.runtimeProvider = &stubRuntimeProvider{
+		snapshot: AnalysisRuntimeSnapshot{
+			Stage:                   "core",
+			QueueDepth:              8,
+			PendingCount:            3,
+			LeasedCount:             2,
+			OldestPendingAgeSeconds: 30,
+			ThroughputPerMinute:     25,
+			SuccessRate:             0.75,
+			RetryableFailRate:       0.15,
+			TerminalFailRate:        0.10,
+			LLMJudgeTimeoutRate:     0.05,
+			QueueWaitP50MS:          600,
+			QueueWaitP95MS:          1200,
+			ProcessingP50MS:         450,
+			ProcessingP95MS:         900,
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/analysis-runtime?stage=core", nil)
+	addAuthenticatedCookies(req, cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"queue_depth":8`) {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+	for _, fragment := range []string{
+		`"success_rate":0.75`,
+		`"retryable_fail_rate":0.15`,
+		`"terminal_fail_rate":0.1`,
+		`"llm_judge_timeout_rate":0.05`,
+		`"queue_wait_p50_ms":600`,
+		`"processing_p50_ms":450`,
+	} {
+		if !strings.Contains(rec.Body.String(), fragment) {
+			t.Fatalf("body missing %s: %s", fragment, rec.Body.String())
+		}
+	}
+}
+
+func TestAnalysisRuntimeSnapshotHandlerReturnsProviderError(t *testing.T) {
+	handler, _, cookie := newAuthenticatedAdminHandler(t, RoleViewer, "", nil)
+	handler.runtimeProvider = &stubRuntimeProvider{snapshotErr: errors.New("db exploded")}
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/analysis-runtime?stage=core", nil)
+	addAuthenticatedCookies(req, cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500, body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "failed to load analysis runtime snapshot") {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
+func TestAnalysisRuntimeHistoryHandlerRejectsInvalidRange(t *testing.T) {
+	handler, _, cookie := newAuthenticatedAdminHandler(t, RoleViewer, "", nil)
+	handler.runtimeProvider = &stubRuntimeProvider{}
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/analysis-runtime/history?stage=core&range=6h", nil)
+	addAuthenticatedCookies(req, cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAnalysisRuntimeHistoryHandlerAcceptsSpecRanges(t *testing.T) {
+	handler, _, cookie := newAuthenticatedAdminHandler(t, RoleViewer, "", nil)
+	provider := &stubRuntimeProvider{
+		history: []AnalysisRuntimeHistoryPoint{{
+			Stage:                   "core",
+			SampledAt:               "2026-06-03T10:00:00Z",
+			QueueDepth:              9,
+			OldestPendingAgeSeconds: 42,
+			QueueWaitP95MS:          1200,
+			ProcessingP95MS:         900,
+		}},
+	}
+	handler.runtimeProvider = provider
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/analysis-runtime/history?stage=core&range=15m", nil)
+	addAuthenticatedCookies(req, cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	if provider.lastHistoryStage != "core" || provider.lastHistoryRange != "15m" {
+		t.Fatalf("provider received stage=%q range=%q", provider.lastHistoryStage, provider.lastHistoryRange)
+	}
+}
+
+func TestRedisRuntimeProviderHistoryReturnsEmptyWithoutFallbackPoint(t *testing.T) {
+	provider := RedisRuntimeProvider{
+		repo: NewRepository(&recordingAdminDB{}),
+		now:  func() time.Time { return time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC) },
+	}
+
+	items, err := provider.History(context.Background(), "core", "15m")
+
+	if err != nil {
+		t.Fatalf("History error: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("items = %#v, want empty", items)
+	}
+}
+
+func TestRedisRuntimeProviderSnapshotPropagatesDBErrors(t *testing.T) {
+	provider := RedisRuntimeProvider{
+		repo: NewRepository(&recordingAdminDB{
+			row: scanErrorRow{err: errors.New("scan failed")},
+		}),
+	}
+
+	_, err := provider.Snapshot(context.Background(), "core")
+
+	if err == nil || !strings.Contains(err.Error(), "scan failed") {
+		t.Fatalf("err = %v, want scan failed", err)
+	}
+}
+
+func TestSummaryRuntimeSnapshotMarksUnavailableOnProviderError(t *testing.T) {
+	snapshot := summaryRuntimeSnapshot(&stubRuntimeProvider{
+		snapshotErrs: map[string]error{
+			"core": errors.New("query failed"),
+		},
+	}, context.Background(), "core")
+
+	if snapshot.Available {
+		t.Fatalf("snapshot = %#v, want unavailable", snapshot)
+	}
+	if snapshot.Error == "" {
+		t.Fatalf("snapshot = %#v, want error message", snapshot)
+	}
+	if snapshot.Stage != "core" {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+}
+
+func TestOverviewReturnsUnavailableRuntimeSummaryWhenStageFails(t *testing.T) {
+	handler, _, cookie := newAuthenticatedAdminHandler(t, RoleViewer, "", nil)
+	handler.runtimeProvider = &stubRuntimeProvider{
+		snapshots: map[string]AnalysisRuntimeSnapshot{
+			"enrichment": {Stage: "enrichment", Available: true, QueueDepth: 7},
+		},
+		snapshotErrs: map[string]error{
+			"core": errors.New("core unavailable"),
+		},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		AnalysisRuntime map[string]AnalysisRuntimeSnapshot `json:"analysis_runtime"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode overview body: %v", err)
+	}
+	if body.AnalysisRuntime["core"].Available {
+		t.Fatalf("core snapshot = %#v, want unavailable", body.AnalysisRuntime["core"])
+	}
+	if body.AnalysisRuntime["core"].Error == "" {
+		t.Fatalf("core snapshot = %#v, want error", body.AnalysisRuntime["core"])
+	}
+	if !body.AnalysisRuntime["enrichment"].Available {
+		t.Fatalf("enrichment snapshot = %#v, want available", body.AnalysisRuntime["enrichment"])
+	}
+}
+
+func TestMaxPendingIdleSecondsPagesPastFirst100Entries(t *testing.T) {
+	calls := []string{}
+	fetchPage := func(start string, count int64) ([]redis.XPendingExt, error) {
+		calls = append(calls, start)
+		switch start {
+		case "-":
+			items := make([]redis.XPendingExt, 100)
+			for i := range items {
+				items[i] = redis.XPendingExt{
+					ID:   fmt.Sprintf("%d-0", i+1),
+					Idle: time.Second,
+				}
+			}
+			return items, nil
+		case "(100-0":
+			return []redis.XPendingExt{
+				{ID: "101-0", Idle: 125 * time.Second},
+				{ID: "102-0", Idle: 2 * time.Second},
+			}, nil
+		default:
+			return nil, nil
+		}
+	}
+
+	oldest, err := maxPendingIdleSeconds(fetchPage, 100)
+
+	if err != nil {
+		t.Fatalf("maxPendingIdleSeconds error: %v", err)
+	}
+	if oldest != 125 {
+		t.Fatalf("oldest = %d, want 125", oldest)
+	}
+	if got := strings.Join(calls, ","); got != "-,(100-0" {
+		t.Fatalf("calls = %s, want -,(100-0", got)
 	}
 }
 
@@ -1117,6 +1378,24 @@ func TestUsageWithoutUsernameKeepsGenericResponse(t *testing.T) {
 
 func TestOverviewReturnsThirtyDayTokenUsage(t *testing.T) {
 	handler, _, cookie := newAuthenticatedAdminHandler(t, RoleViewer, "", nil)
+	handler.runtimeProvider = &stubRuntimeProvider{
+		snapshots: map[string]AnalysisRuntimeSnapshot{
+			"core": {
+				Stage:                   "core",
+				QueueDepth:              5,
+				LeasedCount:             3,
+				OldestPendingAgeSeconds: 44,
+				ThroughputPerMinute:     12,
+				QueueWaitP95MS:          880,
+				ProcessingP95MS:         640,
+			},
+			"enrichment": {
+				Stage:               "enrichment",
+				QueueDepth:          11,
+				ThroughputPerMinute: 4,
+			},
+		},
+	}
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
@@ -1127,13 +1406,22 @@ func TestOverviewReturnsThirtyDayTokenUsage(t *testing.T) {
 		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
 	}
 	var body struct {
-		Overview OverviewSummary `json:"overview"`
+		Overview        OverviewSummary                    `json:"overview"`
+		AnalysisRuntime map[string]AnalysisRuntimeSnapshot `json:"analysis_runtime"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode overview body: %v", err)
 	}
 	if len(body.Overview.TokenUsageDaily) != 30 {
 		t.Fatalf("token_usage_daily length = %d, want 30; body = %s", len(body.Overview.TokenUsageDaily), rec.Body.String())
+	}
+	core := body.AnalysisRuntime["core"]
+	enrichment := body.AnalysisRuntime["enrichment"]
+	if core.LeasedCount != 3 || core.OldestPendingAgeSeconds != 44 || core.QueueWaitP95MS != 880 || core.ProcessingP95MS != 640 {
+		t.Fatalf("core runtime summary = %#v", core)
+	}
+	if enrichment.Stage != "enrichment" || enrichment.QueueDepth != 11 {
+		t.Fatalf("enrichment runtime summary = %#v", enrichment)
 	}
 }
 

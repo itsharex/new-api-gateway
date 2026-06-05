@@ -192,12 +192,14 @@ RBAC 角色：`viewer` → `auditor` → `raw_access` → `admin`，权限逐级
 
 | 文件 | 职责 |
 |------|------|
-| `main.py` | 入口：默认持续消费 `analysis.core` stream；`--redis-once` 单次处理（测试用）；无环境变量时 stdin 合约验证 |
+| `main.py` | 入口：默认持续消费 `analysis.core` stream，也可通过 `--redis-list analysis.enrichment` 切到 enrichment；core 持续模式使用 `XREADGROUP COUNT N` + 本地线程池 + PostgreSQL 连接池批量消费；`--redis-once` 单次处理（测试用）；无环境变量时 stdin 合约验证 |
+| `core_stage.py` | core 阶段处理器：从 trace/evidence 生成基础分析结果，只执行快速 heuristic，并在需要时投递 `analysis.enrichment` |
+| `enrichment_stage.py` | enrichment 阶段处理器：承接慢增强任务，执行 LLM judge / 追加 enrichment 结果，收口第二阶段 trace 状态 |
 | `models.py` | 数据类：`TraceCapturedJob`, `NormalizedMessage`, `AnalysisResult` 等 |
 | `normalizers.py` | 协议归一化器：OpenAI chat/responses, Claude, Gemini；SSE 流重组 |
 | `rules.py` | 持久化异常收敛层：统一计算 `effective_tokens = max(prompt_tokens - cached_tokens, 0) + completion_tokens`，当前 worker 新写入/收敛为 4 类 anomaly：`high_trace_tokens`、`long_output_anomaly`、`off_hours_high_usage`、`non_work_use` |
 | `work_relevance.py` | 工作相关性分类器：基于 `context_catalog` aliases/keywords、non-work 规则和 token 成本分层生成 `WorkRelevanceAssessment`；必要时调用外部 OpenAI-compatible LLM judge，但只产出 `analysis_results` 语义，不直接落库 anomaly |
-| `repository.py` | PostgreSQL 持久化：归一化消息、分析结果、用量聚合、异常告警 |
+| `repository.py` | PostgreSQL 持久化：归一化消息、分析结果、`trace_usage_facts`、异常告警 |
 | `evidence.py` | 证据存储抽象（`EvidenceStore` Protocol）与文件系统实现 |
 | `oss_evidence.py` | OSS 证据存储实现（`OSSEvidenceStore`） |
 | `media_extraction.py` | Base64 媒体提取：解码 data URL / raw base64，存储为独立二进制证据，替换 JSON 中的原始字符串为 `audit-media:` 引用 |
@@ -208,10 +210,44 @@ RBAC 角色：`viewer` → `auditor` → `raw_access` → `admin`，权限逐级
 ### 处理管线
 
 ```
-Redis Streams (`XREADGROUP` / `XAUTOCLAIM`) → 读取证据 → 协议归一化 + 媒体提取 → 工作相关性分类 → 异常检测 → 用量聚合 → 持久化 → 心跳 → `XACK`
+Core: Redis Streams (`XREADGROUP COUNT N` / `XAUTOCLAIM`) → 批量 claim → 线程池并发读取证据 → 协议归一化 + 快速 heuristic → 异常检测 → 写入 `trace_usage_facts` / `stage=core` 分析结果 → 需要时投递 `analysis.enrichment` → 心跳 / runtime sample → `XACK`
+
+Enrichment: Redis Streams (`analysis.enrichment`) → 读取 trace / evidence → LLM judge 与慢增强 → 追加 `stage=enrichment` 结果与摘要状态 → `XACK`
 ```
 
-默认启动即进入持续消费模式，收到 SIGTERM/SIGINT 时优雅退出。`--redis-once` 仅处理一个任务后退出，用于 e2e 测试；如果本地同时运行了常驻 worker，worker 类 e2e 应切换到隔离的 `REDIS_URL`（例如不同 Redis DB），避免测试任务被后台消费者或其他 consumer group 成员抢占。
+### Trace 状态机
+
+```mermaid
+stateDiagram-v2
+    [*] --> Captured: gateway 持久化 trace\nanalysis_status=pending\ncore_status=pending\nenrichment_status=not_required
+
+    Captured --> CoreProcessing: `analysis.core` consumer claim\ncore_status=processing
+    CoreProcessing --> CoreFailed: core terminal failure\ncore_status=failed\nlast_analysis_error_code!=\"\"
+    CoreProcessing --> Captured: core retryable failure\ncore_status=pending\nlast_analysis_error_code!=\"\"
+
+    CoreProcessing --> CoreDone: core 完成且无需慢增强\ncore_status=completed\nenrichment_required=false\nenrichment_status=not_required\nanalysis_status=completed
+    CoreProcessing --> EnrichmentPending: core 完成且需要慢增强\ncore_status=completed\nenrichment_required=true\nenrichment_status=pending
+
+    EnrichmentPending --> EnrichmentProcessing: `analysis.enrichment` consumer claim\nenrichment_status=processing
+    EnrichmentProcessing --> EnrichmentPending: enrichment retryable failure\nenrichment_status=pending\nlast_analysis_error_code!=\"\"
+    EnrichmentProcessing --> EnrichmentFailed: enrichment terminal failure\nenrichment_status=failed\nlast_analysis_error_code!=\"\"
+    EnrichmentProcessing --> EnrichmentDone: enrichment 完成\nenrichment_status=completed\nlast_analysis_error_code=\"\"\nanalysis_status=completed
+
+    CoreDone --> [*]
+    CoreFailed --> [*]
+    EnrichmentDone --> [*]
+    EnrichmentFailed --> [*]
+```
+
+状态语义：
+- `analysis_status` 表示整条 trace 是否已有完整分析结果。当前实现里，core 写完基础结果时通常就会置为 `completed`；如果后续还有 enrichment，它表示“已有可展示分析结果”，而不是“慢增强一定已经完成”。
+- `core_status` 只描述 `analysis.core` 阶段：`pending -> processing -> completed/failed`，retryable failure 会回到 `pending`。
+- `enrichment_status` 只描述 `analysis.enrichment` 阶段：无慢增强需求时保持 `not_required`；有需求时走 `pending -> processing -> completed/failed`，retryable failure 会回到 `pending`。
+- `last_analysis_error_code` 记录最近一次阶段失败原因；enrichment 成功收尾时会清空该字段。
+
+默认启动即进入持续消费模式，收到 SIGTERM/SIGINT 时优雅退出。默认消费 `analysis.core`，如需单独跑慢增强阶段可通过 `--redis-list analysis.enrichment` 或环境变量 `ANALYSIS_REDIS_LIST=analysis.enrichment` 启动第二组 consumer。core worker 暴露 4 个吞吐/恢复配置：`ANALYSIS_CORE_READ_COUNT`、`ANALYSIS_CORE_MAX_INFLIGHT`、`ANALYSIS_CORE_LEASE_SECONDS`、`ANALYSIS_CORE_RETRY_LIMIT`。enrichment worker 也有独立调参项：`ANALYSIS_ENRICHMENT_READ_COUNT`、`ANALYSIS_ENRICHMENT_MAX_INFLIGHT`、`ANALYSIS_ENRICHMENT_LEASE_SECONDS`、`ANALYSIS_ENRICHMENT_RETRY_LIMIT`、`ANALYSIS_ENRICHMENT_LLM_MAX_CONCURRENCY`，其中 `LLM_MAX_CONCURRENCY` 会作为 enrichment 批量消费并发上限。`--redis-once` 仅处理一个任务后退出，用于 e2e 测试；如果本地同时运行了常驻 worker，worker 类 e2e 应切换到隔离的 `REDIS_URL`（例如不同 Redis DB），避免测试任务被后台消费者或其他 consumer group 成员抢占。
+
+`usage_aggregates` 与 `baseline_cache` 不再由 core 热路径同步 upsert；worker 只写单 trace 的 `trace_usage_facts`，离线 batch 负责 rollup 聚合和 baseline 重建。管理后台新增 `分析运行` 视图，通过 Redis Streams + `analysis_runtime_samples` / `analysis_tasks` 查询实时队列与消费者状态。
 
 工作相关性结果会完整写入 `analysis_results.result_json`。当前语义收敛为：
 - 明确非工作相关：`recommended_action=alert_non_work`，并落库 `non_work_use`
@@ -286,5 +322,6 @@ make smoke         # smoke 测试
 cd workers/analysis_worker
 uv sync            # 安装 Python 依赖
 uv run pytest -q   # Python 单元测试
-uv run python main.py --redis-once  # 处理一个任务
+uv run python main.py --redis-once  # 处理一个 core 任务
+ANALYSIS_REDIS_LIST=analysis.enrichment uv run python main.py --redis-once  # 处理一个 enrichment 任务
 ```

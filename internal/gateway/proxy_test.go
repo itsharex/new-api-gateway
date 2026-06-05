@@ -30,8 +30,10 @@ import (
 type memoryTraceRepo struct {
 	traces         []traces.Trace
 	rawEvidence    []traces.RawEvidenceObject
+	coreQueued     []time.Time
 	insertTraceErr error
 	insertRawErr   error
+	markQueuedErr  error
 }
 
 func (m *memoryTraceRepo) InsertTrace(ctx context.Context, trace traces.Trace) error {
@@ -41,6 +43,11 @@ func (m *memoryTraceRepo) InsertTrace(ctx context.Context, trace traces.Trace) e
 func (m *memoryTraceRepo) InsertRawEvidence(ctx context.Context, object traces.RawEvidenceObject) error {
 	m.rawEvidence = append(m.rawEvidence, object)
 	return m.insertRawErr
+}
+
+func (m *memoryTraceRepo) MarkTraceCoreQueued(ctx context.Context, traceID string, queuedAt time.Time) error {
+	m.coreQueued = append(m.coreQueued, queuedAt)
+	return m.markQueuedErr
 }
 
 type fixedResolver struct{}
@@ -482,9 +489,41 @@ func TestProxyPublishesTraceCapturedJobAfterRawEvidencePersistence(t *testing.T)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	want := []string{"trace", "raw:request_body", "raw:request_headers", "raw:response_body", "raw:response_headers", "publish"}
+	want := []string{"trace", "raw:request_body", "raw:request_headers", "raw:response_body", "raw:response_headers", "publish", "core_queued"}
 	if strings.Join(events, ",") != strings.Join(want, ",") {
 		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
+func TestProxyMarksTraceCoreQueuedAtAfterSuccessfulPublish(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	repo := &memoryTraceRepo{}
+	publisher := &recordingJobPublisher{}
+	handler := testHandler(upstream.URL, repo, evidence.NewFilesystemStore(t.TempDir()))
+	handler.JobPublisher = publisher
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer sk-abc123")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(repo.coreQueued) != 1 {
+		t.Fatalf("marked core queued calls = %d, want 1", len(repo.coreQueued))
+	}
+	if repo.coreQueued[0].IsZero() {
+		t.Fatal("core queued timestamp is zero")
+	}
+	if len(publisher.jobs) != 1 {
+		t.Fatalf("published jobs = %d, want 1", len(publisher.jobs))
 	}
 }
 
@@ -765,6 +804,31 @@ func TestProxyReportsTraceCapturedPublishFailureWithoutMaskingUpstream(t *testin
 	}
 	if len(auditErrors) != 1 || !errors.Is(auditErrors[0], publishErr) {
 		t.Fatalf("audit errors = %v, want %v", auditErrors, publishErr)
+	}
+}
+
+func TestProxyDoesNotMarkTraceCoreQueuedAtWhenPublishFails(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"accepted":true}`))
+	}))
+	defer upstream.Close()
+
+	repo := &memoryTraceRepo{}
+	handler := testHandler(upstream.URL, repo, evidence.NewFilesystemStore(t.TempDir()))
+	handler.JobPublisher = &recordingJobPublisher{err: errors.New("publish failed")}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer sk-abc123")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(repo.coreQueued) != 0 {
+		t.Fatalf("marked core queued calls = %d, want 0", len(repo.coreQueued))
 	}
 }
 
@@ -1972,6 +2036,13 @@ func (r *contextRejectingTraceRepo) InsertRawEvidence(ctx context.Context, objec
 	return nil
 }
 
+func (r *contextRejectingTraceRepo) MarkTraceCoreQueued(ctx context.Context, traceID string, queuedAt time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
 type selectiveEvidenceStore struct {
 	objects map[string]evidence.Object
 	errs    map[string]error
@@ -2088,6 +2159,10 @@ func (r *notifyingTraceRepo) InsertRawEvidence(ctx context.Context, object trace
 	return nil
 }
 
+func (r *notifyingTraceRepo) MarkTraceCoreQueued(ctx context.Context, traceID string, queuedAt time.Time) error {
+	return nil
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -2107,13 +2182,18 @@ func (r errReadCloser) Close() error {
 }
 
 type recordingJobPublisher struct {
-	jobs []jobs.TraceCapturedInput
-	err  error
+	jobs   []jobs.TraceCapturedInput
+	err    error
+	result jobs.PublishResult
 }
 
-func (p *recordingJobPublisher) PublishTraceCaptured(ctx context.Context, input jobs.TraceCapturedInput) error {
+func (p *recordingJobPublisher) PublishTraceCaptured(ctx context.Context, input jobs.TraceCapturedInput) (jobs.PublishResult, error) {
 	p.jobs = append(p.jobs, input)
-	return p.err
+	result := p.result
+	if result.EnqueuedAt.IsZero() {
+		result.EnqueuedAt = time.Date(2026, 6, 3, 10, 0, 1, 0, time.UTC)
+	}
+	return result, p.err
 }
 
 type orderedTraceRepo struct {
@@ -2130,13 +2210,18 @@ func (r *orderedTraceRepo) InsertRawEvidence(ctx context.Context, object traces.
 	return nil
 }
 
+func (r *orderedTraceRepo) MarkTraceCoreQueued(ctx context.Context, traceID string, queuedAt time.Time) error {
+	*r.events = append(*r.events, "core_queued")
+	return nil
+}
+
 type orderedJobPublisher struct {
 	events *[]string
 }
 
-func (p *orderedJobPublisher) PublishTraceCaptured(ctx context.Context, input jobs.TraceCapturedInput) error {
+func (p *orderedJobPublisher) PublishTraceCaptured(ctx context.Context, input jobs.TraceCapturedInput) (jobs.PublishResult, error) {
 	*p.events = append(*p.events, "publish")
-	return nil
+	return jobs.PublishResult{EnqueuedAt: time.Date(2026, 6, 3, 10, 0, 2, 0, time.UTC)}, nil
 }
 
 type recordingCoverageEmitter struct {

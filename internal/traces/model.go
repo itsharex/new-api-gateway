@@ -52,6 +52,7 @@ type Trace struct {
 	ErrorType                       string
 	ErrorMessageRedacted            string
 	AnalysisStatus                  string
+	CoreQueuedAt                    time.Time
 	CreatedAt                       time.Time
 	UpdatedAt                       time.Time
 }

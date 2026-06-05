@@ -103,6 +103,8 @@ def classify_work_relevance(
     messages: list[NormalizedMessage],
     contexts: list[ContextCatalogEntry],
     llm_judge=None,
+    allow_llm: bool = True,
+    strict_llm_errors: bool = False,
 ) -> WorkRelevanceAssessment:
     intent = extract_user_intent(messages)
     if not intent.text:
@@ -134,6 +136,8 @@ def classify_work_relevance(
             decision=decision,
             recommended_action=action,
             score_breakdown=score,
+            llm_judge_requested=False,
+            llm_judge_reason="",
         )
 
     strong_matches, weak_matches = _catalog_matches(intent.text, contexts)
@@ -172,10 +176,13 @@ def classify_work_relevance(
             decision=DECISION_WORK_RELATED,
             recommended_action=ACTION_ALLOW,
             score_breakdown=score,
+            llm_judge_requested=False,
+            llm_judge_reason="",
         )
 
     llm_reason = _llm_invocation_reason(job, strong_matches, weak_matches, non_work_evidence + risk_evidence)
-    if llm_judge is not None and llm_reason is not None:
+    llm_requested = llm_reason is not None
+    if allow_llm and llm_judge is not None and llm_reason is not None:
         bundle = _build_llm_bundle(job, intent, strong_matches, weak_matches, non_work_evidence + risk_evidence)
         try:
             adapted = _adapt_llm_result(llm_judge.judge(bundle))
@@ -200,8 +207,12 @@ def classify_work_relevance(
                 decision=adapted["decision"],
                 recommended_action=adapted["recommended_action"],
                 score_breakdown=adapted["score_breakdown"],
+                llm_judge_requested=llm_requested,
+                llm_judge_reason=llm_reason or "",
             )
         except Exception as exc:
+            if strict_llm_errors:
+                raise
             error_type = getattr(exc, "error_type", exc.__class__.__name__)
             return _conservative_llm_fallback(
                 job,
@@ -238,6 +249,8 @@ def classify_work_relevance(
         decision=decision,
         recommended_action=action,
         score_breakdown=score,
+        llm_judge_requested=llm_requested,
+        llm_judge_reason=llm_reason or "",
     )
 
 
@@ -532,7 +545,7 @@ def _conservative_llm_fallback(
     llm_reason: str,
     error_type: str,
 ) -> WorkRelevanceAssessment:
-    assessment = classify_work_relevance(job, messages, contexts, llm_judge=None)
+    assessment = classify_work_relevance(job, messages, contexts, llm_judge=None, allow_llm=False)
     evidence = list(assessment.evidence)
     evidence.append(_llm_unavailable_evidence(error_type))
     if llm_reason == "mixed_signals":
@@ -549,6 +562,8 @@ def _conservative_llm_fallback(
             decision=DECISION_NEEDS_REVIEW,
             recommended_action=ACTION_REVIEW_CONFLICT,
             score_breakdown=assessment.score_breakdown,
+            llm_judge_requested=True,
+            llm_judge_reason=llm_reason,
         )
     if llm_reason == "high_cost_unknown":
         return WorkRelevanceAssessment(
@@ -564,6 +579,8 @@ def _conservative_llm_fallback(
             decision=DECISION_UNKNOWN,
             recommended_action=ACTION_RECORD_ONLY,
             score_breakdown=assessment.score_breakdown,
+            llm_judge_requested=True,
+            llm_judge_reason=llm_reason,
         )
     return WorkRelevanceAssessment(
         trace_id=assessment.trace_id,
@@ -578,4 +595,6 @@ def _conservative_llm_fallback(
         decision=assessment.decision,
         recommended_action=assessment.recommended_action,
         score_breakdown=assessment.score_breakdown,
+        llm_judge_requested=True,
+        llm_judge_reason=llm_reason,
     )

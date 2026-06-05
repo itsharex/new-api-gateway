@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -13,7 +14,7 @@ func TestRedisStreamPublisherPublishesCoreEnvelope(t *testing.T) {
 	client := &fakeRedisStreamClient{}
 	publisher := NewRedisStreamPublisher(client, DefaultRedisCoreStream)
 
-	err := publisher.PublishTraceCaptured(context.Background(), TraceCapturedInput{
+	result, err := publisher.PublishTraceCaptured(context.Background(), TraceCapturedInput{
 		TraceID:          "trace_1",
 		ProtocolFamily:   "openai_chat",
 		CaptureMode:      "raw_and_normalized",
@@ -36,22 +37,27 @@ func TestRedisStreamPublisherPublishesCoreEnvelope(t *testing.T) {
 	if values["stage"] != "core" {
 		t.Fatalf("stage = %v", values["stage"])
 	}
-	if values["enqueued_at"] == "" {
-		t.Fatalf("enqueued_at = %v", values["enqueued_at"])
+	if _, ok := values["enqueued_at"]; ok {
+		t.Fatalf("enqueued_at should be omitted when not provided: %#v", values)
 	}
 	if values["attempt"] != int64(1) {
 		t.Fatalf("attempt = %v", values["attempt"])
 	}
-	if len(values) != 5 {
-		t.Fatalf("values = %#v, want exactly 5 fields", values)
+	if len(values) != 4 {
+		t.Fatalf("values = %#v, want exactly 4 fields", values)
+	}
+	if result.MessageID != "1-0" {
+		t.Fatalf("message id = %q", result.MessageID)
+	}
+	if !result.EnqueuedAt.Equal(time.UnixMilli(1).UTC()) {
+		t.Fatalf("enqueued_at = %s", result.EnqueuedAt)
 	}
 
 	wantKeys := map[string]struct{}{
-		"trace_id":    {},
-		"stage":       {},
-		"enqueued_at": {},
-		"attempt":     {},
-		"hints":       {},
+		"trace_id": {},
+		"stage":    {},
+		"attempt":  {},
+		"hints":    {},
 	}
 	if len(values) != len(wantKeys) {
 		t.Fatalf("keys = %#v, want %#v", values, wantKeys)
@@ -92,7 +98,7 @@ func TestNewRedisStreamPublisherDefaultsCoreStream(t *testing.T) {
 	client := &fakeRedisStreamClient{}
 	publisher := NewRedisStreamPublisher(client, "")
 
-	if err := publisher.PublishTraceCaptured(context.Background(), TraceCapturedInput{TraceID: "trace_1"}); err != nil {
+	if _, err := publisher.PublishTraceCaptured(context.Background(), TraceCapturedInput{TraceID: "trace_1"}); err != nil {
 		t.Fatalf("PublishTraceCaptured error: %v", err)
 	}
 	if client.args.Stream != DefaultRedisCoreStream {
@@ -103,9 +109,26 @@ func TestNewRedisStreamPublisherDefaultsCoreStream(t *testing.T) {
 func TestRedisStreamPublisherReturnsNilClientError(t *testing.T) {
 	publisher := NewRedisStreamPublisher(nil, DefaultRedisCoreStream)
 
-	err := publisher.PublishTraceCaptured(context.Background(), TraceCapturedInput{TraceID: "trace_1"})
+	_, err := publisher.PublishTraceCaptured(context.Background(), TraceCapturedInput{TraceID: "trace_1"})
 	if !errors.Is(err, ErrRedisStreamClientRequired) {
 		t.Fatalf("error = %v, want %v", err, ErrRedisStreamClientRequired)
+	}
+}
+
+func TestRedisStreamPublisherPreservesExplicitEnqueuedAtField(t *testing.T) {
+	client := &fakeRedisStreamClient{}
+	publisher := NewRedisStreamPublisher(client, DefaultRedisCoreStream)
+
+	_, err := publisher.PublishTraceCaptured(context.Background(), TraceCapturedInput{
+		TraceID:    "trace_1",
+		EnqueuedAt: "2026-06-04T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("PublishTraceCaptured error: %v", err)
+	}
+	values := client.args.Values.(map[string]any)
+	if values["enqueued_at"] != "2026-06-04T12:00:00Z" {
+		t.Fatalf("enqueued_at = %#v", values["enqueued_at"])
 	}
 }
 

@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -56,13 +59,9 @@ func NewRedisStreamPublisher(client redisStreamClient, stream string) RedisStrea
 	}
 }
 
-func (p RedisStreamPublisher) PublishTraceCaptured(ctx context.Context, input TraceCapturedInput) error {
+func (p RedisStreamPublisher) PublishTraceCaptured(ctx context.Context, input TraceCapturedInput) (PublishResult, error) {
 	if p.client == nil {
-		return ErrRedisStreamClientRequired
-	}
-	now := p.now
-	if now == nil {
-		now = time.Now
+		return PublishResult{}, ErrRedisStreamClientRequired
 	}
 	hints, err := json.Marshal(map[string]string{
 		"protocol_family":      input.ProtocolFamily,
@@ -72,17 +71,42 @@ func (p RedisStreamPublisher) PublishTraceCaptured(ctx context.Context, input Tr
 		"has_response_body":    boolString(input.ResponseBodySize > 0),
 	})
 	if err != nil {
-		return err
+		return PublishResult{}, err
 	}
 	values := map[string]any{
-		"trace_id":    input.TraceID,
-		"stage":       "core",
-		"enqueued_at": now().UTC().Format(time.RFC3339),
-		"attempt":     int64(1),
-		"hints":       string(hints),
+		"trace_id": input.TraceID,
+		"stage":    "core",
+		"attempt":  int64(1),
+		"hints":    string(hints),
 	}
-	return p.client.XAdd(ctx, &redis.XAddArgs{
+	if input.EnqueuedAt != "" {
+		values["enqueued_at"] = input.EnqueuedAt
+	}
+	messageID, err := p.client.XAdd(ctx, &redis.XAddArgs{
 		Stream: p.stream,
 		Values: values,
-	}).Err()
+	}).Result()
+	if err != nil {
+		return PublishResult{}, err
+	}
+	queuedAt, err := streamMessageIDTime(messageID)
+	if err != nil {
+		return PublishResult{}, err
+	}
+	return PublishResult{
+		MessageID:  messageID,
+		EnqueuedAt: queuedAt,
+	}, nil
+}
+
+func streamMessageIDTime(messageID string) (time.Time, error) {
+	timestampText, _, ok := strings.Cut(messageID, "-")
+	if !ok || timestampText == "" {
+		return time.Time{}, fmt.Errorf("invalid redis stream message id %q", messageID)
+	}
+	timestampMS, err := strconv.ParseInt(timestampText, 10, 64)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid redis stream message id %q: %w", messageID, err)
+	}
+	return time.UnixMilli(timestampMS).UTC(), nil
 }

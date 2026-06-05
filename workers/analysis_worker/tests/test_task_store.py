@@ -74,6 +74,36 @@ def test_claim_task_transitions_queued_to_leased():
     assert params[3] == "core"
 
 
+def test_insert_task_persists_stream_enqueued_at():
+    connection = FakeConnection()
+    store = AnalysisTaskStore(connection, worker_id="worker-1")
+
+    store.insert_task(
+        trace_id="trace_queued",
+        stage="core",
+        stream_name="analysis.core",
+        stream_message_id="1748944471000-0",
+        queued_at="2026-06-03T10:00:00+00:00",
+        max_attempts=7,
+    )
+
+    query, params = connection.cursor_obj.executed[0]
+    assert "INSERT INTO analysis_tasks" in query
+    assert "queued_at" in query
+    assert "%s::timestamptz" in query
+    assert "NULLIF(%s, '')" not in query
+    assert "ON CONFLICT (trace_id, stage) DO UPDATE SET" in query
+    assert params == (
+        "trace_queued",
+        "core",
+        7,
+        "analysis.core",
+        "1748944471000-0",
+        "2026-06-03T10:00:00+00:00",
+    )
+    assert connection.committed is True
+
+
 def test_mark_failed_retryable_clears_lease_and_persists_error():
     connection = FakeConnection()
     store = AnalysisTaskStore(connection, worker_id="worker-1")
@@ -90,10 +120,11 @@ def test_mark_failed_retryable_clears_lease_and_persists_error():
     assert "status = 'failed_retryable'" in query
     assert "lease_owner = ''" in query
     assert "lease_expires_at = NULL" in query
+    assert "lease_owner = %s" in query
     assert "last_error_code = %s" in query
     assert "last_error_message = %s" in query
-    assert params == ("redis_timeout", "redis unavailable", "trace_1", "core")
-    assert connection.committed is True
+    assert params == ("redis_timeout", "redis unavailable", "trace_1", "core", "worker-1")
+    assert connection.committed is False
 
 
 def test_mark_failed_terminal_sets_completed_at_and_persists_error():
@@ -113,7 +144,8 @@ def test_mark_failed_terminal_sets_completed_at_and_persists_error():
     assert "completed_at = now()" in query
     assert "lease_owner = ''" in query
     assert "lease_expires_at = NULL" in query
+    assert "lease_owner = %s" in query
     assert "last_error_code = %s" in query
     assert "last_error_message = %s" in query
-    assert params == ("max_attempts_exhausted", "redis unavailable", "trace_1", "core")
-    assert connection.committed is True
+    assert params == ("max_attempts_exhausted", "redis unavailable", "trace_1", "core", "worker-1")
+    assert connection.committed is False

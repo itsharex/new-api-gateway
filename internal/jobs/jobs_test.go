@@ -52,7 +52,7 @@ func TestRedisListPublisherPushesTraceCapturedEnvelope(t *testing.T) {
 		ModelRequested:           "gpt-test",
 		UsageTotalTokens:         18,
 	}
-	err := publisher.PublishTraceCaptured(context.Background(), input)
+	_, err := publisher.PublishTraceCaptured(context.Background(), input)
 	if err != nil {
 		t.Fatalf("PublishTraceCaptured error: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestRedisListPublisherReturnsRedisError(t *testing.T) {
 	redisErr := errors.New("redis down")
 	publisher := NewRedisListPublisher(&fakeRedisListClient{err: redisErr}, "analysis_jobs")
 
-	err := publisher.PublishTraceCaptured(context.Background(), TraceCapturedInput{
+	_, err := publisher.PublishTraceCaptured(context.Background(), TraceCapturedInput{
 		TraceID:        "trace_1",
 		RoutePattern:   "/v1/chat/completions",
 		ProtocolFamily: "openai_chat",

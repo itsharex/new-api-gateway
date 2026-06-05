@@ -778,6 +778,39 @@ LIMIT $%d`, strings.Join(where, " AND "), len(args))
 	return items, rows.Err()
 }
 
+func (r Repository) ListAnalysisRuntimeHistory(ctx context.Context, stage string, since time.Time) ([]AnalysisRuntimeHistoryPoint, error) {
+	if r.db == nil {
+		return nil, ErrAdminDBRequired
+	}
+	rows, err := r.db.Query(ctx, `
+SELECT sampled_at::text, queue_depth, oldest_pending_age_seconds, queue_wait_p95_ms, processing_p95_ms
+FROM analysis_runtime_samples
+WHERE stage = $1
+  AND sampled_at >= $2
+ORDER BY sampled_at ASC`, stage, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []AnalysisRuntimeHistoryPoint{}
+	for rows.Next() {
+		var item AnalysisRuntimeHistoryPoint
+		item.Stage = stage
+		if err := rows.Scan(
+			&item.SampledAt,
+			&item.QueueDepth,
+			&item.OldestPendingAgeSeconds,
+			&item.QueueWaitP95MS,
+			&item.ProcessingP95MS,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (r Repository) InsertContextCatalogEntry(ctx context.Context, entry ContextCatalogEntry) error {
 	if r.db == nil {
 		return ErrAdminDBRequired
@@ -820,12 +853,15 @@ func (r Repository) GetTraceDetail(ctx context.Context, traceID string) (TraceDe
 		return TraceDetail{}, ErrAdminDBRequired
 	}
 	var detail TraceDetail
+	var coreStatus string
+	var enrichmentRequired bool
+	var enrichmentStatus string
 	err := r.db.QueryRow(ctx, `
 SELECT trace_id, method, path, route_pattern, protocol_family, status_code,
        username_snapshot, fingerprint_display, model_requested,
        usage_prompt_tokens, usage_completion_tokens, usage_cached_tokens, usage_total_tokens,
        created_at::text, request_raw_ref, response_raw_ref, request_headers_ref,
-       response_headers_ref, identity_resolution_status, analysis_status
+       response_headers_ref, identity_resolution_status, core_status, enrichment_required, enrichment_status
 FROM traces
 WHERE trace_id = $1
 LIMIT 1`, traceID).Scan(
@@ -848,11 +884,14 @@ LIMIT 1`, traceID).Scan(
 		&detail.RequestHeadersRef,
 		&detail.ResponseHeadersRef,
 		&detail.IdentityResolutionStatus,
-		&detail.AnalysisStatus,
+		&coreStatus,
+		&enrichmentRequired,
+		&enrichmentStatus,
 	)
 	if err != nil {
 		return TraceDetail{}, err
 	}
+	detail.AnalysisStatus = deriveAnalysisStatus(coreStatus, enrichmentRequired, enrichmentStatus)
 	messages, err := r.listNormalizedMessages(ctx, traceID)
 	if err != nil {
 		return TraceDetail{}, err
@@ -869,6 +908,28 @@ LIMIT 1`, traceID).Scan(
 	detail.AnalysisResults = results
 	detail.Anomalies = anomalies
 	return detail, nil
+}
+
+func deriveAnalysisStatus(coreStatus string, enrichmentRequired bool, enrichmentStatus string) string {
+	switch coreStatus {
+	case "failed":
+		return "failed"
+	case "processing":
+		return "processing"
+	case "completed":
+		switch {
+		case !enrichmentRequired:
+			return "completed"
+		case enrichmentStatus == "" || enrichmentStatus == "not_required" || enrichmentStatus == "completed":
+			return "completed"
+		case enrichmentStatus == "failed":
+			return "completed_with_enrichment_failure"
+		default:
+			return "enriching"
+		}
+	default:
+		return "pending"
+	}
 }
 
 func (r Repository) listNormalizedMessages(ctx context.Context, traceID string) ([]NormalizedMessageSummary, error) {

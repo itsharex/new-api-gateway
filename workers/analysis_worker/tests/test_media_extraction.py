@@ -92,7 +92,7 @@ def test_extract_raw_base64_writes_binary_asset(tmp_path: Path):
     assert ctx.replacements[0] == (raw_b64, f"audit-media:{asset.object_type}")
 
 
-def test_apply_replacements_modifies_json(tmp_path: Path):
+def test_write_sanitized_copy_preserves_original_json(tmp_path: Path):
     store = FilesystemEvidenceStore(tmp_path)
     evidence_dir = "file:///raw/2026/05/05/trace_1"
     ctx = MediaExtractionContext(store, evidence_dir, "trace_1")
@@ -102,20 +102,23 @@ def test_apply_replacements_modifies_json(tmp_path: Path):
     original_json = '{"url":"' + data_url + '"}'
     ref = f"{evidence_dir}/request_body.bin"
     store.write_text(ref, original_json)
-    ctx.apply_replacements(ref)
+    sanitized_ref = ctx.write_sanitized_copy(ref)
 
-    modified = store.read_text(ref)
+    assert store.read_text(ref) == original_json
+    modified = store.read_text(sanitized_ref)
+    assert sanitized_ref.endswith(".sanitized.bin")
     assert "audit-media:media_asset_000001" in modified
     assert data_url not in modified
 
 
-def test_apply_replacements_noop_when_empty(tmp_path: Path):
+def test_write_sanitized_copy_noop_when_empty(tmp_path: Path):
     store = FilesystemEvidenceStore(tmp_path)
     ctx = MediaExtractionContext(store, "file:///raw/2026/05/05/trace_1", "trace_1")
     ref = "file:///raw/2026/05/05/trace_1/request_body.bin"
     original = '{"model":"gpt-4.1"}'
     store.write_text(ref, original)
 
-    ctx.apply_replacements(ref)
+    derived_ref = ctx.write_sanitized_copy(ref)
 
     assert store.read_text(ref) == original
+    assert derived_ref == ref

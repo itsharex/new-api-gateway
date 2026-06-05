@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -46,12 +47,18 @@ type TraceCapturedJob struct {
 	UsageCachedTokens        int    `json:"usage_cached_tokens"`
 }
 
+type PublishResult struct {
+	MessageID  string
+	EnqueuedAt time.Time
+}
+
 type Publisher interface {
-	PublishTraceCaptured(ctx context.Context, input TraceCapturedInput) error
+	PublishTraceCaptured(ctx context.Context, input TraceCapturedInput) (PublishResult, error)
 }
 
 type TraceCapturedInput struct {
 	TraceID                  string
+	EnqueuedAt               string
 	RoutePattern             string
 	ProtocolFamily           string
 	CaptureMode              string
@@ -135,14 +142,17 @@ func NewRedisListPublisher(client redisListClient, list string) RedisListPublish
 	return RedisListPublisher{client: client, list: list}
 }
 
-func (p RedisListPublisher) PublishTraceCaptured(ctx context.Context, input TraceCapturedInput) error {
+func (p RedisListPublisher) PublishTraceCaptured(ctx context.Context, input TraceCapturedInput) (PublishResult, error) {
 	if p.client == nil {
-		return ErrRedisListClientRequired
+		return PublishResult{}, ErrRedisListClientRequired
 	}
 	job := NewTraceCaptured(input)
 	data, err := json.Marshal(job)
 	if err != nil {
-		return err
+		return PublishResult{}, err
 	}
-	return p.client.RPush(ctx, p.list, string(data)).Err()
+	if err := p.client.RPush(ctx, p.list, string(data)).Err(); err != nil {
+		return PublishResult{}, err
+	}
+	return PublishResult{}, nil
 }

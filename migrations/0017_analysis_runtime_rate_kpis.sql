@@ -1,0 +1,5 @@
+ALTER TABLE analysis_runtime_samples
+    ADD COLUMN success_rate DOUBLE PRECISION NOT NULL DEFAULT 0,
+    ADD COLUMN retryable_fail_rate DOUBLE PRECISION NOT NULL DEFAULT 0,
+    ADD COLUMN terminal_fail_rate DOUBLE PRECISION NOT NULL DEFAULT 0,
+    ADD COLUMN llm_judge_timeout_rate DOUBLE PRECISION NOT NULL DEFAULT 0;

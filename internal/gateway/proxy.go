@@ -516,7 +516,11 @@ func (h Handler) insertTrace(ctx context.Context, record traceRecord) error {
 			UsageReasoningTokens:     record.usage.ReasoningTokens,
 			UsageCachedTokens:        record.usage.CachedTokens,
 		}
-		if err := h.JobPublisher.PublishTraceCaptured(ctx, input); err != nil {
+		publishResult, err := h.JobPublisher.PublishTraceCaptured(ctx, input)
+		if err != nil {
+			h.reportAuditError(ctx, err)
+			errs = append(errs, err)
+		} else if err := h.TraceRepo.MarkTraceCoreQueued(ctx, record.traceID, publishResult.EnqueuedAt); err != nil {
 			h.reportAuditError(ctx, err)
 			errs = append(errs, err)
 		}
