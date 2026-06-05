@@ -66,6 +66,7 @@ func (h Handler) routes() *http.ServeMux {
 	mux.Handle("GET /admin/api/analysis-runtime/history", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.analysisRuntimeHistory))))
 	mux.Handle("GET /admin/api/analysis-runtime/consumers", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.analysisRuntimeConsumers))))
 	mux.Handle("GET /admin/api/usage", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.listUsage))))
+	mux.Handle("GET /admin/api/usage-employees", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.listUsageEmployees))))
 	mux.Handle("GET /admin/api/traces/{trace_id}", h.auth.Middleware(h.auth.Require(PermissionViewNormalizedTraces, http.HandlerFunc(h.getTraceDetail))))
 	mux.Handle("GET /admin/api/context-catalog", h.auth.Middleware(h.auth.Require(PermissionViewAggregates, http.HandlerFunc(h.listContextCatalog))))
 	mux.Handle("POST /admin/api/context-catalog", h.auth.Middleware(h.requireCSRF(h.auth.Require(PermissionReview, http.HandlerFunc(h.createContextCatalogEntry)))))
@@ -368,42 +369,39 @@ func summaryRuntimeSnapshot(provider RuntimeProvider, ctx context.Context, stage
 	return markRuntimeSnapshotAvailable(snapshot)
 }
 
-func usageRangeWindow(value string, now time.Time) (string, time.Time, time.Time) {
+func usageTrendWindow(value string, now time.Time) (string, time.Time, time.Time, string, int) {
 	switch strings.TrimSpace(value) {
 	case "1d":
-		return "1d", now.AddDate(0, 0, -1), now
+		return "1d", now.Add(-24 * time.Hour), now, "hour", 24
 	case "7d":
-		return "7d", now.AddDate(0, 0, -7), now
+		end := now.UTC().Truncate(24*time.Hour).AddDate(0, 0, 1)
+		return "7d", end.AddDate(0, 0, -7), end, "day", 7
 	default:
-		return "30d", now.AddDate(0, 0, -30), now
+		end := now.UTC().Truncate(24*time.Hour).AddDate(0, 0, 1)
+		return "30d", end.AddDate(0, 0, -30), end, "day", 30
 	}
 }
 
 func (h Handler) listUsage(w http.ResponseWriter, r *http.Request) {
-	username := strings.TrimSpace(r.URL.Query().Get("username"))
-	model := strings.TrimSpace(r.URL.Query().Get("model"))
-	filter := UsageFilter{
-		Username:         username,
-		TokenFingerprint: r.URL.Query().Get("token_fingerprint"),
-		Model:            model,
-		RoutePattern:     r.URL.Query().Get("route_pattern"),
-		BucketSize:       r.URL.Query().Get("bucket_size"),
-		Limit:            100,
-	}
-	items, err := h.repo.ListUsageAggregates(r.Context(), filter)
+	now := h.auth.now()
+	globalUsage, err := h.repo.GlobalUsageSummary(r.Context(), now)
 	if err != nil {
-		http.Error(w, "failed to list usage", http.StatusInternalServerError)
+		http.Error(w, "failed to load global usage", http.StatusInternalServerError)
 		return
 	}
-	response := map[string]any{"usage": items}
+	username := strings.TrimSpace(r.URL.Query().Get("username"))
+	model := strings.TrimSpace(r.URL.Query().Get("model"))
+	response := map[string]any{"global_usage": globalUsage}
 	if username != "" {
-		rangeValue, start, end := usageRangeWindow(r.URL.Query().Get("range"), h.auth.now())
+		rangeValue, start, end, bucketSize, expectedBuckets := usageTrendWindow(r.URL.Query().Get("range"), now)
 		trend, err := h.repo.EmployeeUsageTrend(r.Context(), EmployeeUsageFilter{
-			Username: username,
-			Range:    rangeValue,
-			Model:    model,
-			Start:    start,
-			End:      end,
+			Username:        username,
+			Range:           rangeValue,
+			Model:           model,
+			Start:           start,
+			End:             end,
+			BucketSize:      bucketSize,
+			ExpectedBuckets: expectedBuckets,
 		})
 		if err != nil {
 			http.Error(w, "failed to load employee usage", http.StatusInternalServerError)
@@ -412,6 +410,18 @@ func (h Handler) listUsage(w http.ResponseWriter, r *http.Request) {
 		response["employee_usage"] = trend
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func (h Handler) listUsageEmployees(w http.ResponseWriter, r *http.Request) {
+	items, err := h.repo.SearchUsageEmployees(r.Context(), UsageEmployeeSearchFilter{
+		Query: strings.TrimSpace(r.URL.Query().Get("q")),
+		Limit: 8,
+	})
+	if err != nil {
+		http.Error(w, "failed to search employees", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"employees": items})
 }
 
 func (h Handler) listTokenIdentities(w http.ResponseWriter, r *http.Request) {

@@ -1426,23 +1426,29 @@ func TestUsageWithUsernameReturnsEmployeeUsage(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
 	}
-	if db.usageModelFilter != "gpt-5.2" {
-		t.Fatalf("usage model filter = %q, want trimmed gpt-5.2", db.usageModelFilter)
-	}
 	if db.employeeUsageFilter.Username != "E10001" || db.employeeUsageFilter.Model != "gpt-5.2" {
 		t.Fatalf("filter = %#v", db.employeeUsageFilter)
 	}
-	if !db.employeeUsageFilter.End.Equal(now) {
-		t.Fatalf("end = %s, want %s", db.employeeUsageFilter.End, now)
+	wantEnd := now.UTC().Truncate(24*time.Hour).AddDate(0, 0, 1)
+	if !db.employeeUsageFilter.End.Equal(wantEnd) {
+		t.Fatalf("end = %s, want %s", db.employeeUsageFilter.End, wantEnd)
 	}
-	if !db.employeeUsageFilter.Start.Equal(now.AddDate(0, 0, -30)) {
-		t.Fatalf("start = %s, want %s", db.employeeUsageFilter.Start, now.AddDate(0, 0, -30))
+	wantStart := wantEnd.AddDate(0, 0, -30)
+	if !db.employeeUsageFilter.Start.Equal(wantStart) {
+		t.Fatalf("start = %s, want %s", db.employeeUsageFilter.Start, wantStart)
+	}
+	if !db.globalUsageStart.Equal(wantStart) || !db.globalUsageEnd.Equal(wantEnd) {
+		t.Fatalf("global usage window = [%s, %s), want [%s, %s)", db.globalUsageStart, db.globalUsageEnd, wantStart, wantEnd)
 	}
 	var body struct {
+		GlobalUsage   GlobalUsageSummary `json:"global_usage"`
 		EmployeeUsage EmployeeUsageTrend `json:"employee_usage"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode body: %v", err)
+	}
+	if body.GlobalUsage.TotalTokens == 0 {
+		t.Fatalf("global_usage = %#v", body.GlobalUsage)
 	}
 	if body.EmployeeUsage.Username != "E10001" || body.EmployeeUsage.Summary.TotalTokens != 15 {
 		t.Fatalf("employee_usage = %#v", body.EmployeeUsage)
@@ -1466,15 +1472,98 @@ func TestUsageWithoutUsernameKeepsGenericResponse(t *testing.T) {
 	if db.employeeUsageCalled {
 		t.Fatal("employee usage trend was called without username")
 	}
-	var body map[string]any
+	var body struct {
+		GlobalUsage GlobalUsageSummary `json:"global_usage"`
+	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	if _, ok := body["usage"]; !ok {
-		t.Fatalf("body missing usage: %s", rec.Body.String())
+	if body.GlobalUsage.TotalTokens == 0 {
+		t.Fatalf("global_usage missing: %s", rec.Body.String())
 	}
-	if _, ok := body["employee_usage"]; ok {
-		t.Fatalf("body unexpectedly included employee_usage: %s", rec.Body.String())
+}
+
+func TestUsageWithoutUsernameReturnsGlobalUsage(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleViewer, "", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/usage", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		GlobalUsage GlobalUsageSummary `json:"global_usage"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.GlobalUsage.TotalTokens == 0 {
+		t.Fatalf("global_usage not populated: %s", rec.Body.String())
+	}
+	if db.employeeUsageCalled {
+		t.Fatal("employee usage should stay idle when username is absent")
+	}
+}
+
+func TestUsageWith1DRangeRequestsHourlyEmployeeUsage(t *testing.T) {
+	now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleViewer, "", nil)
+	handler.auth.Now = func() time.Time { return now }
+	db.session.ExpiresAt = now.Add(time.Hour)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/usage?username=roy.zhang&range=1d", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if db.employeeUsageFilter.BucketSize != "hour" {
+		t.Fatalf("BucketSize=%q, want hour", db.employeeUsageFilter.BucketSize)
+	}
+	if db.employeeUsageFilter.ExpectedBuckets != 24 {
+		t.Fatalf("ExpectedBuckets=%d, want 24", db.employeeUsageFilter.ExpectedBuckets)
+	}
+	var body struct {
+		EmployeeUsage EmployeeUsageTrend `json:"employee_usage"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if len(body.EmployeeUsage.Points) != 24 {
+		t.Fatalf("len(employee_usage.points)=%d, want 24", len(body.EmployeeUsage.Points))
+	}
+}
+
+func TestUsageEmployeesSearchReturnsFuzzyCandidates(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleViewer, "", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/usage-employees?q=roy", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Employees []UsageEmployeeSearchResult `json:"employees"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if len(body.Employees) == 0 || body.Employees[0].Username == "" {
+		t.Fatalf("employees=%#v", body.Employees)
+	}
+	if db.usageEmployeeSearchQuery != "roy" {
+		t.Fatalf("usage employee search query=%q, want roy", db.usageEmployeeSearchQuery)
+	}
+	if !db.usageEmployeeSearchFromUsage {
+		t.Fatal("usage employee search should be rooted in usage_aggregates usernames")
 	}
 }
 
@@ -1817,38 +1906,41 @@ func (s *recordingEvidenceStore) Get(ctx context.Context, objectRef string) (io.
 }
 
 type memoryAdminDB struct {
-	user                    User
-	session                 Session
-	revokedSessionID        string
-	auditActions            []string
-	auditMetadata           []string
-	auditLogs               []AuditActionLog
-	reviewDecisions         []ReviewDecision
-	contextEntry            ContextCatalogEntry
-	rawEvidenceObject       EvidenceObjectSummary
-	rawEvidenceErr          error
-	rawEvidenceSQL          string
-	rawEvidenceArgs         []any
-	lookupTokenFingerprint  string
-	auditErr                error
-	findUserErr             error
-	revokeErr               error
-	updatedPasswordHash     string
-	updatedPasswordUserID   int64
-	revokedOtherUserID      int64
-	revokedOtherKeepSession string
-	revokedOtherAt          time.Time
-	updatePasswordErr       error
-	revokeOtherErr          error
-	passwordChangeOps       []string
-	traceDetail             TraceDetail
-	traceList               []TraceSummary
-	traceTotalItems         int64
-	anomalies               []AnomalySummary
-	traceAnomalies          []AnomalySummary
-	usageModelFilter        string
-	employeeUsageFilter     EmployeeUsageFilter
-	employeeUsageCalled     bool
+	user                         User
+	session                      Session
+	revokedSessionID             string
+	auditActions                 []string
+	auditMetadata                []string
+	auditLogs                    []AuditActionLog
+	reviewDecisions              []ReviewDecision
+	contextEntry                 ContextCatalogEntry
+	rawEvidenceObject            EvidenceObjectSummary
+	rawEvidenceErr               error
+	rawEvidenceSQL               string
+	rawEvidenceArgs              []any
+	lookupTokenFingerprint       string
+	auditErr                     error
+	findUserErr                  error
+	revokeErr                    error
+	updatedPasswordHash          string
+	updatedPasswordUserID        int64
+	revokedOtherUserID           int64
+	revokedOtherKeepSession      string
+	revokedOtherAt               time.Time
+	updatePasswordErr            error
+	revokeOtherErr               error
+	passwordChangeOps            []string
+	traceDetail                  TraceDetail
+	traceList                    []TraceSummary
+	traceTotalItems              int64
+	anomalies                    []AnomalySummary
+	traceAnomalies               []AnomalySummary
+	employeeUsageFilter          EmployeeUsageFilter
+	employeeUsageCalled          bool
+	usageEmployeeSearchQuery     string
+	usageEmployeeSearchFromUsage bool
+	globalUsageStart             time.Time
+	globalUsageEnd               time.Time
 }
 
 func (m *memoryAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -2040,20 +2132,47 @@ func (m *memoryAdminDB) Query(ctx context.Context, sql string, args ...any) (pgx
 		}
 		return &scanRows{scans: scans}, nil
 	}
-	if strings.Contains(sql, "FROM usage_aggregates") &&
-		!strings.Contains(sql, "SELECT DISTINCT model") &&
-		!strings.Contains(sql, "GROUP BY bucket_start") &&
-		!strings.Contains(sql, "GROUP BY model") {
-		for i, arg := range args {
-			if strings.Contains(sql, fmt.Sprintf("model = $%d", i+1)) {
-				m.usageModelFilter = arg.(string)
-				break
+	if strings.Contains(sql, "FROM usage_aggregates") && strings.Contains(sql, "LEFT JOIN token_identity_cache c") && strings.Contains(sql, "u.username ILIKE") {
+		m.usageEmployeeSearchFromUsage = true
+		if len(args) > 0 {
+			if value, ok := args[0].(string); ok {
+				m.usageEmployeeSearchQuery = strings.Trim(value, "%")
 			}
 		}
+		return &scanRows{scans: []func(dest ...any) error{
+			func(dest ...any) error {
+				*(dest[0].(*string)) = "roy.zhang"
+				*(dest[1].(*string)) = "Roy Zhang"
+				*(dest[2].(*string)) = "Platform"
+				*(dest[3].(*string)) = "2026-06-05 08:00:00+00"
+				return nil
+			},
+		}}, nil
+	}
+	if strings.Contains(sql, "FROM token_identity_cache c") && strings.Contains(sql, "LEFT JOIN audit_subjects s") && strings.Contains(sql, "u.total_tokens") {
+		return &scanRows{scans: []func(dest ...any) error{
+			func(dest ...any) error {
+				*(dest[0].(*string)) = "roy.zhang"
+				*(dest[1].(*string)) = "Roy Zhang"
+				*(dest[2].(*string)) = "Platform"
+				*(dest[3].(*int64)) = 9000
+				*(dest[4].(*int64)) = 12
+				*(dest[5].(*string)) = "2026-06-05 08:00:00+00"
+				return nil
+			},
+		}}, nil
 	}
 	if strings.Contains(sql, "SELECT DISTINCT model") && strings.Contains(sql, "FROM usage_aggregates") {
 		m.employeeUsageCalled = true
-		m.employeeUsageFilter = EmployeeUsageFilter{Username: args[0].(string), Start: args[1].(time.Time), End: args[2].(time.Time)}
+		m.employeeUsageFilter = EmployeeUsageFilter{
+			Username:   args[0].(string),
+			Start:      args[1].(time.Time),
+			End:        args[2].(time.Time),
+			BucketSize: args[3].(string),
+		}
+		if m.employeeUsageFilter.BucketSize == "hour" {
+			m.employeeUsageFilter.ExpectedBuckets = 24
+		}
 		return &scanRows{scans: []func(dest ...any) error{
 			func(dest ...any) error {
 				*(dest[0].(*string)) = "gpt-5.2"
@@ -2067,11 +2186,18 @@ func (m *memoryAdminDB) Query(ctx context.Context, sql string, args ...any) (pgx
 	}
 	if strings.Contains(sql, "GROUP BY bucket_start") && strings.Contains(sql, "FROM usage_aggregates") {
 		if len(args) > 3 {
-			m.employeeUsageFilter.Model = args[3].(string)
+			m.employeeUsageFilter.BucketSize = args[3].(string)
+		}
+		if len(args) > 4 {
+			m.employeeUsageFilter.Model = args[4].(string)
+		}
+		bucketStart := time.Date(2026, 5, 29, 0, 0, 0, 0, time.UTC)
+		if m.employeeUsageFilter.BucketSize == "hour" {
+			bucketStart = time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
 		}
 		return &scanRows{scans: []func(dest ...any) error{
 			func(dest ...any) error {
-				*(dest[0].(*string)) = "2026-05-29 00:00:00+00"
+				*(dest[0].(*time.Time)) = bucketStart
 				*(dest[1].(*int64)) = int64(2)
 				*(dest[2].(*int64)) = int64(2)
 				*(dest[3].(*int64)) = int64(0)
@@ -2084,6 +2210,21 @@ func (m *memoryAdminDB) Query(ctx context.Context, sql string, args ...any) (pgx
 		}}, nil
 	}
 	if strings.Contains(sql, "GROUP BY model") && strings.Contains(sql, "FROM usage_aggregates") {
+		if strings.Contains(sql, "ORDER BY SUM(total_tokens) DESC, model ASC") {
+			return &scanRows{scans: []func(dest ...any) error{
+				func(dest ...any) error {
+					*(dest[0].(*string)) = "gpt-5.2"
+					*(dest[1].(*int64)) = int64(21)
+					*(dest[2].(*int64)) = int64(20)
+					*(dest[3].(*int64)) = int64(1)
+					*(dest[4].(*int64)) = int64(8000)
+					*(dest[5].(*int64)) = int64(4000)
+					*(dest[6].(*int64)) = int64(0)
+					*(dest[7].(*int64)) = int64(12000)
+					return nil
+				},
+			}}, nil
+		}
 		return &scanRows{scans: []func(dest ...any) error{
 			func(dest ...any) error {
 				*(dest[0].(*string)) = "gpt-5.2"
@@ -2224,6 +2365,23 @@ func (r memoryAdminRow) Scan(dest ...any) error {
 		*(dest[5].(*int64)) = 0
 		*(dest[6].(*int64)) = 0
 		return nil
+	}
+	if strings.Contains(r.sql, "FROM usage_aggregates") {
+		if len(dest) == 4 {
+			if len(r.args) >= 2 {
+				if start, ok := r.args[0].(time.Time); ok {
+					r.db.globalUsageStart = start
+				}
+				if end, ok := r.args[1].(time.Time); ok {
+					r.db.globalUsageEnd = end
+				}
+			}
+			*(dest[0].(*int64)) = 18420
+			*(dest[1].(*int64)) = 17
+			*(dest[2].(*int64)) = 42
+			*(dest[3].(*int64)) = 6
+			return nil
+		}
 	}
 	if strings.Contains(r.sql, "FROM usage_anomalies") {
 		r.db.lookupTokenFingerprint = r.args[0].(string)
