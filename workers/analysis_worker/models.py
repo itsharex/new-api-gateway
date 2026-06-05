@@ -1,8 +1,58 @@
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from enum import StrEnum
 from hashlib import sha256
 from typing import Any
+
+
+class AnalysisStage(StrEnum):
+    CORE = "core"
+    ENRICHMENT = "enrichment"
+
+
+class TaskStatus(StrEnum):
+    QUEUED = "queued"
+    LEASED = "leased"
+    SUCCEEDED = "succeeded"
+    FAILED_RETRYABLE = "failed_retryable"
+    FAILED_TERMINAL = "failed_terminal"
+
+
+class TraceStageStatus(StrEnum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    NOT_REQUIRED = "not_required"
+
+
+@dataclass(frozen=True)
+class StreamEnvelope:
+    trace_id: str
+    stage: AnalysisStage = AnalysisStage.CORE
+    enqueued_at: str = ""
+    attempt: int = 1
+    hints: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class AnalysisTask:
+    trace_id: str
+    stage: AnalysisStage
+    status: TaskStatus
+    attempt_count: int
+    max_attempts: int
+    lease_owner: str = ""
+    lease_expires_at: str = ""
+    stream_name: str = ""
+    stream_message_id: str = ""
+    queued_at: str = ""
+    started_at: str = ""
+    completed_at: str = ""
+    last_error_code: str = ""
+    last_error_message: str = ""
+    updated_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -99,6 +149,9 @@ class AnalysisResult:
     confidence: float
     severity: str
     result: dict[str, Any]
+    stage: str = ""
+    producer: str = ""
+    result_key: str = ""
 
 
 @dataclass(frozen=True)
@@ -123,6 +176,8 @@ class UsageAggregateDelta:
     cached_tokens: int
     request_body_bytes: int
     response_body_bytes: int
+    trace_id: str = ""
+    request_started_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -206,8 +261,16 @@ class WorkRelevanceAssessment:
     decision: str = "unknown"
     recommended_action: str = "record_only"
     score_breakdown: dict[str, float] | None = None
+    llm_judge_requested: bool = False
+    llm_judge_reason: str = ""
 
-    def to_analysis_result(self) -> AnalysisResult:
+    def to_analysis_result(
+        self,
+        *,
+        stage: AnalysisStage | str = AnalysisStage.CORE,
+        producer: str = "heuristic_work_relevance",
+        result_key: str = "work_relevance_primary",
+    ) -> AnalysisResult:
         score_breakdown = self.score_breakdown or {
             "work": self.work_related_score,
             "non_work": self.personal_use_score,
@@ -215,6 +278,7 @@ class WorkRelevanceAssessment:
             "conflict": 0.0,
             "uncertainty": max(0.0, 1.0 - self.confidence),
         }
+        normalized_stage = stage.value if isinstance(stage, AnalysisStage) else str(stage or AnalysisStage.CORE.value)
         return AnalysisResult(
             trace_id=self.trace_id,
             analyzer_name="work_relevance",
@@ -236,7 +300,12 @@ class WorkRelevanceAssessment:
                 "decision": self.decision,
                 "recommended_action": self.recommended_action,
                 "score_breakdown": score_breakdown,
+                "llm_judge_requested": self.llm_judge_requested,
+                "llm_judge_reason": self.llm_judge_reason,
             },
+            stage=normalized_stage,
+            producer=producer,
+            result_key=result_key,
         )
 
 

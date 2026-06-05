@@ -6,7 +6,7 @@ This file provides guidance to coding agents when working with code in this repo
 
 new-api 的前端网关代理层。Go 网关（`cmd/audit-gateway/`）负责反向代理、请求/响应采集、证据与 trace 持久化、管理端与运维接口。Python 分析 worker（`workers/analysis_worker/`）消费 Redis 任务，执行协议归一化、用量聚合、异常检测。
 
-两个进程通过 Redis `analysis_jobs` 列表协作：Go 网关 RPUSH `trace_captured` 任务，Python worker BLPOP 消费。
+两个进程通过 Redis Streams 协作：Go 网关 XADD `analysis.core`，Python worker 通过 consumer group 消费并在需要时继续投递 `analysis.enrichment`。
 
 ## Key Docs
 

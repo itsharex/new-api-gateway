@@ -2,9 +2,14 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from models import (
+    AnalysisStage,
+    AnalysisTask,
     AnalysisContext,
     ContextCatalogEntry,
+    StreamEnvelope,
+    TaskStatus,
     TraceCapturedJob,
+    TraceStageStatus,
     WorkRelevanceAssessment,
     anomaly_id,
     bucket_start_hour,
@@ -13,6 +18,38 @@ from models import (
     window_end_from_start,
 )
 from work_relevance import ANALYZER_VERSION
+
+
+def test_stream_envelope_defaults_to_core_stage_attempt_one():
+    envelope = StreamEnvelope(trace_id="trace_1")
+
+    assert envelope.trace_id == "trace_1"
+    assert envelope.stage == AnalysisStage.CORE
+    assert envelope.attempt == 1
+    assert envelope.hints == {}
+
+
+def test_analysis_task_tracks_lease_and_error_fields():
+    task = AnalysisTask(
+        trace_id="trace_1",
+        stage=AnalysisStage.ENRICHMENT,
+        status=TaskStatus.QUEUED,
+        attempt_count=0,
+        max_attempts=5,
+    )
+
+    assert task.lease_owner == ""
+    assert task.last_error_code == ""
+    assert task.last_error_message == ""
+    assert task.updated_at == ""
+
+
+def test_trace_stage_status_values_match_dual_stage_summary_model():
+    assert TraceStageStatus.PENDING.value == "pending"
+    assert TraceStageStatus.PROCESSING.value == "processing"
+    assert TraceStageStatus.COMPLETED.value == "completed"
+    assert TraceStageStatus.FAILED.value == "failed"
+    assert TraceStageStatus.NOT_REQUIRED.value == "not_required"
 
 
 def test_parse_job_keeps_gateway_contract_fields():

@@ -117,11 +117,11 @@ func buildHandler(cfg config.Config, pool *pgxpool.Pool, newAPIPool *pgxpool.Poo
 				identity.RedisCache{Client: redisClient},
 				identity.PostgresCache{DB: pool},
 			}},
-			Lookup:            identity.NewAPILookup{Pool: newAPIPool},
+			Lookup: identity.NewAPILookup{Pool: newAPIPool},
 		},
 		AuditSecret:     cfg.AuditHMACSecret,
 		AuditError:      auditErrorLogger(logger),
-		JobPublisher:    jobs.NewRedisListPublisher(redisClient, jobs.DefaultRedisListName),
+		JobPublisher:    jobs.NewRedisStreamPublisher(redisClient, jobs.DefaultRedisCoreStream),
 		CoverageEmitter: alerts.NewPostgresRepository(pool),
 		Spool:           gateway.NewFilesystemSpool(cfg.DegradedSpoolDir),
 	}
@@ -161,10 +161,11 @@ func buildHTTPHandler(cfg config.Config, pool *pgxpool.Pool, newAPIPool *pgxpool
 		CookieSecure:  cfg.AdminCookieSecure,
 	}
 	adminHandler := admin.NewHandler(admin.HandlerConfig{
-		Repo:          adminRepo,
-		Auth:          adminAuth,
-		AuditSecret:   cfg.AuditHMACSecret,
-		EvidenceStore: evidenceStoreFromConfig(cfg),
+		Repo:            adminRepo,
+		Auth:            adminAuth,
+		AuditSecret:     cfg.AuditHMACSecret,
+		EvidenceStore:   evidenceStoreFromConfig(cfg),
+		RuntimeProvider: admin.NewRedisRuntimeProvider(adminRepo, redisClient),
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
@@ -241,14 +242,24 @@ WHERE worker_kind = 'analysis'`).Scan(&status.LastSeenAt, &status.WorkerCount)
 			return status, err
 		},
 		QueueLagCheck: func(ctx context.Context) (ops.QueueLagStatus, error) {
-			status := ops.QueueLagStatus{QueueName: jobs.DefaultRedisListName, WarnThreshold: cfg.OpsQueueLagWarnThreshold}
-			if redisClient == nil {
-				return status, errors.New("redis client is nil")
+			status := ops.QueueLagStatus{QueueName: jobs.DefaultRedisCoreStream, WarnThreshold: cfg.OpsQueueLagWarnThreshold}
+			if redisClient != nil {
+				if depth, err := streamDepthForGroup(ctx, redisClient, jobs.DefaultRedisCoreStream, "analysis-core-workers"); err == nil {
+					status.Depth = depth
+					return status, nil
+				}
+			}
+			if pool == nil {
+				return status, errors.New("postgres pool is nil")
 			}
 			ctx, cancel := context.WithTimeout(ctx, cfg.OpsCheckTimeout)
 			defer cancel()
-			depth, err := redisClient.LLen(ctx, jobs.DefaultRedisListName).Result()
-			status.Depth = depth
+			err := pool.QueryRow(ctx, `
+SELECT COALESCE(COUNT(*), 0)
+FROM analysis_tasks
+WHERE stage = 'core'
+  AND status IN ('queued', 'leased', 'failed_retryable')
+`).Scan(&status.Depth)
 			return status, err
 		},
 		RuntimeMetricsCheck: func(ctx context.Context) (ops.RuntimeMetrics, error) {
@@ -302,6 +313,27 @@ GROUP BY identity_resolution_status`)
 		},
 	}
 	return ops.Handler(service, cfg.OpsMetricsEnabled)
+}
+
+func streamDepthForGroup(ctx context.Context, client *redis.Client, streamName string, groupName string) (int64, error) {
+	groups, err := client.XInfoGroups(ctx, streamName).Result()
+	if err != nil {
+		return 0, err
+	}
+	for _, group := range groups {
+		if group.Name != groupName {
+			continue
+		}
+		return maxInt64(group.Pending, 0) + maxInt64(group.Lag, 0), nil
+	}
+	return 0, nil
+}
+
+func maxInt64(left int64, right int64) int64 {
+	if right > left {
+		return right
+	}
+	return left
 }
 
 func isOpsPath(path string) bool {

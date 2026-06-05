@@ -1,15 +1,19 @@
 import argparse
+from collections import deque
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import json
 import math
 import os
 import signal
 import socket
 import sys
-from hashlib import sha256
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import psycopg
 import redis
+from psycopg_pool import ConnectionPool
 
 from context_repository import PostgresContextRepository
 from evidence import EvidenceStore, FilesystemEvidenceStore
@@ -18,7 +22,9 @@ from heartbeat import HeartbeatRepository
 from llm_judge import LLMJudgeClient
 from models import (
     AnalysisContext,
+    AnalysisStage,
     ContextCatalogEntry,
+    TaskStatus,
     TraceCapturedJob,
     UsageAggregateDelta,
     bucket_start_day,
@@ -28,6 +34,9 @@ from models import (
 from normalizers import normalize_json_trace
 from repository import PostgresAnalysisRepository
 from rules import detect_anomalies, detect_coverage_alerts, detect_work_relevance_anomalies
+from runtime_metrics import RuntimeMetricsSampler
+from streams import StreamConsumer, publish_stream_message, stream_message_id_to_enqueued_at
+from task_store import AnalysisTaskStore
 from work_relevance import classify_work_relevance
 
 
@@ -39,6 +48,14 @@ class NoopAnalysisRepository:
 class NoopContextRepository:
     def list_active_contexts(self) -> list[ContextCatalogEntry]:
         return []
+
+
+class EnrichmentEnqueueRetryable(RuntimeError):
+    pass
+
+
+class LeaseLostError(RuntimeError):
+    pass
 
 
 def create_evidence_store() -> EvidenceStore:
@@ -120,6 +137,8 @@ def aggregate_deltas(job: TraceCapturedJob) -> list[UsageAggregateDelta]:
         "cached_tokens": job.usage_cached_tokens,
         "request_body_bytes": job.request_body_size,
         "response_body_bytes": job.response_body_size,
+        "trace_id": job.trace_id,
+        "request_started_at": job.request_started_at,
     }
     return [
         UsageAggregateDelta(bucket_start=bucket_start_hour(job.request_started_at), bucket_size="hour", **common),
@@ -134,6 +153,8 @@ def process_job_line(
     context_repository=None,
     storage_backend: str = "filesystem",
     llm_judge=None,
+    allow_llm: bool = True,
+    enable_media_derivation: bool = True,
 ) -> dict:
     job = parse_job(line)
     request_body = evidence_store.read_text(job.request_raw_ref) if job.request_raw_ref else ""
@@ -148,6 +169,8 @@ def process_job_line(
         evidence_store,
         storage_backend=storage_backend,
         llm_judge=llm_judge,
+        allow_llm=allow_llm,
+        enable_media_derivation=enable_media_derivation,
     )
 
 
@@ -187,13 +210,21 @@ def process_trace(
     evidence_store: EvidenceStore | None = None,
     storage_backend: str = "filesystem",
     llm_judge=None,
+    allow_llm: bool = True,
+    enable_media_derivation: bool = True,
 ) -> dict:
     extraction_context: MediaExtractionContext | None = None
-    if evidence_store and job.request_raw_ref:
+    if enable_media_derivation and evidence_store and job.request_raw_ref:
         evidence_dir = job.request_raw_ref.rsplit("/", 1)[0]
         extraction_context = MediaExtractionContext(evidence_store, evidence_dir, job.trace_id)
     messages, results = normalize_json_trace(job, request_body, response_body, extraction_context)
-    work_relevance = classify_work_relevance(job, messages, list(contexts or []), llm_judge=llm_judge)
+    work_relevance = classify_work_relevance(
+        job,
+        messages,
+        list(contexts or []),
+        llm_judge=llm_judge,
+        allow_llm=allow_llm,
+    )
     results.append(work_relevance.to_analysis_result())
     llm_metadata = llm_judge_metadata(work_relevance)
     aggregates = aggregate_deltas(job)
@@ -206,13 +237,28 @@ def process_trace(
     coverage_alerts = detect_coverage_alerts(job, messages)
     repository.save_trace_analysis(messages, results, aggregates, anomalies, coverage_alerts)
     if extraction_context and extraction_context.replacements:
-        extraction_context.apply_replacements(job.request_raw_ref)
+        sanitized_ref = extraction_context.write_sanitized_copy(job.request_raw_ref)
         if hasattr(repository, "save_media_assets"):
-            repository.save_media_assets(job.trace_id, extraction_context.assets, storage_backend=storage_backend)
-        if hasattr(repository, "update_request_body_sha256"):
-            modified = evidence_store.read_text(job.request_raw_ref)
-            new_sha = sha256(modified.encode("utf-8")).hexdigest()
-            repository.update_request_body_sha256(job.trace_id, new_sha)
+            repository.save_media_assets(
+                job.trace_id,
+                extraction_context.assets,
+                derived_from=job.request_raw_ref,
+                storage_backend=storage_backend,
+            )
+        if hasattr(repository, "save_derived_evidence_object"):
+            repository.save_derived_evidence_object(
+                job.trace_id,
+                sanitized_ref,
+                job.request_content_type or "application/json",
+                "sanitized",
+                job.request_raw_ref,
+                storage_backend=storage_backend,
+            )
+    enrichment_reasons: list[str] = []
+    if work_relevance.llm_judge_requested:
+        enrichment_reasons.append("llm_judge")
+    if _messages_need_media_derivation(messages):
+        enrichment_reasons.append("media_derivation")
     return {
         "accepted_trace_id": job.trace_id,
         "worker_status": "processed",
@@ -224,8 +270,20 @@ def process_trace(
         "coverage_alert_count": len(coverage_alerts),
         "usage_total_tokens": job.usage_total_tokens,
         "media_assets_extracted": len(extraction_context.assets) if extraction_context else 0,
+        "enrichment_required": bool(enrichment_reasons),
+        "enrichment_reasons": enrichment_reasons,
         **llm_metadata,
     }
+
+
+def _messages_need_media_derivation(messages) -> bool:
+    for message in messages:
+        if getattr(message, "protocol_item_type", "") in {
+            "base64_media",
+            "base64_media_extracted",
+        }:
+            return True
+    return False
 
 
 def process_stdin(evidence_store: EvidenceStore, postgres_dsn: str) -> int:
@@ -279,6 +337,117 @@ def record_heartbeat_safely(heartbeat, connection, **kwargs) -> None:
         pass
 
 
+def build_stage_processor(
+    stream_name: str,
+    *,
+    connection,
+    evidence_store: EvidenceStore,
+    storage_backend: str,
+    llm_judge,
+    redis_client,
+):
+    from core_stage import CoreStageProcessor
+    from enrichment_stage import EnrichmentStageProcessor
+
+    processor_classes = {
+        "analysis.core": ("analysis-core-workers", CoreStageProcessor),
+        "analysis.enrichment": ("analysis-enrichment-workers", EnrichmentStageProcessor),
+    }
+    group_name, processor_class = processor_classes.get(
+        stream_name,
+        ("analysis-core-workers", CoreStageProcessor),
+    )
+    processor = processor_class(
+        connection=connection,
+        evidence_store=evidence_store,
+        storage_backend=storage_backend,
+        llm_judge=llm_judge,
+        redis_client=redis_client,
+    )
+    return group_name, processor
+
+
+def runtime_sample_interval_seconds() -> float:
+    raw = os.environ.get("ANALYSIS_RUNTIME_SAMPLE_INTERVAL_SECONDS", "").strip()
+    if not raw:
+        return 15.0
+    try:
+        value = float(raw)
+    except ValueError:
+        return 15.0
+    if not math.isfinite(value) or value <= 0:
+        return 15.0
+    return value
+
+
+def _env_positive_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def core_read_count() -> int:
+    return _env_positive_int("ANALYSIS_CORE_READ_COUNT", 16)
+
+
+def core_max_inflight() -> int:
+    return _env_positive_int("ANALYSIS_CORE_MAX_INFLIGHT", 8)
+
+
+def core_lease_seconds() -> int:
+    return _env_positive_int("ANALYSIS_CORE_LEASE_SECONDS", 300)
+
+
+def core_retry_limit() -> int:
+    return _env_positive_int("ANALYSIS_CORE_RETRY_LIMIT", 5)
+
+
+def enrichment_read_count() -> int:
+    return _env_positive_int("ANALYSIS_ENRICHMENT_READ_COUNT", core_read_count())
+
+
+def enrichment_max_inflight() -> int:
+    configured = _env_positive_int("ANALYSIS_ENRICHMENT_MAX_INFLIGHT", core_max_inflight())
+    llm_cap = _env_positive_int("ANALYSIS_ENRICHMENT_LLM_MAX_CONCURRENCY", configured)
+    return min(configured, llm_cap)
+
+
+def enrichment_lease_seconds() -> int:
+    return _env_positive_int("ANALYSIS_ENRICHMENT_LEASE_SECONDS", core_lease_seconds())
+
+
+def enrichment_retry_limit() -> int:
+    return _env_positive_int("ANALYSIS_ENRICHMENT_RETRY_LIMIT", core_retry_limit())
+
+
+def sample_runtime_safely(connection, redis_client, stream_name: str, group_name: str) -> None:
+    try:
+        RuntimeMetricsSampler(connection, redis_client).sample(stream_name, group_name)
+    except Exception:
+        pass
+
+
+def maybe_sample_runtime(
+    connection,
+    redis_client,
+    stream_name: str,
+    group_name: str,
+    *,
+    last_sample_monotonic: float,
+    sample_interval_seconds: float,
+) -> float:
+    now_monotonic = time.monotonic()
+    if last_sample_monotonic == 0.0 or now_monotonic-last_sample_monotonic >= sample_interval_seconds:
+        sample_runtime_safely(connection, redis_client, stream_name, group_name)
+        return now_monotonic
+    return last_sample_monotonic
+
+
 def process_redis_once(
     redis_url: str,
     list_name: str,
@@ -290,30 +459,25 @@ def process_redis_once(
     llm_judge=None,
 ) -> int:
     client = redis.Redis.from_url(redis_url, decode_responses=True)
-    item = client.blpop(list_name, timeout=timeout_seconds)
     with connection_factory(postgres_dsn) as connection:
         heartbeat = HeartbeatRepository(connection)
-        if item is None:
-            heartbeat.record(
-                worker_id=worker_id(),
-                worker_kind="analysis",
-                status="idle",
-                queue_name=list_name,
-                processed_count=0,
-                error_count=0,
-                metadata={"poll_result": "idle"},
-            )
-            print(json.dumps({"worker_status": "idle", "list": list_name}, sort_keys=True))
-            return 0
-        _, payload = item
+        group_name, processor = build_stage_processor(
+            list_name,
+            connection=connection,
+            evidence_store=evidence_store,
+            storage_backend=storage_backend,
+            llm_judge=llm_judge,
+            redis_client=client,
+        )
         try:
-            result = process_job_line(
-                payload,
-                evidence_store,
-                PostgresAnalysisRepository(connection),
-                PostgresContextRepository(connection),
-                storage_backend=storage_backend,
-                llm_judge=llm_judge,
+            result = run_core_once(
+                client,
+                connection,
+                processor,
+                worker_id=worker_id(),
+                stream_name=list_name,
+                group_name=group_name,
+                block_ms=timeout_seconds * 1000,
             )
         except Exception as exc:
             record_heartbeat_safely(
@@ -328,6 +492,35 @@ def process_redis_once(
                 metadata={"error_type": exc.__class__.__name__},
             )
             raise
+        if result is None or result.get("worker_status") == "idle":
+            heartbeat.record(
+                worker_id=worker_id(),
+                worker_kind="analysis",
+                status="idle",
+                queue_name=list_name,
+                processed_count=0,
+                error_count=0,
+                metadata={"poll_result": "idle"},
+            )
+            sample_runtime_safely(connection, client, list_name, group_name)
+            print(json.dumps({"worker_status": "idle", "list": list_name}, sort_keys=True))
+            return 0
+        if result.get("worker_status") == "deferred":
+            heartbeat.record(
+                worker_id=worker_id(),
+                worker_kind="analysis",
+                status="deferred",
+                queue_name=list_name,
+                processed_count=0,
+                error_count=0,
+                metadata={
+                    "poll_result": result.get("poll_result", "deferred"),
+                    "trace_id": result.get("trace_id", ""),
+                },
+            )
+            sample_runtime_safely(connection, client, list_name, group_name)
+            print(json.dumps(result, sort_keys=True))
+            return 0
         heartbeat.record(
             worker_id=worker_id(),
             worker_kind="analysis",
@@ -337,6 +530,7 @@ def process_redis_once(
             error_count=0,
             metadata=processed_heartbeat_metadata(result),
         )
+        sample_runtime_safely(connection, client, list_name, group_name)
     print(json.dumps(result, sort_keys=True))
     return 0
 
@@ -353,6 +547,8 @@ def process_redis_loop(
     client = redis.Redis.from_url(redis_url, decode_responses=True)
     wid = worker_id()
     running = True
+    last_sample_monotonic = 0.0
+    sample_interval_seconds = runtime_sample_interval_seconds()
 
     def _stop(signum, _frame):
         nonlocal running
@@ -362,32 +558,164 @@ def process_redis_loop(
     signal.signal(signal.SIGTERM, _stop)
     print(json.dumps({"worker_status": "starting", "worker_id": wid, "list": list_name}), flush=True)
 
+    batch_configs = {
+        "analysis.core": {
+            "group_name": "analysis-core-workers",
+            "read_count": core_read_count(),
+            "max_inflight": core_max_inflight(),
+            "lease_seconds": core_lease_seconds(),
+            "retry_limit": core_retry_limit(),
+        },
+        "analysis.enrichment": {
+            "group_name": "analysis-enrichment-workers",
+            "read_count": enrichment_read_count(),
+            "max_inflight": enrichment_max_inflight(),
+            "lease_seconds": enrichment_lease_seconds(),
+            "retry_limit": enrichment_retry_limit(),
+        },
+    }
+
+    if list_name in batch_configs:
+        config = batch_configs[list_name]
+        group_name = config["group_name"]
+        read_count = config["read_count"]
+        max_inflight = config["max_inflight"]
+        lease_seconds = config["lease_seconds"]
+        retry_limit = config["retry_limit"]
+        with ConnectionPool(conninfo=postgres_dsn, min_size=1, max_size=max_inflight) as pool:
+            while running:
+                try:
+                    results = run_core_batch_once(
+                        redis_client=client,
+                        connection_pool=pool,
+                        evidence_store=evidence_store,
+                        storage_backend=storage_backend,
+                        llm_judge=llm_judge,
+                        worker_id=wid,
+                        stream_name=list_name,
+                        group_name=group_name,
+                        block_ms=timeout_seconds * 1000,
+                        read_count=read_count,
+                        max_inflight=max_inflight,
+                        lease_seconds=lease_seconds,
+                        max_attempts=retry_limit,
+                    )
+                except Exception as exc:
+                    with pool.connection() as connection:
+                        heartbeat = HeartbeatRepository(connection)
+                        record_heartbeat_safely(
+                            heartbeat,
+                            connection,
+                            worker_id=wid,
+                            worker_kind="analysis",
+                            status="error",
+                            queue_name=list_name,
+                            processed_count=0,
+                            error_count=1,
+                            metadata={"error_type": exc.__class__.__name__},
+                        )
+                    print(json.dumps({"worker_status": "error", "error": str(exc)}), flush=True)
+                    continue
+
+                with pool.connection() as connection:
+                    heartbeat = HeartbeatRepository(connection)
+                    if not results:
+                        heartbeat.record(
+                            worker_id=wid,
+                            worker_kind="analysis",
+                            status="idle",
+                            queue_name=list_name,
+                            processed_count=0,
+                            error_count=0,
+                            metadata={"poll_result": "idle"},
+                        )
+                        now_monotonic = time.monotonic()
+                        if last_sample_monotonic == 0.0 or now_monotonic-last_sample_monotonic >= sample_interval_seconds:
+                            last_sample_monotonic = maybe_sample_runtime(
+                                connection,
+                                client,
+                                list_name,
+                                group_name,
+                                last_sample_monotonic=last_sample_monotonic,
+                                sample_interval_seconds=sample_interval_seconds,
+                            )
+                        continue
+
+                    processed = [result for result in results if result.get("worker_status") == "processed"]
+                    deferred = [result for result in results if result.get("worker_status") == "deferred"]
+                    errors = [result for result in results if result.get("worker_status") == "error"]
+
+                    if processed:
+                        heartbeat.record(
+                            worker_id=wid,
+                            worker_kind="analysis",
+                            status="processed",
+                            queue_name=list_name,
+                            processed_count=len(processed),
+                            error_count=len(errors),
+                            metadata=processed_heartbeat_metadata(processed[-1]),
+                        )
+                    elif deferred:
+                        heartbeat.record(
+                            worker_id=wid,
+                            worker_kind="analysis",
+                            status="deferred",
+                            queue_name=list_name,
+                            processed_count=0,
+                            error_count=len(errors),
+                            metadata={
+                                "poll_result": deferred[-1].get("poll_result", "deferred"),
+                                "trace_id": deferred[-1].get("trace_id", ""),
+                            },
+                        )
+                    elif errors:
+                        heartbeat.record(
+                            worker_id=wid,
+                            worker_kind="analysis",
+                            status="error",
+                            queue_name=list_name,
+                            processed_count=0,
+                            error_count=len(errors),
+                            metadata={
+                                "error_type": errors[-1].get("error_type", "unknown"),
+                                "trace_id": errors[-1].get("trace_id", ""),
+                            },
+                        )
+                    last_sample_monotonic = maybe_sample_runtime(
+                        connection,
+                        client,
+                        list_name,
+                        group_name,
+                        last_sample_monotonic=last_sample_monotonic,
+                        sample_interval_seconds=sample_interval_seconds,
+                    )
+
+                for result in results:
+                    print(json.dumps(result, sort_keys=True), flush=True)
+
+        print(json.dumps({"worker_status": "stopped", "worker_id": wid}), flush=True)
+        return 0
+
     while running:
-        item = client.blpop(list_name, timeout=timeout_seconds)
-        if not running:
-            break
         with psycopg.connect(postgres_dsn) as connection:
             heartbeat = HeartbeatRepository(connection)
-            if item is None:
-                heartbeat.record(
-                    worker_id=wid,
-                    worker_kind="analysis",
-                    status="idle",
-                    queue_name=list_name,
-                    processed_count=0,
-                    error_count=0,
-                    metadata={"poll_result": "idle"},
-                )
-                continue
-            _, payload = item
+            group_name, processor = build_stage_processor(
+                list_name,
+                connection=connection,
+                evidence_store=evidence_store,
+                storage_backend=storage_backend,
+                llm_judge=llm_judge,
+                redis_client=client,
+            )
             try:
-                result = process_job_line(
-                    payload,
-                    evidence_store,
-                    PostgresAnalysisRepository(connection),
-                    PostgresContextRepository(connection),
-                    storage_backend=storage_backend,
-                    llm_judge=llm_judge,
+                result = run_core_once(
+                    client,
+                    connection,
+                    processor,
+                    worker_id=wid,
+                    stream_name=list_name,
+                    group_name=group_name,
+                    block_ms=timeout_seconds * 1000,
                 )
             except Exception as exc:
                 record_heartbeat_safely(
@@ -403,6 +731,50 @@ def process_redis_loop(
                 )
                 print(json.dumps({"worker_status": "error", "error": str(exc)}), flush=True)
                 continue
+            if result is None or result.get("worker_status") == "idle":
+                heartbeat.record(
+                    worker_id=wid,
+                    worker_kind="analysis",
+                    status="idle",
+                    queue_name=list_name,
+                    processed_count=0,
+                    error_count=0,
+                    metadata={"poll_result": "idle"},
+                )
+                now_monotonic = time.monotonic()
+                if last_sample_monotonic == 0.0 or now_monotonic-last_sample_monotonic >= sample_interval_seconds:
+                    last_sample_monotonic = maybe_sample_runtime(
+                        connection,
+                        client,
+                        list_name,
+                        group_name,
+                        last_sample_monotonic=last_sample_monotonic,
+                        sample_interval_seconds=sample_interval_seconds,
+                    )
+                continue
+            if result.get("worker_status") == "deferred":
+                heartbeat.record(
+                    worker_id=wid,
+                    worker_kind="analysis",
+                    status="deferred",
+                    queue_name=list_name,
+                    processed_count=0,
+                    error_count=0,
+                    metadata={
+                        "poll_result": result.get("poll_result", "deferred"),
+                        "trace_id": result.get("trace_id", ""),
+                    },
+                )
+                last_sample_monotonic = maybe_sample_runtime(
+                    connection,
+                    client,
+                    list_name,
+                    group_name,
+                    last_sample_monotonic=last_sample_monotonic,
+                    sample_interval_seconds=sample_interval_seconds,
+                )
+                print(json.dumps(result, sort_keys=True), flush=True)
+                continue
             heartbeat.record(
                 worker_id=wid,
                 worker_kind="analysis",
@@ -412,17 +784,702 @@ def process_redis_loop(
                 error_count=0,
                 metadata=processed_heartbeat_metadata(result),
             )
+            last_sample_monotonic = maybe_sample_runtime(
+                connection,
+                client,
+                list_name,
+                group_name,
+                last_sample_monotonic=last_sample_monotonic,
+                sample_interval_seconds=sample_interval_seconds,
+            )
             print(json.dumps(result, sort_keys=True), flush=True)
 
     print(json.dumps({"worker_status": "stopped", "worker_id": wid}), flush=True)
     return 0
 
 
+def run_core_once(
+    redis_client,
+    connection,
+    stage_processor,
+    worker_id: str,
+    stream_name: str = "analysis.core",
+    group_name: str = "analysis-core-workers",
+    block_ms: int = 5000,
+    lease_seconds: int = 300,
+    max_attempts: int = 5,
+    dlq_stream_name: str = "analysis.dlq",
+):
+    consumer = StreamConsumer(
+        redis_client,
+        stream_name=stream_name,
+        group_name=group_name,
+        consumer_name=worker_id,
+        reclaim_idle_ms=lease_seconds * 1000,
+    )
+    message = consumer.read_one(count=1, block_ms=block_ms)
+    if message is None:
+        return None
+    if not str(message.envelope.trace_id or "").strip():
+        consumer.ack(message.message_id)
+        return {
+            "worker_status": "deferred",
+            "poll_result": "invalid_message_acked",
+            "trace_id": "",
+        }
+    maybe_sleep_for_retry_backoff(message)
+
+    task_store = AnalysisTaskStore(connection, worker_id=worker_id)
+    task_store.insert_task(
+        trace_id=message.envelope.trace_id,
+        stage=message.envelope.stage.value,
+        stream_name=message.stream_name,
+        stream_message_id=message.message_id,
+        queued_at=stream_message_enqueued_at(message),
+        max_attempts=max_attempts,
+    )
+    task = task_store.claim_task(
+        trace_id=message.envelope.trace_id,
+        stage=message.envelope.stage.value,
+        lease_seconds=lease_seconds,
+    )
+    if task is None:
+        existing_task = task_store.get_task(
+            trace_id=message.envelope.trace_id,
+            stage=message.envelope.stage.value,
+        )
+        if existing_task is not None and existing_task.status == TaskStatus.SUCCEEDED:
+            if trace_needs_enrichment_enqueue_recovery(connection, message):
+                result = maybe_enqueue_enrichment_after_core_commit(
+                    redis_client=redis_client,
+                    connection=connection,
+                    message=message,
+                    result={
+                        "accepted_trace_id": message.envelope.trace_id,
+                        "worker_status": "processed",
+                        "enrichment_required": True,
+                        "enrichment_reasons": [],
+                    },
+                )
+                consumer.ack(message.message_id)
+                result["poll_result"] = "recovered_enrichment_enqueue"
+                return result
+            consumer.ack(message.message_id)
+            return {
+                "worker_status": "deferred",
+                "poll_result": "duplicate_acked",
+                "trace_id": message.envelope.trace_id,
+            }
+        if existing_task is not None and existing_task.status == TaskStatus.FAILED_TERMINAL:
+            consumer.ack(message.message_id)
+            return {
+                "worker_status": "deferred",
+                "poll_result": "duplicate_acked",
+                "trace_id": message.envelope.trace_id,
+            }
+        return {
+            "worker_status": "deferred",
+            "poll_result": "active_lease",
+            "trace_id": message.envelope.trace_id,
+        }
+
+    try:
+        mark_trace_stage_processing(connection, message.envelope.trace_id, message.envelope.stage)
+        connection.commit()
+        result = stage_processor.process(message.envelope.trace_id)
+        mark_succeeded = task_store.mark_succeeded(
+            trace_id=message.envelope.trace_id,
+            stage=message.envelope.stage.value,
+        )
+        if mark_succeeded is False:
+            raise LeaseLostError(f"lease lost before success commit for {message.envelope.trace_id}")
+        connection.commit()
+        result = maybe_enqueue_enrichment_after_core_commit(
+            redis_client=redis_client,
+            connection=connection,
+            message=message,
+            result=result,
+        )
+    except LeaseLostError:
+        rollback_connection_quietly(connection)
+        raise
+    except EnrichmentEnqueueRetryable:
+        rollback_connection_quietly(connection)
+        raise
+    except Exception as exc:
+        rollback_connection_quietly(connection)
+        error_code = exc.__class__.__name__
+        error_message = str(exc)
+        if task.attempt_count >= task.max_attempts:
+            publish_stream_message(
+                redis_client,
+                stream_name=dlq_stream_name,
+                trace_id=message.envelope.trace_id,
+                stage=message.envelope.stage,
+                enqueued_at=datetime.now(timezone.utc).isoformat(),
+                attempt=task.attempt_count,
+                hints={
+                    "error_code": error_code,
+                    "error_message": error_message,
+                    "source_stream": message.stream_name,
+                    "source_message_id": message.message_id,
+                },
+            )
+            mark_terminal = task_store.mark_failed_terminal(
+                trace_id=message.envelope.trace_id,
+                stage=message.envelope.stage.value,
+                error_code=error_code,
+                error_message=error_message,
+            )
+            if mark_terminal is False:
+                raise LeaseLostError(f"lease lost before terminal failure commit for {message.envelope.trace_id}")
+            mark_trace_stage_failed(
+                connection,
+                message.envelope.trace_id,
+                message.envelope.stage,
+                error_code,
+                terminal=True,
+            )
+            connection.commit()
+            consumer.ack(message.message_id)
+        else:
+            mark_retryable = task_store.mark_failed_retryable(
+                trace_id=message.envelope.trace_id,
+                stage=message.envelope.stage.value,
+                error_code=error_code,
+                error_message=error_message,
+            )
+            if mark_retryable is False:
+                raise LeaseLostError(f"lease lost before retryable failure commit for {message.envelope.trace_id}")
+            mark_trace_stage_failed(
+                connection,
+                message.envelope.trace_id,
+                message.envelope.stage,
+                error_code,
+                terminal=False,
+            )
+            connection.commit()
+            requeue_retryable_stage_message(
+                redis_client=redis_client,
+                message=message,
+                attempt_count=task.attempt_count,
+            )
+            consumer.ack(message.message_id)
+        raise
+
+    consumer.ack(message.message_id)
+    return result
+
+
+def _process_stream_message(
+    *,
+    redis_client,
+    connection,
+    stage_processor,
+    worker_id: str,
+    message,
+    ack_message,
+    lease_seconds: int,
+    max_attempts: int,
+    dlq_stream_name: str,
+    respect_retry_backoff: bool = True,
+):
+    if not str(message.envelope.trace_id or "").strip():
+        ack_message(message.message_id)
+        return {
+            "worker_status": "deferred",
+            "poll_result": "invalid_message_acked",
+            "trace_id": "",
+        }
+    task_store = AnalysisTaskStore(connection, worker_id=worker_id)
+    if respect_retry_backoff:
+        maybe_sleep_for_retry_backoff(message)
+    task_store.insert_task(
+        trace_id=message.envelope.trace_id,
+        stage=message.envelope.stage.value,
+        stream_name=message.stream_name,
+        stream_message_id=message.message_id,
+        queued_at=stream_message_enqueued_at(message),
+        max_attempts=max_attempts,
+    )
+    task = task_store.claim_task(
+        trace_id=message.envelope.trace_id,
+        stage=message.envelope.stage.value,
+        lease_seconds=lease_seconds,
+    )
+    if task is None:
+        existing_task = task_store.get_task(
+            trace_id=message.envelope.trace_id,
+            stage=message.envelope.stage.value,
+        )
+        if existing_task is not None and existing_task.status == TaskStatus.SUCCEEDED:
+            if trace_needs_enrichment_enqueue_recovery(connection, message):
+                result = maybe_enqueue_enrichment_after_core_commit(
+                    redis_client=redis_client,
+                    connection=connection,
+                    message=message,
+                    result={
+                        "accepted_trace_id": message.envelope.trace_id,
+                        "worker_status": "processed",
+                        "enrichment_required": True,
+                        "enrichment_reasons": [],
+                    },
+                )
+                ack_message(message.message_id)
+                result["poll_result"] = "recovered_enrichment_enqueue"
+                return result
+            ack_message(message.message_id)
+            return {
+                "worker_status": "deferred",
+                "poll_result": "duplicate_acked",
+                "trace_id": message.envelope.trace_id,
+            }
+        if existing_task is not None and existing_task.status == TaskStatus.FAILED_TERMINAL:
+            ack_message(message.message_id)
+            return {
+                "worker_status": "deferred",
+                "poll_result": "duplicate_acked",
+                "trace_id": message.envelope.trace_id,
+            }
+        return {
+            "worker_status": "deferred",
+            "poll_result": "active_lease",
+            "trace_id": message.envelope.trace_id,
+        }
+
+    try:
+        mark_trace_stage_processing(connection, message.envelope.trace_id, message.envelope.stage)
+        connection.commit()
+        result = stage_processor.process(message.envelope.trace_id)
+        mark_succeeded = task_store.mark_succeeded(
+            trace_id=message.envelope.trace_id,
+            stage=message.envelope.stage.value,
+        )
+        if mark_succeeded is False:
+            raise LeaseLostError(f"lease lost before success commit for {message.envelope.trace_id}")
+        connection.commit()
+        result = maybe_enqueue_enrichment_after_core_commit(
+            redis_client=redis_client,
+            connection=connection,
+            message=message,
+            result=result,
+        )
+    except LeaseLostError:
+        rollback_connection_quietly(connection)
+        raise
+    except EnrichmentEnqueueRetryable:
+        rollback_connection_quietly(connection)
+        raise
+    except Exception as exc:
+        rollback_connection_quietly(connection)
+        error_code = exc.__class__.__name__
+        error_message = str(exc)
+        if task.attempt_count >= task.max_attempts:
+            publish_stream_message(
+                redis_client,
+                stream_name=dlq_stream_name,
+                trace_id=message.envelope.trace_id,
+                stage=message.envelope.stage,
+                enqueued_at=datetime.now(timezone.utc).isoformat(),
+                attempt=task.attempt_count,
+                hints={
+                    "error_code": error_code,
+                    "error_message": error_message,
+                    "source_stream": message.stream_name,
+                    "source_message_id": message.message_id,
+                },
+            )
+            mark_terminal = task_store.mark_failed_terminal(
+                trace_id=message.envelope.trace_id,
+                stage=message.envelope.stage.value,
+                error_code=error_code,
+                error_message=error_message,
+            )
+            if mark_terminal is False:
+                raise LeaseLostError(f"lease lost before terminal failure commit for {message.envelope.trace_id}")
+            mark_trace_stage_failed(
+                connection,
+                message.envelope.trace_id,
+                message.envelope.stage,
+                error_code,
+                terminal=True,
+            )
+            connection.commit()
+            ack_message(message.message_id)
+        else:
+            mark_retryable = task_store.mark_failed_retryable(
+                trace_id=message.envelope.trace_id,
+                stage=message.envelope.stage.value,
+                error_code=error_code,
+                error_message=error_message,
+            )
+            if mark_retryable is False:
+                raise LeaseLostError(f"lease lost before retryable failure commit for {message.envelope.trace_id}")
+            mark_trace_stage_failed(
+                connection,
+                message.envelope.trace_id,
+                message.envelope.stage,
+                error_code,
+                terminal=False,
+            )
+            connection.commit()
+            requeue_retryable_stage_message(
+                redis_client=redis_client,
+                message=message,
+                attempt_count=task.attempt_count,
+            )
+            ack_message(message.message_id)
+        raise
+
+    ack_message(message.message_id)
+    return result
+
+
+def run_core_batch_once(
+    *,
+    redis_client,
+    connection_pool,
+    evidence_store: EvidenceStore,
+    storage_backend: str,
+    llm_judge,
+    worker_id: str,
+    stream_name: str = "analysis.core",
+    group_name: str = "analysis-core-workers",
+    block_ms: int = 5000,
+    read_count: int = 16,
+    max_inflight: int = 8,
+    lease_seconds: int = 300,
+    max_attempts: int = 5,
+    dlq_stream_name: str = "analysis.dlq",
+):
+    consumer = StreamConsumer(
+        redis_client,
+        stream_name=stream_name,
+        group_name=group_name,
+        consumer_name=worker_id,
+        reclaim_idle_ms=lease_seconds * 1000,
+    )
+    worker_limit = max(1, max_inflight)
+    poll_count = max(1, min(read_count, worker_limit))
+    messages = consumer.read_batch(count=poll_count, block_ms=block_ms)
+    if not messages:
+        return []
+
+    def _handle(message):
+        with connection_pool.connection() as connection:
+            _group_name, stage_processor = build_stage_processor(
+                stream_name,
+                connection=connection,
+                evidence_store=evidence_store,
+                storage_backend=storage_backend,
+                llm_judge=llm_judge,
+                redis_client=redis_client,
+            )
+            try:
+                return _process_stream_message(
+                    redis_client=redis_client,
+                    connection=connection,
+                    stage_processor=stage_processor,
+                    worker_id=worker_id,
+                    message=message,
+                    ack_message=consumer.ack,
+                    lease_seconds=lease_seconds,
+                    max_attempts=max_attempts,
+                    dlq_stream_name=dlq_stream_name,
+                    respect_retry_backoff=False,
+                )
+            except Exception as exc:
+                return {
+                    "worker_status": "error",
+                    "trace_id": message.envelope.trace_id,
+                    "error_type": exc.__class__.__name__,
+                }
+
+    ready_messages = deque()
+    delayed_messages = []
+    for index, message in enumerate(messages):
+        retry_not_before = retry_not_before_for_message(message)
+        if retry_not_before is not None and retry_not_before > datetime.now(timezone.utc):
+            delayed_messages.append((index, message, retry_not_before))
+            continue
+        ready_messages.append((index, message))
+
+    def _release_due_messages() -> None:
+        if not delayed_messages:
+            return
+        now = datetime.now(timezone.utc)
+        still_delayed = []
+        for index, delayed_message, retry_not_before in delayed_messages:
+            if retry_not_before <= now:
+                ready_messages.append((index, delayed_message))
+            else:
+                still_delayed.append((index, delayed_message, retry_not_before))
+        delayed_messages[:] = still_delayed
+
+    results_by_index = {}
+    with ThreadPoolExecutor(max_workers=worker_limit) as executor:
+        running = {}
+        while ready_messages or delayed_messages or running:
+            while ready_messages and len(running) < worker_limit:
+                index, message = ready_messages.popleft()
+                running[executor.submit(_handle, message)] = index
+
+            if running:
+                timeout = None
+                if delayed_messages:
+                    next_retry_at = min(item[2] for item in delayed_messages)
+                    timeout = max(0.0, (next_retry_at - datetime.now(timezone.utc)).total_seconds())
+                done, _ = wait(tuple(running), timeout=timeout, return_when=FIRST_COMPLETED)
+                for future in done:
+                    index = running.pop(future)
+                    results_by_index[index] = future.result()
+                _release_due_messages()
+                continue
+
+            _release_due_messages()
+            if ready_messages or not delayed_messages:
+                continue
+            next_retry_at = min(item[2] for item in delayed_messages)
+            delay_seconds = max(0.0, (next_retry_at - datetime.now(timezone.utc)).total_seconds())
+            if delay_seconds > 0:
+                time.sleep(delay_seconds)
+            _release_due_messages()
+
+    return [results_by_index[index] for index in sorted(results_by_index)]
+
+
+def mark_trace_core_failed(connection, trace_id: str, error_code: str) -> None:
+    cursor = connection.cursor()
+    cursor.execute(
+        """
+        UPDATE traces
+        SET core_status = 'failed',
+            last_analysis_error_code = %s,
+            updated_at = now()
+        WHERE trace_id = %s
+        """,
+        (error_code, trace_id),
+    )
+
+
+def mark_trace_stage_processing(connection, trace_id: str, stage: AnalysisStage) -> None:
+    cursor = connection.cursor()
+    if stage == AnalysisStage.CORE:
+        cursor.execute(
+            """
+            UPDATE traces
+            SET core_status = 'processing',
+                core_started_at = COALESCE(core_started_at, now()),
+                updated_at = now()
+            WHERE trace_id = %s
+            """,
+            (trace_id,),
+        )
+        return
+
+    cursor.execute(
+        """
+        UPDATE traces
+        SET enrichment_status = 'processing',
+            enrichment_started_at = COALESCE(enrichment_started_at, now()),
+            updated_at = now()
+        WHERE trace_id = %s
+        """,
+        (trace_id,),
+    )
+
+
+def rollback_connection_quietly(connection) -> None:
+    rollback = getattr(connection, "rollback", None)
+    if rollback is None:
+        return
+    rollback()
+
+
+def stream_message_enqueued_at(message) -> str:
+    if message.envelope.enqueued_at:
+        return message.envelope.enqueued_at
+    return stream_message_id_to_enqueued_at(message.message_id)
+
+
+def _parse_stream_hint_timestamp(value: str) -> datetime | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def maybe_sleep_for_retry_backoff(message) -> None:
+    not_before = retry_not_before_for_message(message)
+    if not_before is None:
+        return
+    delay_seconds = (not_before - datetime.now(timezone.utc)).total_seconds()
+    if delay_seconds > 0:
+        time.sleep(delay_seconds)
+
+
+def retry_not_before_for_message(message) -> datetime | None:
+    return _parse_stream_hint_timestamp(message.envelope.hints.get("retry_not_before", ""))
+
+
+def retry_backoff_seconds(attempt_count: int) -> int:
+    safe_attempt = max(1, attempt_count)
+    return min(300, 2 ** safe_attempt)
+
+
+def requeue_retryable_stage_message(
+    *,
+    redis_client,
+    message,
+    attempt_count: int,
+) -> None:
+    delay_seconds = retry_backoff_seconds(attempt_count)
+    retry_not_before = datetime.now(timezone.utc).timestamp() + delay_seconds
+    publish_stream_message(
+        redis_client,
+        stream_name=message.stream_name,
+        trace_id=message.envelope.trace_id,
+        stage=message.envelope.stage,
+        attempt=attempt_count + 1,
+        hints={
+            "retry_after_seconds": str(delay_seconds),
+            "retry_not_before": datetime.fromtimestamp(retry_not_before, tz=timezone.utc).isoformat(),
+            "source_message_id": message.message_id,
+            "source_stream": message.stream_name,
+        },
+    )
+
+
+def trace_needs_enrichment_enqueue_recovery(connection, message) -> bool:
+    if message.envelope.stage != AnalysisStage.CORE:
+        return False
+    cursor = connection.cursor()
+    cursor.execute(
+        """
+        SELECT enrichment_required, enrichment_status, enrichment_queued_at
+        FROM traces
+        WHERE trace_id = %s
+        """,
+        (message.envelope.trace_id,),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        return False
+    enrichment_required, enrichment_status, enrichment_queued_at = row
+    return bool(enrichment_required) and enrichment_status == "pending" and not enrichment_queued_at
+
+
+def maybe_enqueue_enrichment_after_core_commit(
+    *,
+    redis_client,
+    connection,
+    message,
+    result: dict,
+    stream_name: str = "analysis.enrichment",
+) -> dict:
+    if message.envelope.stage != AnalysisStage.CORE:
+        return result
+    if not result.get("enrichment_required"):
+        return result
+
+    reasons = list(result.get("enrichment_reasons") or [])
+    try:
+        message_id = publish_stream_message(
+            redis_client,
+            stream_name=stream_name,
+            trace_id=message.envelope.trace_id,
+            stage=AnalysisStage.ENRICHMENT,
+            hints={
+                "source_stage": AnalysisStage.CORE.value,
+                "reasons": ",".join(reasons),
+            },
+        )
+    except Exception as exc:
+        raise EnrichmentEnqueueRetryable(str(exc)) from exc
+
+    mark_trace_enrichment_enqueued(
+        connection,
+        message.envelope.trace_id,
+        stream_message_id_to_enqueued_at(message_id),
+    )
+    connection.commit()
+    result["enrichment_enqueue_status"] = "queued"
+    return result
+
+
+def mark_trace_enrichment_enqueued(connection, trace_id: str, queued_at: str) -> None:
+    cursor = connection.cursor()
+    cursor.execute(
+        """
+        UPDATE traces
+        SET enrichment_required = TRUE,
+            enrichment_status = 'pending',
+            enrichment_queued_at = %s::timestamptz,
+            updated_at = now()
+        WHERE trace_id = %s
+        """,
+        (queued_at, trace_id),
+    )
+
+
+def mark_trace_stage_failed(
+    connection,
+    trace_id: str,
+    stage: AnalysisStage,
+    error_code: str,
+    *,
+    terminal: bool,
+) -> None:
+    if stage == AnalysisStage.CORE:
+        if not terminal:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                UPDATE traces
+                SET core_status = 'pending',
+                    last_analysis_error_code = %s,
+                    updated_at = now()
+                WHERE trace_id = %s
+                """,
+                (error_code, trace_id),
+            )
+            return
+        mark_trace_core_failed(connection, trace_id, error_code)
+        return
+
+    cursor = connection.cursor()
+    if terminal:
+        cursor.execute(
+            """
+            UPDATE traces
+            SET enrichment_status = 'failed',
+                last_analysis_error_code = %s,
+                updated_at = now()
+            WHERE trace_id = %s
+            """,
+            (error_code, trace_id),
+        )
+    else:
+        cursor.execute(
+            """
+            UPDATE traces
+            SET enrichment_status = 'pending',
+                last_analysis_error_code = %s,
+                updated_at = now()
+            WHERE trace_id = %s
+            """,
+            (error_code, trace_id),
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--redis-once", action="store_true")
     parser.add_argument("--redis-url", default=os.environ.get("REDIS_URL", "redis://localhost:6379/0"))
-    parser.add_argument("--redis-list", default=os.environ.get("ANALYSIS_REDIS_LIST", "analysis_jobs"))
+    parser.add_argument("--redis-list", default=os.environ.get("ANALYSIS_REDIS_LIST", "analysis.core"))
     parser.add_argument("--redis-timeout-seconds", type=int, default=5)
     parser.add_argument("--postgres-dsn", default=os.environ.get("POSTGRES_DSN", ""))
     parser.add_argument("--offline-batch", action="store_true",

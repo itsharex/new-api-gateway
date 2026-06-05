@@ -61,6 +61,43 @@ services:
         condition: service_healthy
     working_dir: /workspace/workers/analysis_worker
     environment:
+      ANALYSIS_CORE_READ_COUNT: ${ANALYSIS_CORE_READ_COUNT:-16}
+      ANALYSIS_CORE_MAX_INFLIGHT: ${ANALYSIS_CORE_MAX_INFLIGHT:-8}
+      ANALYSIS_CORE_LEASE_SECONDS: ${ANALYSIS_CORE_LEASE_SECONDS:-300}
+      ANALYSIS_CORE_RETRY_LIMIT: ${ANALYSIS_CORE_RETRY_LIMIT:-5}
+      EVIDENCE_STORAGE_BACKEND: filesystem
+      EVIDENCE_STORAGE_DIR: /evidence
+      LLM_JUDGE_BASE_URL:
+      LLM_JUDGE_MODEL:
+      LLM_JUDGE_API_KEY:
+      LLM_JUDGE_TIMEOUT_SECONDS:
+      POSTGRES_DSN: ${ANALYSIS_WORKER_POSTGRES_DSN:-postgres://audit:audit@postgres:5432/audit_gateway?sslmode=disable}
+      REDIS_URL: redis://redis:6379/0
+      PYTHONDONTWRITEBYTECODE: "1"
+      UV_CACHE_DIR: /tmp/uv-cache
+      UV_PROJECT_ENVIRONMENT: /tmp/analysis-worker-venv
+      UV_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
+      UV_INDEX_STRATEGY: unsafe-best-match
+    volumes:
+      - ..:/workspace
+      - ${EVIDENCE_HOST_DIR:-./var/evidence}:/evidence
+    command: ["sh", "-c", "uv sync --quiet && exec uv run python main.py"]
+    restart: unless-stopped
+  analysis-enrichment-worker:
+    image: ghcr.io/astral-sh/uv:python3.11-bookworm
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    working_dir: /workspace/workers/analysis_worker
+    environment:
+      ANALYSIS_REDIS_LIST: analysis.enrichment
+      ANALYSIS_ENRICHMENT_READ_COUNT: ${ANALYSIS_ENRICHMENT_READ_COUNT:-16}
+      ANALYSIS_ENRICHMENT_MAX_INFLIGHT: ${ANALYSIS_ENRICHMENT_MAX_INFLIGHT:-8}
+      ANALYSIS_ENRICHMENT_LEASE_SECONDS: ${ANALYSIS_ENRICHMENT_LEASE_SECONDS:-300}
+      ANALYSIS_ENRICHMENT_RETRY_LIMIT: ${ANALYSIS_ENRICHMENT_RETRY_LIMIT:-5}
+      ANALYSIS_ENRICHMENT_LLM_MAX_CONCURRENCY: ${ANALYSIS_ENRICHMENT_LLM_MAX_CONCURRENCY:-8}
       EVIDENCE_STORAGE_BACKEND: filesystem
       EVIDENCE_STORAGE_DIR: /evidence
       LLM_JUDGE_BASE_URL:

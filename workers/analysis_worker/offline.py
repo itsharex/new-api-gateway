@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 
 from baseline import (
     QUERY_HOURLY,
-    QUERY_TRACE_LEVEL,
     QUERY_MODEL_HOURLY,
     compute_hourly_baselines,
     compute_trace_level_baselines,
@@ -11,35 +10,118 @@ from baseline import (
     upsert_baselines,
 )
 
+ROLLUP_USAGE_FACTS = """
+INSERT INTO usage_aggregates (
+    bucket_start, bucket_size, token_fingerprint, new_api_token_id,
+    username, token_name_snapshot, model, route_pattern, protocol_family,
+    request_count, success_count, error_count, stream_count,
+    prompt_tokens, completion_tokens, total_tokens, reasoning_tokens, cached_tokens,
+    request_body_bytes, response_body_bytes
+)
+SELECT
+    date_trunc(%s, request_started_at) AS bucket_start,
+    %s AS bucket_size,
+    token_fingerprint,
+    0 AS new_api_token_id,
+    username,
+    '' AS token_name_snapshot,
+    model,
+    route_pattern,
+    protocol_family,
+    SUM(request_count) AS request_count,
+    SUM(success_count) AS success_count,
+    SUM(error_count) AS error_count,
+    SUM(stream_count) AS stream_count,
+    SUM(prompt_tokens) AS prompt_tokens,
+    SUM(completion_tokens) AS completion_tokens,
+    SUM(total_tokens) AS total_tokens,
+    SUM(reasoning_tokens) AS reasoning_tokens,
+    SUM(cached_tokens) AS cached_tokens,
+    SUM(request_body_bytes) AS request_body_bytes,
+    SUM(response_body_bytes) AS response_body_bytes
+FROM trace_usage_facts
+GROUP BY 1, 2, 3, 5, 7, 8, 9
+ON CONFLICT (
+    bucket_start, bucket_size, token_fingerprint, username, model, route_pattern, protocol_family
+) DO UPDATE SET
+    request_count = EXCLUDED.request_count,
+    success_count = EXCLUDED.success_count,
+    error_count = EXCLUDED.error_count,
+    stream_count = EXCLUDED.stream_count,
+    prompt_tokens = EXCLUDED.prompt_tokens,
+    completion_tokens = EXCLUDED.completion_tokens,
+    total_tokens = EXCLUDED.total_tokens,
+    reasoning_tokens = EXCLUDED.reasoning_tokens,
+    cached_tokens = EXCLUDED.cached_tokens,
+    request_body_bytes = EXCLUDED.request_body_bytes,
+    response_body_bytes = EXCLUDED.response_body_bytes,
+    updated_at = now()
+"""
+
+TRACE_LEVEL_BASELINES_FROM_FACTS = """
+SELECT
+    token_fingerprint AS fingerprint_key,
+    PERCENTILE_CONT(0.95) WITHIN GROUP (
+        ORDER BY GREATEST(prompt_tokens - cached_tokens, 0) + completion_tokens
+    ) AS p95_effective,
+    PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY completion_tokens) AS p95_completion
+FROM trace_usage_facts
+WHERE request_started_at >= (now() - (%s || ' days')::interval)
+GROUP BY token_fingerprint
+HAVING COUNT(*) >= 5
+"""
+
+
+def _rebuild_usage_aggregates(connection) -> int:
+    cursor = connection.cursor()
+    cursor.execute(
+        """
+        DELETE FROM usage_aggregates
+        WHERE bucket_size IN ('hour', 'day')
+        """
+    )
+    inserted_rows = 0
+    for bucket in ("hour", "day"):
+        cursor.execute(ROLLUP_USAGE_FACTS, (bucket, bucket))
+        rowcount = getattr(cursor, "rowcount", 0)
+        if isinstance(rowcount, int) and rowcount > 0:
+            inserted_rows += rowcount
+    connection.commit()
+    return inserted_rows
+
+
+def load_trace_level_rows(connection, lookback_days: int) -> list[dict]:
+    cursor = connection.cursor()
+    cursor.execute(TRACE_LEVEL_BASELINES_FROM_FACTS, (str(lookback_days),))
+    columns = ["fingerprint_key", "p95_effective", "p95_completion"]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
 
 def run_offline_batch(connection, lookback_days: int = 7) -> dict:
     cursor = connection.cursor()
+    usage_aggregate_rows = _rebuild_usage_aggregates(connection)
 
-    # 1. Compute hourly baselines
+    # 1. Compute hourly baselines from rebuilt aggregates
     cursor.execute(QUERY_HOURLY, (str(lookback_days),))
     columns = ["fingerprint_key", "hourly_total", "hour_count"]
     hourly_rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
     hourly_baselines = compute_hourly_baselines(hourly_rows)
 
-    # 2. Compute trace-level baselines
-    cursor.execute(QUERY_TRACE_LEVEL, (str(lookback_days),))
-    columns = ["fingerprint_key", "p95_effective", "p95_completion"]
-    trace_rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
-    trace_baselines = compute_trace_level_baselines(trace_rows)
-
-    # 3. Compute model baselines
+    # 2. Compute model baselines
     cursor.execute(QUERY_MODEL_HOURLY, (str(lookback_days),))
     columns = ["fingerprint_key", "model", "median_hourly"]
     model_rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
     model_baseline_rows = compute_model_baselines(model_rows)
 
-    # 4. Upsert all baselines
+    # 3. Upsert all baselines
+    fact_trace_rows = load_trace_level_rows(connection, lookback_days)
+    trace_baselines = compute_trace_level_baselines(fact_trace_rows)
     all_baselines = hourly_baselines + trace_baselines + model_baseline_rows
     upsert_baselines(connection, all_baselines, ttl_hours=25)
 
     fingerprints = set(b.fingerprint_key for b in all_baselines)
 
-    # 5. Train Isolation Forest if enough trace data
+    # 4. Train Isolation Forest if enough trace data
     cursor.execute(
         """
         SELECT
@@ -138,4 +220,5 @@ def run_offline_batch(connection, lookback_days: int = 7) -> dict:
     return {
         "fingerprints_processed": len(fingerprints),
         "baselines_written": len(all_baselines),
+        "usage_aggregate_rows": usage_aggregate_rows,
     }

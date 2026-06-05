@@ -1002,7 +1002,9 @@ func TestRepositoryGetTraceDetailScansMessagesAndAnalysisResults(t *testing.T) {
 				*(dest[16].(*string)) = "raw/request-headers.json"
 				*(dest[17].(*string)) = "raw/response-headers.json"
 				*(dest[18].(*string)) = "resolved"
-				*(dest[19].(*string)) = "complete"
+				*(dest[19].(*string)) = "completed"
+				*(dest[20].(*bool)) = true
+				*(dest[21].(*string)) = "failed"
 				return nil
 			}},
 		},
@@ -1072,8 +1074,54 @@ func TestRepositoryGetTraceDetailScansMessagesAndAnalysisResults(t *testing.T) {
 	if len(detail.Anomalies) != 1 || detail.Anomalies[0].AnomalyType != "non_work_job_search" {
 		t.Fatalf("anomalies = %#v", detail.Anomalies)
 	}
+	if detail.AnalysisStatus != "completed_with_enrichment_failure" {
+		t.Fatalf("analysis_status = %q", detail.AnalysisStatus)
+	}
 	if !db.queried("FROM normalized_messages") || !db.queried("FROM analysis_results") || !db.queried("FROM usage_anomalies") {
 		t.Fatalf("expected detail helper queries, got %#v", db.querySQLs)
+	}
+}
+
+func TestRepositoryListAnalysisRuntimeHistory(t *testing.T) {
+	db := &recordingAdminDB{
+		rowsQueue: []pgx.Rows{
+			&scanRows{scans: []func(dest ...any) error{
+				func(dest ...any) error {
+					*(dest[0].(*string)) = "2026-06-03T10:00:00Z"
+					*(dest[1].(*int64)) = 12
+					*(dest[2].(*int64)) = 45
+					*(dest[3].(*int64)) = 1200
+					*(dest[4].(*int64)) = 900
+					return nil
+				},
+			}},
+		},
+	}
+	repo := NewRepository(db)
+	since := time.Date(2026, 6, 3, 9, 45, 0, 0, time.UTC)
+
+	items, err := repo.ListAnalysisRuntimeHistory(context.Background(), "core", since)
+
+	if err != nil {
+		t.Fatalf("ListAnalysisRuntimeHistory error: %v", err)
+	}
+	if len(items) != 1 || items[0].Stage != "core" || items[0].QueueDepth != 12 {
+		t.Fatalf("items = %#v", items)
+	}
+	if !strings.Contains(db.querySQL, "FROM analysis_runtime_samples") {
+		t.Fatalf("query = %s", db.querySQL)
+	}
+	if !strings.Contains(db.querySQL, "sampled_at >= $2") {
+		t.Fatalf("query missing sampled_at lower bound: %s", db.querySQL)
+	}
+	if !strings.Contains(db.querySQL, "ORDER BY sampled_at ASC") {
+		t.Fatalf("query missing ascending sampled_at order: %s", db.querySQL)
+	}
+	if got := db.queryArgs[0]; got != "core" {
+		t.Fatalf("stage arg = %#v, want core", got)
+	}
+	if got := db.queryArgs[1]; got != since {
+		t.Fatalf("since arg = %#v, want %#v", got, since)
 	}
 }
 

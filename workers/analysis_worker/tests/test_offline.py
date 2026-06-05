@@ -6,13 +6,14 @@ from offline import run_offline_batch
 def test_run_offline_batch_queries_and_upserts():
     mock_conn = MagicMock()
     mock_cursor = MagicMock()
+    mock_cursor.rowcount = 0
 
     # Simulate cursor returning rows for each query
     hourly_rows = [("fp_a", 2000.0, 10)]
     trace_rows = [("fp_a", 15000.0, 5000.0)]
     model_rows = [("fp_a", "gpt-4.1", 300.0)]
 
-    mock_cursor.fetchall.side_effect = [hourly_rows, trace_rows, model_rows, []]
+    mock_cursor.fetchall.side_effect = [hourly_rows, model_rows, trace_rows, []]
     mock_conn.cursor.return_value = mock_cursor
 
     with patch("offline.upsert_baselines") as mock_upsert:
@@ -30,6 +31,7 @@ def test_full_offline_pipeline_with_if_training():
     """Integration test: baselines + Isolation Forest training with >= 100 traces."""
     mock_conn = MagicMock()
     mock_cursor = MagicMock()
+    mock_cursor.rowcount = 0
 
     hourly_rows = [
         ("fp_a", 3000.0, 8),
@@ -47,7 +49,7 @@ def test_full_offline_pipeline_with_if_training():
         for i in range(150)
     ]
 
-    mock_cursor.fetchall.side_effect = [hourly_rows, trace_rows, model_rows, if_rows]
+    mock_cursor.fetchall.side_effect = [hourly_rows, model_rows, trace_rows, if_rows]
     mock_conn.cursor.return_value = mock_cursor
 
     with patch("offline.upsert_baselines") as mock_upsert:
@@ -57,3 +59,47 @@ def test_full_offline_pipeline_with_if_training():
     assert result["baselines_written"] >= 3
     written = mock_upsert.call_args.args[1]
     assert any(row.metric_type == "trace_effective_tokens_p95" for row in written)
+
+
+def test_run_offline_batch_rebuilds_usage_aggregates_from_trace_usage_facts():
+    mock_conn = MagicMock()
+    mock_cursor = MagicMock()
+    mock_cursor.rowcount = 1
+
+    hourly_rows = [("fp_a", 2000.0, 10)]
+    trace_rows = [("fp_a", 15000.0, 5000.0)]
+    model_rows = [("fp_a", "gpt-4.1", 300.0)]
+    rollup_rows = [
+        (
+            "2026-06-03T00:00:00+00:00",
+            "day",
+            "fp_1",
+            "alice",
+            "gpt-4.1",
+            "/v1/chat/completions",
+            "openai_chat",
+            2,
+            2,
+            0,
+            0,
+            20,
+            24,
+            4,
+            44,
+            0,
+            128,
+            512,
+        ),
+    ]
+
+    mock_cursor.fetchall.side_effect = [hourly_rows, model_rows, trace_rows, []]
+    mock_conn.cursor.return_value = mock_cursor
+
+    with patch("offline.upsert_baselines"):
+        result = run_offline_batch(mock_conn, lookback_days=7)
+
+    assert result["usage_aggregate_rows"] == 2
+    executed_sql = "\n".join(call.args[0] for call in mock_cursor.execute.call_args_list)
+    assert "DELETE FROM usage_aggregates" in executed_sql
+    assert "FROM trace_usage_facts" in executed_sql
+    assert "INSERT INTO usage_aggregates" in executed_sql

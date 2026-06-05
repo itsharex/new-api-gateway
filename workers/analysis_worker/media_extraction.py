@@ -48,13 +48,15 @@ class MediaExtractionContext:
     ) -> MediaAsset | None:
         return self._decode_and_store(encoded, media_type, encoded)
 
-    def apply_replacements(self, object_ref: str) -> None:
+    def write_sanitized_copy(self, object_ref: str) -> str:
         if not self.replacements:
-            return
+            return object_ref
         text = self.evidence_store.read_text(object_ref)
         for original, replacement in self.replacements:
             text = text.replace(original, replacement)
-        self.evidence_store.write_text(object_ref, text)
+        derived_ref = _sanitized_object_ref(object_ref)
+        self.evidence_store.write_text(derived_ref, text)
+        return derived_ref
 
     def _decode_and_store(
         self, encoded: str, media_type: str, original_string: str
@@ -82,3 +84,10 @@ class MediaExtractionContext:
 def _mime_from_data_url_header(header: str) -> str:
     mime = header.lower().removeprefix("data:").split(";")[0]
     return mime if mime else "application/octet-stream"
+
+
+def _sanitized_object_ref(object_ref: str) -> str:
+    head, dot, tail = object_ref.rpartition(".")
+    if not dot:
+        return f"{object_ref}.sanitized"
+    return f"{head}.sanitized.{tail}"

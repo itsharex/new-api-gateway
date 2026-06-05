@@ -24,12 +24,12 @@ func TestRedisListPublisherPushesTraceCapturedEnvelope(t *testing.T) {
 	client := &fakeRedisListClient{}
 	publisher := NewRedisListPublisher(client, "analysis_jobs")
 
-	job := NewTraceCaptured(TraceCapturedInput{
+	input := TraceCapturedInput{
 		TraceID:                  "trace_1",
 		RoutePattern:             "/v1/chat/completions",
 		ProtocolFamily:           "openai_chat",
 		CaptureMode:              "raw_and_normalized",
-		Username:               "E12345",
+		Username:                 "E12345",
 		TokenFingerprint:         "tkfp_raw_value",
 		FingerprintDisplay:       "tkfp_display",
 		NewAPITokenID:            42,
@@ -51,8 +51,8 @@ func TestRedisListPublisherPushesTraceCapturedEnvelope(t *testing.T) {
 		ResponseContentType:      "application/json",
 		ModelRequested:           "gpt-test",
 		UsageTotalTokens:         18,
-	})
-	err := publisher.PublishTraceCaptured(context.Background(), job)
+	}
+	_, err := publisher.PublishTraceCaptured(context.Background(), input)
 	if err != nil {
 		t.Fatalf("PublishTraceCaptured error: %v", err)
 	}
@@ -99,13 +99,13 @@ func TestRedisListPublisherReturnsRedisError(t *testing.T) {
 	redisErr := errors.New("redis down")
 	publisher := NewRedisListPublisher(&fakeRedisListClient{err: redisErr}, "analysis_jobs")
 
-	err := publisher.PublishTraceCaptured(context.Background(), NewTraceCaptured(TraceCapturedInput{
+	_, err := publisher.PublishTraceCaptured(context.Background(), TraceCapturedInput{
 		TraceID:        "trace_1",
 		RoutePattern:   "/v1/chat/completions",
 		ProtocolFamily: "openai_chat",
 		CaptureMode:    "raw_and_normalized",
-		Username:     "E12345",
-	}))
+		Username:       "E12345",
+	})
 	if !errors.Is(err, redisErr) {
 		t.Fatalf("error = %v, want %v", err, redisErr)
 	}

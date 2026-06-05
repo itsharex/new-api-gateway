@@ -484,7 +484,7 @@ func (h Handler) insertTrace(ctx context.Context, record traceRecord) error {
 		errs = append(errs, err)
 	}
 	if h.JobPublisher != nil {
-		job := jobs.NewTraceCaptured(jobs.TraceCapturedInput{
+		input := jobs.TraceCapturedInput{
 			TraceID:                  record.traceID,
 			RoutePattern:             record.entry.PathPattern,
 			ProtocolFamily:           record.entry.ProtocolFamily,
@@ -515,8 +515,12 @@ func (h Handler) insertTrace(ctx context.Context, record traceRecord) error {
 			UsageTotalTokens:         record.usage.TotalTokens,
 			UsageReasoningTokens:     record.usage.ReasoningTokens,
 			UsageCachedTokens:        record.usage.CachedTokens,
-		})
-		if err := h.JobPublisher.PublishTraceCaptured(ctx, job); err != nil {
+		}
+		publishResult, err := h.JobPublisher.PublishTraceCaptured(ctx, input)
+		if err != nil {
+			h.reportAuditError(ctx, err)
+			errs = append(errs, err)
+		} else if err := h.TraceRepo.MarkTraceCoreQueued(ctx, record.traceID, publishResult.EnqueuedAt); err != nil {
 			h.reportAuditError(ctx, err)
 			errs = append(errs, err)
 		}

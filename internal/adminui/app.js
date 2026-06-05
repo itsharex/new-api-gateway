@@ -13,6 +13,10 @@ const state = {
     page: 1,
     pageSize: 50,
   },
+  analysisRuntime: {
+    stage: "core",
+    range: "1h",
+  },
   password: {
     error: "",
     success: "",
@@ -37,6 +41,7 @@ const chartColors = {
 
 const views = [
   { id: "overview", label: "概览" },
+  { id: "analysis-runtime", label: "分析运行" },
   { id: "usage", label: "用量" },
   { id: "traces", label: "Trace" },
   { id: "identities", label: "员工目录" },
@@ -112,6 +117,18 @@ function table(headers, rows) {
 
 function formatNumber(value) {
   return Number(value || 0).toLocaleString();
+}
+
+function formatPercent(value) {
+  return `${(finiteNumber(value) * 100).toFixed(1)}%`;
+}
+
+function runtimeSnapshotAvailable(snapshot) {
+  return snapshot && snapshot.available !== false;
+}
+
+function runtimeUnavailableText(snapshot) {
+  return snapshot?.error ? `Unavailable: ${snapshot.error}` : "Unavailable";
 }
 
 function compactNumber(value) {
@@ -464,6 +481,17 @@ async function loadView() {
     if (state.view === "overview") {
       const body = await api("/overview");
       renderOverview(body);
+    } else if (state.view === "analysis-runtime") {
+      const params = queryString({
+        stage: state.analysisRuntime.stage,
+        range: state.analysisRuntime.range,
+      });
+      const [snapshotBody, historyBody, consumersBody] = await Promise.all([
+        api(`/analysis-runtime?${params}`),
+        api(`/analysis-runtime/history?${params}`),
+        api(`/analysis-runtime/consumers?${params}`),
+      ]);
+      renderAnalysisRuntime(snapshotBody, historyBody, consumersBody);
     } else if (state.view === "usage") {
       await loadUsage();
     } else if (state.view === "traces") {
@@ -554,6 +582,9 @@ async function reloadUsageView() {
 function renderOverview(body) {
   body = body || {};
   const overview = body.overview || {};
+  const runtime = body.analysis_runtime || {};
+  const coreRuntime = runtime.core || {};
+  const enrichmentRuntime = runtime.enrichment || {};
   const metrics = [
     ["24h 请求数", overview.request_count_24h],
     ["24h Token 数", overview.total_tokens_24h],
@@ -572,9 +603,36 @@ function renderOverview(body) {
       `,
     )
     .join("");
+  const coreAvailable = runtimeSnapshotAvailable(coreRuntime);
+  const enrichmentAvailable = runtimeSnapshotAvailable(enrichmentRuntime);
+  const runtimeCards = [
+    ["Core Queue", coreAvailable ? coreRuntime.queue_depth : runtimeUnavailableText(coreRuntime)],
+    ["Core Oldest Pending", coreAvailable ? `${formatNumber(coreRuntime.oldest_pending_age_seconds)} s` : runtimeUnavailableText(coreRuntime)],
+    ["Core Leased", coreAvailable ? coreRuntime.leased_count : runtimeUnavailableText(coreRuntime)],
+    ["Core Throughput/min", coreAvailable ? coreRuntime.throughput_per_minute : runtimeUnavailableText(coreRuntime)],
+    ["Core Queue Wait P95", coreAvailable ? `${formatNumber(coreRuntime.queue_wait_p95_ms)} ms` : runtimeUnavailableText(coreRuntime)],
+    ["Core Processing P95", coreAvailable ? `${formatNumber(coreRuntime.processing_p95_ms)} ms` : runtimeUnavailableText(coreRuntime)],
+    ["Enrichment Backlog", enrichmentAvailable ? enrichmentRuntime.queue_depth : runtimeUnavailableText(enrichmentRuntime)],
+  ]
+    .map(
+      ([label, value]) => `
+        <article class="metric">
+          <div class="label">${escapeHTML(label)}</div>
+          <div class="value">${typeof value === "string" ? escapeHTML(value) : formatNumber(value)}</div>
+        </article>
+      `,
+    )
+    .join("");
   renderShell(page("概览", `
     <div class="overview-layout">
       <section class="cards">${cards}</section>
+      <section class="panel">
+        <div class="panel-header">
+          <h2>分析运行摘要</h2>
+          <div class="muted">来自 core / enrichment runtime snapshot</div>
+        </div>
+        <section class="cards">${runtimeCards}</section>
+      </section>
       ${tokenUsageChart(overview.token_usage_daily)}
     </div>
   `));
@@ -627,6 +685,212 @@ function renderOverviewChart(points) {
       ],
     },
     options: chartBaseOptions(),
+  });
+}
+
+function runtimeQueueChart(points) {
+  const items = arrayValue(points).map((item) => ({
+    label: formatTime(item.sampled_at || ""),
+    queueDepth: finiteNumber(item.queue_depth),
+    oldestPendingAge: finiteNumber(item.oldest_pending_age_seconds),
+  }));
+  const hasData = items.length > 0 && hasPositiveValue(items, ["queueDepth", "oldestPendingAge"]);
+  const stageLabel = state.analysisRuntime.stage === "enrichment" ? "Enrichment" : "Core";
+
+  return `
+    <section class="panel usage-chart">
+      <div class="chart-meta">
+        <div>
+          <h2>${escapeHTML(stageLabel)} 队列趋势</h2>
+          <div class="muted">队列深度与最老待处理时长</div>
+        </div>
+        <strong>${formatNumber(items.length)} 点</strong>
+      </div>
+      <div class="chart-frame">
+        ${hasData ? `<canvas id="analysis-runtime-queue-chart" aria-label="${escapeHTML(stageLabel)} 队列趋势" role="img"></canvas>` : `<div class="chart-empty">暂无队列采样数据</div>`}
+      </div>
+    </section>
+  `;
+}
+
+function runtimeLatencyChart(points) {
+  const items = arrayValue(points).map((item) => ({
+    label: formatTime(item.sampled_at || ""),
+    queueWaitP95: finiteNumber(item.queue_wait_p95_ms),
+    processingP95: finiteNumber(item.processing_p95_ms),
+  }));
+  const hasData = items.length > 0 && hasPositiveValue(items, ["queueWaitP95", "processingP95"]);
+  const stageLabel = state.analysisRuntime.stage === "enrichment" ? "Enrichment" : "Core";
+
+  return `
+    <section class="panel usage-chart">
+      <div class="chart-meta">
+        <div>
+          <h2>${escapeHTML(stageLabel)} 时延趋势</h2>
+          <div class="muted">队列等待 P95 与处理耗时 P95</div>
+        </div>
+        <strong>${formatNumber(items.length)} 点</strong>
+      </div>
+      <div class="chart-frame">
+        ${hasData ? `<canvas id="analysis-runtime-latency-chart" aria-label="${escapeHTML(stageLabel)} 时延趋势" role="img"></canvas>` : `<div class="chart-empty">暂无时延采样数据</div>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderAnalysisRuntimeCharts(points) {
+  const items = arrayValue(points).map((item) => ({
+    label: formatTime(item.sampled_at || ""),
+    queueDepth: finiteNumber(item.queue_depth),
+    oldestPendingAge: finiteNumber(item.oldest_pending_age_seconds),
+    queueWaitP95: finiteNumber(item.queue_wait_p95_ms),
+    processingP95: finiteNumber(item.processing_p95_ms),
+  }));
+  if (!items.length) return;
+
+  if (hasPositiveValue(items, ["queueDepth", "oldestPendingAge"])) {
+    registerChart("analysis-runtime-queue-chart", {
+      type: "line",
+      data: {
+        labels: items.map((item) => item.label),
+        datasets: [
+          lineDataset({
+            label: "Queue Depth",
+            data: items.map((item) => item.queueDepth),
+            color: chartColors.total,
+            backgroundColor: chartColors.totalFill,
+            fill: true,
+          }),
+          lineDataset({
+            label: "Oldest Pending Age (s)",
+            data: items.map((item) => item.oldestPendingAge),
+            color: chartColors.cache,
+          }),
+        ],
+      },
+      options: chartBaseOptions(),
+    });
+  }
+
+  if (hasPositiveValue(items, ["queueWaitP95", "processingP95"])) {
+    registerChart("analysis-runtime-latency-chart", {
+      type: "line",
+      data: {
+        labels: items.map((item) => item.label),
+        datasets: [
+          lineDataset({
+            label: "Queue Wait P95 (ms)",
+            data: items.map((item) => item.queueWaitP95),
+            color: chartColors.output,
+          }),
+          lineDataset({
+            label: "Processing P95 (ms)",
+            data: items.map((item) => item.processingP95),
+            color: chartColors.input,
+          }),
+        ],
+      },
+      options: chartBaseOptions(),
+    });
+  }
+}
+
+function renderAnalysisRuntime(snapshotBody = {}, historyBody = {}, consumersBody = {}) {
+  const snapshot = snapshotBody.snapshot || {};
+  const history = arrayValue(historyBody.history);
+  const consumers = arrayValue(consumersBody.consumers);
+  const stage = state.analysisRuntime.stage || "core";
+  const range = state.analysisRuntime.range || "1h";
+  const stageOptions = [
+    { id: "core", label: "Core" },
+    { id: "enrichment", label: "Enrichment" },
+  ];
+  const rangeOptions = ["15m", "1h", "24h"];
+  const filters = `
+    <section class="panel">
+      <div class="filters">
+        <div class="field">
+          <label>阶段</label>
+          <div class="actions">
+            ${stageOptions.map((item) => `<button type="button" data-runtime-stage="${escapeHTML(item.id)}" class="${item.id === stage ? "primary" : ""}">${escapeHTML(item.label)}</button>`).join("")}
+          </div>
+        </div>
+        <div class="field">
+          <label>时间范围</label>
+          <div class="actions">
+            ${rangeOptions.map((item) => `<button type="button" data-runtime-range="${escapeHTML(item)}" class="${item === range ? "primary" : ""}">${escapeHTML(item)}</button>`).join("")}
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+  if (!runtimeSnapshotAvailable(snapshot)) {
+    renderShell(page("分析运行", `
+      ${filters}
+      <section class="panel error">${escapeHTML(runtimeUnavailableText(snapshot))}</section>
+    `));
+    return;
+  }
+  const metrics = [
+    ["Queue Depth", snapshot.queue_depth],
+    ["Pending", snapshot.pending_count],
+    ["Leased", snapshot.leased_count],
+    ["Consumers", snapshot.active_consumers],
+    ["Oldest Pending (s)", snapshot.oldest_pending_age_seconds],
+    ["Throughput/min", snapshot.throughput_per_minute],
+    ["Success Rate", formatPercent(snapshot.success_rate)],
+    ["Retryable Fail Rate", formatPercent(snapshot.retryable_fail_rate)],
+    ["Terminal Fail Rate", formatPercent(snapshot.terminal_fail_rate)],
+    ["LLM Judge Timeout Rate", formatPercent(snapshot.llm_judge_timeout_rate)],
+    ["Queue Wait P50", `${formatNumber(snapshot.queue_wait_p50_ms)} ms`],
+    ["Queue Wait P95", `${formatNumber(snapshot.queue_wait_p95_ms)} ms`],
+    ["Processing P50", `${formatNumber(snapshot.processing_p50_ms)} ms`],
+    ["Processing P95", `${formatNumber(snapshot.processing_p95_ms)} ms`],
+  ];
+  const cards = metrics
+    .map(
+      ([label, value]) => `
+        <article class="metric">
+          <div class="label">${escapeHTML(label)}</div>
+          <div class="value">${typeof value === "string" ? escapeHTML(value) : formatNumber(value)}</div>
+        </article>
+      `,
+    )
+    .join("");
+  const rows = consumers.map((item) => [
+    item.worker_id,
+    item.stage || stage,
+    formatNumber(item.leased_count),
+    formatTime(item.last_seen_at),
+    formatNumber(item.idle_seconds),
+    item.last_error_code || "无",
+  ]);
+
+  renderShell(page("分析运行", `
+    ${filters}
+    <section class="cards">${cards}</section>
+    ${runtimeQueueChart(history)}
+    ${runtimeLatencyChart(history)}
+    <section class="panel">
+      <h2>消费者状态</h2>
+      ${table(["Worker", "Stage", "Leased", "Last Seen", "Idle (s)", "Last Error"], rows)}
+    </section>
+  `));
+  renderAnalysisRuntimeCharts(history);
+
+  document.querySelectorAll("[data-runtime-stage]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      state.analysisRuntime.stage = button.dataset.runtimeStage || "core";
+      renderShell(`<section class="loading-panel">正在加载${escapeHTML(currentView().label)}...</section>`);
+      await loadView();
+    });
+  });
+  document.querySelectorAll("[data-runtime-range]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      state.analysisRuntime.range = button.dataset.runtimeRange || "1h";
+      renderShell(`<section class="loading-panel">正在加载${escapeHTML(currentView().label)}...</section>`);
+      await loadView();
+    });
   });
 }
 

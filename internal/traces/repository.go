@@ -19,6 +19,7 @@ var (
 type Repository interface {
 	InsertTrace(ctx context.Context, trace Trace) error
 	InsertRawEvidence(ctx context.Context, object RawEvidenceObject) error
+	MarkTraceCoreQueued(ctx context.Context, traceID string, queuedAt time.Time) error
 }
 
 type execer interface {
@@ -133,6 +134,20 @@ INSERT INTO raw_evidence_objects (
 		defaultString(object.RedactionStatus, "not_redacted"),
 		defaultString(object.EncryptionStatus, "filesystem_permissions"),
 		object.CreatedAt,
+	)
+	return err
+}
+
+func (r PostgresRepository) MarkTraceCoreQueued(ctx context.Context, traceID string, queuedAt time.Time) error {
+	if r.execer == nil {
+		return errNilDatabasePool
+	}
+	_, err := r.execer.Exec(ctx, `
+UPDATE traces
+SET core_queued_at = $1,
+    updated_at = now()
+WHERE trace_id = $2`,
+		queuedAt, traceID,
 	)
 	return err
 }
