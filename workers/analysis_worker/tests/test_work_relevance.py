@@ -37,6 +37,28 @@ def message(text: str) -> NormalizedMessage:
     )
 
 
+def request_message(
+    role: str,
+    text: str,
+    source_path: str = "request.messages[0]",
+    protocol_item_type: str = "openai_chat_message",
+) -> NormalizedMessage:
+    return NormalizedMessage(
+        trace_id="trace_1",
+        direction="request",
+        sequence_index=0,
+        role=role,
+        modality="text",
+        content_text=text,
+        content_text_hash=f"hash-{role}",
+        media_url="",
+        source_path=source_path,
+        protocol_item_type=protocol_item_type,
+        token_count_estimate=10,
+        metadata={},
+    )
+
+
 def response_message(text: str) -> NormalizedMessage:
     return NormalizedMessage(
         trace_id="trace_1",
@@ -257,6 +279,65 @@ def test_extract_user_intent_records_truncation():
     assert intent.text == "a" * 12
     assert intent.truncated is True
     assert intent.original_length == 30
+
+
+def test_extract_user_intent_prefers_user_text_over_long_system_and_developer():
+    long_system = "code fix test " * 600
+    intent = extract_user_intent([
+        request_message("system", long_system),
+        request_message(
+            "developer",
+            "Use the coding rubric and write implementation notes.",
+            source_path="request.input[0].content[0]",
+            protocol_item_type="openai_responses_input",
+        ),
+        request_message("user", "Rewrite my resume and prepare answers for a backend interview."),
+    ])
+
+    assert "rewrite my resume" in intent.text
+    assert "coding rubric" not in intent.text
+    assert "code fix test" not in intent.text
+
+
+def test_classify_work_relevance_ignores_long_system_when_user_indicates_job_search():
+    assessment = classify_work_relevance(
+        job(usage_total_tokens=300),
+        [
+            request_message("system", "code fix test " * 600),
+            request_message("user", "Rewrite my resume and prepare answers for a backend interview."),
+        ],
+        [],
+    )
+
+    assert assessment.task_category == "job_search"
+    assert assessment.decision == "non_work_related"
+    assert assessment.recommended_action == "alert_non_work"
+
+
+def test_extract_user_intent_falls_back_to_developer_when_user_missing():
+    intent = extract_user_intent([
+        request_message(
+            "developer",
+            "Use the incident response rubric.",
+            source_path="request.input[0].content[0]",
+            protocol_item_type="openai_responses_input",
+        ),
+    ])
+
+    assert intent.text == "use the incident response rubric."
+
+
+def test_extract_user_intent_falls_back_to_system_when_only_claude_system_exists():
+    intent = extract_user_intent([
+        request_message(
+            "system",
+            "Use the incident response rubric.",
+            source_path="request.system",
+            protocol_item_type="claude_message",
+        ),
+    ])
+
+    assert intent.text == "use the incident response rubric."
 
 
 def test_strong_alias_match_short_circuits_to_work_related_allow():
