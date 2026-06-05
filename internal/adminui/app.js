@@ -317,7 +317,11 @@ function traceButton(traceID) {
 function renderTraceAnalysisResults(items) {
   const helper = window.AdminAnalysisResultCards;
   if (helper && typeof helper.renderAnalysisResultCards === "function") {
-    return helper.renderAnalysisResultCards(arrayValue(items));
+    try {
+      return helper.renderAnalysisResultCards(arrayValue(items));
+    } catch (error) {
+      console.warn("failed to render trace analysis result cards, falling back to table", error);
+    }
   }
   const rows = arrayValue(items).map((item) => [
     item.analyzer_name,

@@ -579,7 +579,17 @@ tr:last-child td {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
+}
+
+.analysis-card-head > div {
+  min-width: 0;
+  flex: 1 1 240px;
+}
+
+.analysis-card-head .badge {
+  flex: 0 0 auto;
 }
 
 .analysis-card-kicker {
@@ -594,6 +604,7 @@ tr:last-child td {
   font-size: 18px;
   font-weight: 750;
   line-height: 1.3;
+  overflow-wrap: anywhere;
 }
 
 .analysis-card-summary,
