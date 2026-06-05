@@ -329,6 +329,10 @@ textarea {
   text-underline-offset: 3px;
 }
 
+.chart-summary:hover {
+  text-decoration-thickness: 2px;
+}
+
 .chart-summary:focus-visible {
   outline: 3px solid var(--focus);
   outline-offset: 2px;
