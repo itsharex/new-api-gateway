@@ -609,7 +609,15 @@ async function loadUsageSearchResults(query) {
   if (state.view === "usage" && state.usage.body) renderUsage(state.usage.body);
 }
 
+function clearUsageSearchTimer() {
+  if (usageSearchTimer) {
+    clearTimeout(usageSearchTimer);
+    usageSearchTimer = null;
+  }
+}
+
 async function selectUsageEmployee(username) {
+  clearUsageSearchTimer();
   state.usage.selectedEmployee = String(username || "").trim();
   state.usage.searchQuery = state.usage.selectedEmployee;
   state.usage.searchResults = [];
@@ -1005,7 +1013,7 @@ function bindUsageSearch() {
     const query = String(input.value || "");
     state.usage.searchQuery = query.trim();
     state.usage.searchError = "";
-    if (usageSearchTimer) clearTimeout(usageSearchTimer);
+    clearUsageSearchTimer();
     usageSearchTimer = setTimeout(() => {
       loadUsageSearchResults(query);
     }, 180);
@@ -1025,6 +1033,7 @@ function bindUsageGlobalInteractions() {
   });
   document.querySelectorAll("[data-usage-clear]").forEach((button) => {
     button.addEventListener("click", async () => {
+      clearUsageSearchTimer();
       state.usage.selectedEmployee = "";
       state.usage.model = "";
       state.usage.error = "";
@@ -1101,7 +1110,7 @@ function renderEmployeeUsageChart(points) {
     output: finiteNumber(item.completion_tokens),
     cache: finiteNumber(item.cached_tokens),
   }));
-  if (!items.length || !hasPositiveValue(items, ["total", "input", "output", "cache"])) return;
+  if (!items.length) return;
 
   registerChart("employee-usage-chart", {
     type: "line",

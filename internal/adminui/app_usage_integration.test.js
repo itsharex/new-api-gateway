@@ -10,14 +10,24 @@ function loadAppModule(overrides = {}) {
   const fakeApp = { innerHTML: "" };
   const sandbox = {
     console,
-    setTimeout,
-    clearTimeout,
+    setTimeout: overrides.setTimeout || setTimeout,
+    clearTimeout: overrides.clearTimeout || clearTimeout,
     URLSearchParams,
     FormData,
     document: {
       cookie: "",
       body: {
         appendChild() {},
+      },
+      getElementById(id) {
+        if (id === "employee-usage-chart") {
+          return {
+            closest() {
+              return null;
+            },
+          };
+        }
+        return null;
       },
       createElement() {
         return {
@@ -31,6 +41,10 @@ function loadAppModule(overrides = {}) {
         };
       },
       querySelector(selector) {
+        if (typeof overrides.querySelector === "function") {
+          const overrideResult = overrides.querySelector(selector);
+          if (overrideResult !== undefined) return overrideResult;
+        }
         if (selector === "#app") return fakeApp;
         return null;
       },
@@ -43,7 +57,7 @@ function loadAppModule(overrides = {}) {
       innerWidth: 1440,
       UsagePage: overrides.usagePage || { renderUsagePage: () => "<section>usage</section>" },
       AdminAnalysisResultCards: { renderAnalysisResultCards: () => "" },
-      Chart: function Chart() {},
+      Chart: overrides.Chart || function Chart() {},
     },
     fetch: overrides.fetch || (async () => ({
       ok: true,
@@ -66,6 +80,7 @@ module.exports = {
   renderEmployeeUsageChart,
   loadUsageSearchResults: typeof loadUsageSearchResults !== "undefined" ? loadUsageSearchResults : undefined,
   selectUsageEmployee: typeof selectUsageEmployee !== "undefined" ? selectUsageEmployee : undefined,
+  bindUsageSearch: typeof bindUsageSearch !== "undefined" ? bindUsageSearch : undefined,
   __setRenderUsage(fn) { renderUsage = fn; },
   __setReloadUsageView(fn) { reloadUsageView = fn; },
   __getUsageRequestSeq() { return usageRequestSeq; },
@@ -218,4 +233,68 @@ test("loadUsageSearchResults clears stale suggestions when the query becomes emp
   assert.equal(calls.length, 0);
   assert.equal(app.state.usage.searchResults.length, 0);
   assert.equal(app.state.usage.searchError, "");
+});
+
+test("renderEmployeeUsageChart still renders zero-valued ranges to preserve the padded timeline", () => {
+  const chartCalls = [];
+  const { app } = loadAppModule({
+    Chart: function Chart(_canvas, config) {
+      chartCalls.push(config);
+      return { destroy() {} };
+    },
+  });
+
+  app.renderEmployeeUsageChart([
+    {
+      bucket_start: "2026-06-05T00:00:00Z",
+      bucket_size: "hour",
+      total_tokens: 0,
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cached_tokens: 0,
+    },
+    {
+      bucket_start: "2026-06-05T01:00:00Z",
+      bucket_size: "hour",
+      total_tokens: 0,
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cached_tokens: 0,
+    },
+  ]);
+
+  assert.equal(chartCalls.length, 1);
+  assert.deepEqual(chartCalls[0].data.labels, ["00:00", "01:00"]);
+  assert.deepEqual(chartCalls[0].data.datasets[0].data, [0, 0]);
+});
+
+test("selectUsageEmployee clears any pending debounced employee search", async () => {
+  const clearCalls = [];
+  const inputListeners = {};
+  const fakeInput = {
+    value: "roy",
+    addEventListener(event, handler) {
+      inputListeners[event] = handler;
+    },
+  };
+  const { app } = loadAppModule({
+    querySelector(selector) {
+      if (selector === "[data-usage-search-input]") return fakeInput;
+      return undefined;
+    },
+    setTimeout(handler) {
+      inputListeners.timeout = handler;
+      return 99;
+    },
+    clearTimeout(timer) {
+      clearCalls.push(timer);
+    },
+  });
+  app.__setReloadUsageView(async () => {});
+
+  app.bindUsageSearch();
+  inputListeners.input();
+  await app.selectUsageEmployee("roy.zhang");
+
+  assert.deepEqual(clearCalls, [99]);
 });

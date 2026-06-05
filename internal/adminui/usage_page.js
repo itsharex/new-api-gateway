@@ -21,6 +21,7 @@
   }
 
   function formatActiveBucketHint(range, activeCount, expectedCount) {
+    if (activeCount <= 0) return "该时间范围内暂无用量";
     if (!expectedCount || activeCount >= expectedCount) return "";
     return `当前范围内仅 ${activeCount} 个时间桶有实际流量`;
   }

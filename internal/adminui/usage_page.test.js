@@ -84,6 +84,51 @@ test("formatActiveBucketHint matches sparse hourly and daily copy", () => {
   assert.equal(formatActiveBucketHint("1d", 1, 24), "当前范围内仅 1 个时间桶有实际流量");
   assert.equal(formatActiveBucketHint("30d", 2, 30), "当前范围内仅 2 个时间桶有实际流量");
   assert.equal(formatActiveBucketHint("30d", 30, 30), "");
+  assert.equal(formatActiveBucketHint("30d", 0, 30), "该时间范围内暂无用量");
+});
+
+test("renderUsagePage shows explicit no-usage hint for zero-traffic employee ranges", () => {
+  const html = renderUsagePage({
+    global_usage: {
+      total_tokens: 18420,
+      active_employees: 17,
+      request_count: 42,
+      active_models: 6,
+      top_employees: [],
+      top_models: [],
+    },
+    employee_usage: {
+      username: "roy.zhang",
+      range: "30d",
+      bucket_size: "day",
+      active_bucket_count: 0,
+      expected_bucket_count: 30,
+      selected_model: "",
+      models: [],
+      summary: { request_count: 0, prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0, total_tokens: 0 },
+      points: Array.from({ length: 30 }, (_, index) => ({
+        bucket_start: `2026-05-${String(index + 1).padStart(2, "0")}T00:00:00Z`,
+        bucket_size: "day",
+        request_count: 0,
+        success_count: 0,
+        error_count: 0,
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        cached_tokens: 0,
+        total_tokens: 0,
+      })),
+      model_summary: [],
+    },
+    usageState: {
+      searchQuery: "roy",
+      searchResults: [],
+      searchError: "",
+      selectedEmployee: "roy.zhang",
+    },
+  });
+
+  assert.match(html, /该时间范围内暂无用量/);
+  assert.match(html, /id="employee-usage-chart"/);
 });
 
 test("renderUsagePage exposes top employee hooks and escapes text plus attributes", () => {
