@@ -267,13 +267,9 @@ def token_tier(total_tokens: int) -> str:
 
 
 def extract_user_intent(messages: list[NormalizedMessage], max_chars: int = MAX_INTENT_CHARS) -> ExtractedIntent:
-    relevant = [
-        message.content_text
-        for message in messages
-        if message.direction == "request"
-        and message.role in {"user", "developer", "system"}
-        and message.content_text
-    ]
+    relevant = _request_text_by_roles(messages, {"user"})
+    if not relevant:
+        relevant = _request_text_by_roles(messages, {"developer", "system"})
     text = "\n".join(relevant).lower()
     original_length = len(text)
     truncated = original_length > max_chars
@@ -282,6 +278,16 @@ def extract_user_intent(messages: list[NormalizedMessage], max_chars: int = MAX_
         original_length=original_length,
         truncated=truncated,
     )
+
+
+def _request_text_by_roles(messages: list[NormalizedMessage], roles: set[str]) -> list[str]:
+    return [
+        message.content_text
+        for message in messages
+        if message.direction == "request"
+        and message.role in roles
+        and message.content_text
+    ]
 
 
 def _normalized_terms(values: list[str]) -> list[str]:
