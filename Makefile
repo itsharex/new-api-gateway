@@ -9,6 +9,7 @@ endif
 .PHONY: test run tidy smoke dev
 
 test:
+	node --test internal/adminui/analysis_result_cards.test.js
 	go test ./...
 
 run:
