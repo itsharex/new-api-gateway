@@ -547,15 +547,30 @@ WHERE bucket_size = 'day'
 		return summary, err
 	}
 	rows, err := r.db.Query(ctx, `
-SELECT username, COALESCE(MAX(token_name_snapshot), ''), COALESCE(MAX(route_pattern), ''), COALESCE(SUM(total_tokens), 0), COALESCE(SUM(request_count), 0), MAX(bucket_start)::text
-FROM usage_aggregates
-WHERE bucket_size = 'day'
-  AND bucket_start >= $1
-  AND bucket_start < $2
-  AND username <> ''
-GROUP BY username
-ORDER BY SUM(total_tokens) DESC, username ASC
-LIMIT 10`, start, now.UTC())
+SELECT u.username,
+       COALESCE(MAX(s.display_name), ''),
+       COALESCE(MAX(s.department), MAX(c.department), ''),
+       u.total_tokens,
+       u.request_count,
+       u.last_seen_at::text
+FROM (
+  SELECT username,
+         COALESCE(SUM(total_tokens), 0) AS total_tokens,
+         COALESCE(SUM(request_count), 0) AS request_count,
+         MAX(bucket_start) AS last_seen_at
+  FROM usage_aggregates
+  WHERE bucket_size = 'day'
+    AND bucket_start >= $1
+    AND bucket_start < $2
+    AND username <> ''
+  GROUP BY username
+  ORDER BY SUM(total_tokens) DESC, username ASC
+  LIMIT 10
+) u
+LEFT JOIN token_identity_cache c ON c.username = u.username
+LEFT JOIN audit_subjects s ON s.username = u.username
+GROUP BY u.username, u.total_tokens, u.request_count, u.last_seen_at
+ORDER BY u.total_tokens DESC, u.username ASC`, start, now.UTC())
 	if err != nil {
 		return summary, err
 	}

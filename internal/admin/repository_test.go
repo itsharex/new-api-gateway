@@ -1042,6 +1042,12 @@ func TestRepositoryGlobalUsageSummaryBuildsTopEmployeeAndModelLists(t *testing.T
 	if len(summary.TopEmployees) != 1 || summary.TopEmployees[0].Username != "roy.zhang" {
 		t.Fatalf("TopEmployees=%#v", summary.TopEmployees)
 	}
+	if summary.TopEmployees[0].DisplayName != "Roy Zhang" || summary.TopEmployees[0].Department != "Platform" {
+		t.Fatalf("TopEmployees identity fields=%#v", summary.TopEmployees[0])
+	}
+	if !strings.Contains(db.querySQLs[1], "LEFT JOIN token_identity_cache c") || !strings.Contains(db.querySQLs[1], "LEFT JOIN audit_subjects s") {
+		t.Fatalf("top employees query should join identity tables, query=%s", db.querySQLs[1])
+	}
 	if len(summary.TopModels) != 1 || summary.TopModels[0].Model != "gpt-5.2" {
 		t.Fatalf("TopModels=%#v", summary.TopModels)
 	}

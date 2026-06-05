@@ -1525,10 +1525,19 @@ func TestUsageWith1DRangeRequestsHourlyEmployeeUsage(t *testing.T) {
 	if db.employeeUsageFilter.ExpectedBuckets != 24 {
 		t.Fatalf("ExpectedBuckets=%d, want 24", db.employeeUsageFilter.ExpectedBuckets)
 	}
+	var body struct {
+		EmployeeUsage EmployeeUsageTrend `json:"employee_usage"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if len(body.EmployeeUsage.Points) != 24 {
+		t.Fatalf("len(employee_usage.points)=%d, want 24", len(body.EmployeeUsage.Points))
+	}
 }
 
 func TestUsageEmployeesSearchReturnsFuzzyCandidates(t *testing.T) {
-	handler, _, cookie := newAuthenticatedAdminHandler(t, RoleViewer, "", nil)
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleViewer, "", nil)
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/usage-employees?q=roy", nil)
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
@@ -1546,6 +1555,9 @@ func TestUsageEmployeesSearchReturnsFuzzyCandidates(t *testing.T) {
 	}
 	if len(body.Employees) == 0 || body.Employees[0].Username == "" {
 		t.Fatalf("employees=%#v", body.Employees)
+	}
+	if db.usageEmployeeSearchQuery != "roy" {
+		t.Fatalf("usage employee search query=%q, want roy", db.usageEmployeeSearchQuery)
 	}
 }
 
@@ -1888,37 +1900,38 @@ func (s *recordingEvidenceStore) Get(ctx context.Context, objectRef string) (io.
 }
 
 type memoryAdminDB struct {
-	user                    User
-	session                 Session
-	revokedSessionID        string
-	auditActions            []string
-	auditMetadata           []string
-	auditLogs               []AuditActionLog
-	reviewDecisions         []ReviewDecision
-	contextEntry            ContextCatalogEntry
-	rawEvidenceObject       EvidenceObjectSummary
-	rawEvidenceErr          error
-	rawEvidenceSQL          string
-	rawEvidenceArgs         []any
-	lookupTokenFingerprint  string
-	auditErr                error
-	findUserErr             error
-	revokeErr               error
-	updatedPasswordHash     string
-	updatedPasswordUserID   int64
-	revokedOtherUserID      int64
-	revokedOtherKeepSession string
-	revokedOtherAt          time.Time
-	updatePasswordErr       error
-	revokeOtherErr          error
-	passwordChangeOps       []string
-	traceDetail             TraceDetail
-	traceList               []TraceSummary
-	traceTotalItems         int64
-	anomalies               []AnomalySummary
-	traceAnomalies          []AnomalySummary
-	employeeUsageFilter     EmployeeUsageFilter
-	employeeUsageCalled     bool
+	user                     User
+	session                  Session
+	revokedSessionID         string
+	auditActions             []string
+	auditMetadata            []string
+	auditLogs                []AuditActionLog
+	reviewDecisions          []ReviewDecision
+	contextEntry             ContextCatalogEntry
+	rawEvidenceObject        EvidenceObjectSummary
+	rawEvidenceErr           error
+	rawEvidenceSQL           string
+	rawEvidenceArgs          []any
+	lookupTokenFingerprint   string
+	auditErr                 error
+	findUserErr              error
+	revokeErr                error
+	updatedPasswordHash      string
+	updatedPasswordUserID    int64
+	revokedOtherUserID       int64
+	revokedOtherKeepSession  string
+	revokedOtherAt           time.Time
+	updatePasswordErr        error
+	revokeOtherErr           error
+	passwordChangeOps        []string
+	traceDetail              TraceDetail
+	traceList                []TraceSummary
+	traceTotalItems          int64
+	anomalies                []AnomalySummary
+	traceAnomalies           []AnomalySummary
+	employeeUsageFilter      EmployeeUsageFilter
+	employeeUsageCalled      bool
+	usageEmployeeSearchQuery string
 }
 
 func (m *memoryAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -2111,6 +2124,11 @@ func (m *memoryAdminDB) Query(ctx context.Context, sql string, args ...any) (pgx
 		return &scanRows{scans: scans}, nil
 	}
 	if strings.Contains(sql, "GROUP BY c.username") && strings.Contains(sql, "ILIKE") {
+		if len(args) > 0 {
+			if value, ok := args[0].(string); ok {
+				m.usageEmployeeSearchQuery = strings.Trim(value, "%")
+			}
+		}
 		return &scanRows{scans: []func(dest ...any) error{
 			func(dest ...any) error {
 				*(dest[0].(*string)) = "roy.zhang"
@@ -2121,7 +2139,7 @@ func (m *memoryAdminDB) Query(ctx context.Context, sql string, args ...any) (pgx
 			},
 		}}, nil
 	}
-	if strings.Contains(sql, "GROUP BY username") && strings.Contains(sql, "ORDER BY SUM(total_tokens) DESC, username ASC") {
+	if strings.Contains(sql, "FROM token_identity_cache c") && strings.Contains(sql, "LEFT JOIN audit_subjects s") && strings.Contains(sql, "u.total_tokens") {
 		return &scanRows{scans: []func(dest ...any) error{
 			func(dest ...any) error {
 				*(dest[0].(*string)) = "roy.zhang"
