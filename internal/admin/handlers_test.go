@@ -1437,6 +1437,9 @@ func TestUsageWithUsernameReturnsEmployeeUsage(t *testing.T) {
 	if !db.employeeUsageFilter.Start.Equal(wantStart) {
 		t.Fatalf("start = %s, want %s", db.employeeUsageFilter.Start, wantStart)
 	}
+	if !db.globalUsageStart.Equal(wantStart) || !db.globalUsageEnd.Equal(wantEnd) {
+		t.Fatalf("global usage window = [%s, %s), want [%s, %s)", db.globalUsageStart, db.globalUsageEnd, wantStart, wantEnd)
+	}
 	var body struct {
 		GlobalUsage   GlobalUsageSummary `json:"global_usage"`
 		EmployeeUsage EmployeeUsageTrend `json:"employee_usage"`
@@ -1558,6 +1561,9 @@ func TestUsageEmployeesSearchReturnsFuzzyCandidates(t *testing.T) {
 	}
 	if db.usageEmployeeSearchQuery != "roy" {
 		t.Fatalf("usage employee search query=%q, want roy", db.usageEmployeeSearchQuery)
+	}
+	if !db.usageEmployeeSearchFromUsage {
+		t.Fatal("usage employee search should be rooted in usage_aggregates usernames")
 	}
 }
 
@@ -1900,38 +1906,41 @@ func (s *recordingEvidenceStore) Get(ctx context.Context, objectRef string) (io.
 }
 
 type memoryAdminDB struct {
-	user                     User
-	session                  Session
-	revokedSessionID         string
-	auditActions             []string
-	auditMetadata            []string
-	auditLogs                []AuditActionLog
-	reviewDecisions          []ReviewDecision
-	contextEntry             ContextCatalogEntry
-	rawEvidenceObject        EvidenceObjectSummary
-	rawEvidenceErr           error
-	rawEvidenceSQL           string
-	rawEvidenceArgs          []any
-	lookupTokenFingerprint   string
-	auditErr                 error
-	findUserErr              error
-	revokeErr                error
-	updatedPasswordHash      string
-	updatedPasswordUserID    int64
-	revokedOtherUserID       int64
-	revokedOtherKeepSession  string
-	revokedOtherAt           time.Time
-	updatePasswordErr        error
-	revokeOtherErr           error
-	passwordChangeOps        []string
-	traceDetail              TraceDetail
-	traceList                []TraceSummary
-	traceTotalItems          int64
-	anomalies                []AnomalySummary
-	traceAnomalies           []AnomalySummary
-	employeeUsageFilter      EmployeeUsageFilter
-	employeeUsageCalled      bool
-	usageEmployeeSearchQuery string
+	user                         User
+	session                      Session
+	revokedSessionID             string
+	auditActions                 []string
+	auditMetadata                []string
+	auditLogs                    []AuditActionLog
+	reviewDecisions              []ReviewDecision
+	contextEntry                 ContextCatalogEntry
+	rawEvidenceObject            EvidenceObjectSummary
+	rawEvidenceErr               error
+	rawEvidenceSQL               string
+	rawEvidenceArgs              []any
+	lookupTokenFingerprint       string
+	auditErr                     error
+	findUserErr                  error
+	revokeErr                    error
+	updatedPasswordHash          string
+	updatedPasswordUserID        int64
+	revokedOtherUserID           int64
+	revokedOtherKeepSession      string
+	revokedOtherAt               time.Time
+	updatePasswordErr            error
+	revokeOtherErr               error
+	passwordChangeOps            []string
+	traceDetail                  TraceDetail
+	traceList                    []TraceSummary
+	traceTotalItems              int64
+	anomalies                    []AnomalySummary
+	traceAnomalies               []AnomalySummary
+	employeeUsageFilter          EmployeeUsageFilter
+	employeeUsageCalled          bool
+	usageEmployeeSearchQuery     string
+	usageEmployeeSearchFromUsage bool
+	globalUsageStart             time.Time
+	globalUsageEnd               time.Time
 }
 
 func (m *memoryAdminDB) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -2123,7 +2132,8 @@ func (m *memoryAdminDB) Query(ctx context.Context, sql string, args ...any) (pgx
 		}
 		return &scanRows{scans: scans}, nil
 	}
-	if strings.Contains(sql, "GROUP BY c.username") && strings.Contains(sql, "ILIKE") {
+	if strings.Contains(sql, "FROM usage_aggregates") && strings.Contains(sql, "LEFT JOIN token_identity_cache c") && strings.Contains(sql, "u.username ILIKE") {
+		m.usageEmployeeSearchFromUsage = true
 		if len(args) > 0 {
 			if value, ok := args[0].(string); ok {
 				m.usageEmployeeSearchQuery = strings.Trim(value, "%")
@@ -2181,13 +2191,13 @@ func (m *memoryAdminDB) Query(ctx context.Context, sql string, args ...any) (pgx
 		if len(args) > 4 {
 			m.employeeUsageFilter.Model = args[4].(string)
 		}
-		bucketStart := "2026-05-29 00:00:00+00"
+		bucketStart := time.Date(2026, 5, 29, 0, 0, 0, 0, time.UTC)
 		if m.employeeUsageFilter.BucketSize == "hour" {
-			bucketStart = "2026-06-05T12:00:00Z"
+			bucketStart = time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
 		}
 		return &scanRows{scans: []func(dest ...any) error{
 			func(dest ...any) error {
-				*(dest[0].(*string)) = bucketStart
+				*(dest[0].(*time.Time)) = bucketStart
 				*(dest[1].(*int64)) = int64(2)
 				*(dest[2].(*int64)) = int64(2)
 				*(dest[3].(*int64)) = int64(0)
@@ -2358,6 +2368,14 @@ func (r memoryAdminRow) Scan(dest ...any) error {
 	}
 	if strings.Contains(r.sql, "FROM usage_aggregates") {
 		if len(dest) == 4 {
+			if len(r.args) >= 2 {
+				if start, ok := r.args[0].(time.Time); ok {
+					r.db.globalUsageStart = start
+				}
+				if end, ok := r.args[1].(time.Time); ok {
+					r.db.globalUsageEnd = end
+				}
+			}
 			*(dest[0].(*int64)) = 18420
 			*(dest[1].(*int64)) = 17
 			*(dest[2].(*int64)) = 42

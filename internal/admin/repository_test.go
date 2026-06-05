@@ -787,7 +787,7 @@ func TestRepositoryEmployeeUsageTrendScansModelsDailyAndSummary(t *testing.T) {
 		}},
 		&scanRows{scans: []func(dest ...any) error{
 			func(dest ...any) error {
-				*(dest[0].(*string)) = "2026-05-29 00:00:00+00"
+				*(dest[0].(*time.Time)) = time.Date(2026, 5, 29, 0, 0, 0, 0, time.UTC)
 				*(dest[1].(*int64)) = 12
 				*(dest[2].(*int64)) = 11
 				*(dest[3].(*int64)) = 1
@@ -852,7 +852,7 @@ func TestRepositoryEmployeeUsageTrendIncludesBlankModelSummary(t *testing.T) {
 		}},
 		&scanRows{scans: []func(dest ...any) error{
 			func(dest ...any) error {
-				*(dest[0].(*string)) = "2026-05-29 00:00:00+00"
+				*(dest[0].(*time.Time)) = time.Date(2026, 5, 29, 0, 0, 0, 0, time.UTC)
 				*(dest[1].(*int64)) = int64(3)
 				*(dest[2].(*int64)) = int64(3)
 				*(dest[3].(*int64)) = int64(0)
@@ -944,7 +944,7 @@ func TestRepositoryEmployeeUsageTrendPadsHourlyPointsFor1D(t *testing.T) {
 		}},
 		&scanRows{scans: []func(dest ...any) error{
 			func(dest ...any) error {
-				*(dest[0].(*string)) = "2026-06-04T15:00:00Z"
+				*(dest[0].(*time.Time)) = time.Date(2026, 6, 4, 15, 0, 0, 0, time.UTC)
 				*(dest[1].(*int64)) = 2
 				*(dest[2].(*int64)) = 2
 				*(dest[3].(*int64)) = 0
@@ -997,6 +997,62 @@ func TestRepositoryEmployeeUsageTrendPadsHourlyPointsFor1D(t *testing.T) {
 	if trend.Points[0].TotalTokens != 0 || trend.Points[23].TotalTokens != 0 {
 		t.Fatalf("expected zero-filled edges, got first=%d last=%d", trend.Points[0].TotalTokens, trend.Points[23].TotalTokens)
 	}
+	if trend.Points[3].BucketStart != "2026-06-04T15:00:00Z" {
+		t.Fatalf("Points[3].BucketStart=%q, want 2026-06-04T15:00:00Z", trend.Points[3].BucketStart)
+	}
+}
+
+func TestRepositoryEmployeeUsageTrendMatchesPostgresHourBucketTimestamps(t *testing.T) {
+	start := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+	db := &recordingAdminDB{rowsQueue: []pgx.Rows{
+		&scanRows{scans: []func(dest ...any) error{
+			func(dest ...any) error {
+				*(dest[0].(*string)) = "gpt-5.2"
+				return nil
+			},
+		}},
+		&scanRows{scans: []func(dest ...any) error{
+			func(dest ...any) error {
+				parsed, err := time.Parse("2006-01-02 15:04:05-07", "2026-06-04 15:00:00+00")
+				if err != nil {
+					return err
+				}
+				*(dest[0].(*time.Time)) = parsed
+				*(dest[1].(*int64)) = 1
+				*(dest[2].(*int64)) = 1
+				*(dest[3].(*int64)) = 0
+				*(dest[4].(*int64)) = 20
+				*(dest[5].(*int64)) = 10
+				*(dest[6].(*int64)) = 0
+				*(dest[7].(*int64)) = 30
+				return nil
+			},
+		}},
+		&scanRows{},
+	}}
+	repo := NewRepository(db)
+
+	trend, err := repo.EmployeeUsageTrend(context.Background(), EmployeeUsageFilter{
+		Username:        "roy.zhang",
+		Range:           "1d",
+		Start:           start,
+		End:             end,
+		BucketSize:      "hour",
+		ExpectedBuckets: 24,
+	})
+	if err != nil {
+		t.Fatalf("EmployeeUsageTrend error: %v", err)
+	}
+	if trend.Points[3].TotalTokens != 30 {
+		t.Fatalf("Points[3].TotalTokens=%d, want 30", trend.Points[3].TotalTokens)
+	}
+	if trend.Points[3].BucketStart != "2026-06-04T15:00:00Z" {
+		t.Fatalf("Points[3].BucketStart=%q, want 2026-06-04T15:00:00Z", trend.Points[3].BucketStart)
+	}
+	if trend.Points[4].TotalTokens != 0 {
+		t.Fatalf("Points[4].TotalTokens=%d, want 0", trend.Points[4].TotalTokens)
+	}
 }
 
 func TestRepositoryGlobalUsageSummaryBuildsTopEmployeeAndModelLists(t *testing.T) {
@@ -1035,6 +1091,11 @@ func TestRepositoryGlobalUsageSummaryBuildsTopEmployeeAndModelLists(t *testing.T
 	summary, err := repo.GlobalUsageSummary(context.Background(), time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatalf("GlobalUsageSummary error: %v", err)
+	}
+	wantEnd := time.Date(2026, 6, 6, 0, 0, 0, 0, time.UTC)
+	wantStart := wantEnd.AddDate(0, 0, -30)
+	if got := db.queryArgsLog[0]; len(got) != 2 || got[0] != wantStart || got[1] != wantEnd {
+		t.Fatalf("summary window args=%#v, want [%v %v]", got, wantStart, wantEnd)
 	}
 	if summary.TotalTokens != 18420 || summary.ActiveEmployees != 17 || summary.RequestCount != 42 || summary.ActiveModels != 6 {
 		t.Fatalf("summary=%#v", summary)
@@ -1079,6 +1140,12 @@ func TestRepositorySearchUsageEmployeesMatchesUsernameAndDisplayName(t *testing.
 	}
 	if !strings.Contains(db.querySQL, "ILIKE") {
 		t.Fatalf("expected ILIKE fuzzy search, query=%s", db.querySQL)
+	}
+	if !strings.Contains(db.querySQL, "FROM usage_aggregates") || !strings.Contains(db.querySQL, "LEFT JOIN token_identity_cache c") {
+		t.Fatalf("expected usage-backed employee search query, query=%s", db.querySQL)
+	}
+	if strings.Contains(db.querySQL, "FROM token_identity_cache c\nLEFT JOIN audit_subjects s") {
+		t.Fatalf("query should not use token_identity_cache as root data source: %s", db.querySQL)
 	}
 }
 

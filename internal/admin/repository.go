@@ -525,7 +525,8 @@ func (r Repository) GlobalUsageSummary(ctx context.Context, now time.Time) (Glob
 	if r.db == nil {
 		return GlobalUsageSummary{}, ErrAdminDBRequired
 	}
-	start := now.UTC().AddDate(0, 0, -30)
+	end := now.UTC().Truncate(24*time.Hour).AddDate(0, 0, 1)
+	start := end.AddDate(0, 0, -30)
 	var summary GlobalUsageSummary
 	summary.Window = "30d"
 	err := r.db.QueryRow(ctx, `
@@ -537,7 +538,7 @@ SELECT
 FROM usage_aggregates
 WHERE bucket_size = 'day'
   AND bucket_start >= $1
-  AND bucket_start < $2`, start, now.UTC()).Scan(
+  AND bucket_start < $2`, start, end).Scan(
 		&summary.TotalTokens,
 		&summary.ActiveEmployees,
 		&summary.RequestCount,
@@ -570,7 +571,7 @@ FROM (
 LEFT JOIN token_identity_cache c ON c.username = u.username
 LEFT JOIN audit_subjects s ON s.username = u.username
 GROUP BY u.username, u.total_tokens, u.request_count, u.last_seen_at
-ORDER BY u.total_tokens DESC, u.username ASC`, start, now.UTC())
+ORDER BY u.total_tokens DESC, u.username ASC`, start, end)
 	if err != nil {
 		return summary, err
 	}
@@ -593,7 +594,7 @@ WHERE bucket_size = 'day'
   AND bucket_start < $2
 GROUP BY model
 ORDER BY SUM(total_tokens) DESC, model ASC
-LIMIT 10`, start, now.UTC())
+LIMIT 10`, start, end)
 	if err != nil {
 		return summary, err
 	}
@@ -618,12 +619,21 @@ func (r Repository) SearchUsageEmployees(ctx context.Context, filter UsageEmploy
 	}
 	query := "%" + strings.TrimSpace(filter.Query) + "%"
 	rows, err := r.db.Query(ctx, `
-SELECT c.username, COALESCE(s.display_name, ''), COALESCE(s.department, c.department), MAX(c.last_seen_at)::text
-FROM token_identity_cache c
-LEFT JOIN audit_subjects s ON s.username = c.username
-WHERE c.username ILIKE $1 OR COALESCE(s.display_name, '') ILIKE $1
-GROUP BY c.username, COALESCE(s.display_name, ''), COALESCE(s.department, c.department)
-ORDER BY MAX(c.last_seen_at) DESC, c.username ASC
+SELECT u.username,
+       COALESCE(MAX(s.display_name), ''),
+       COALESCE(MAX(s.department), MAX(c.department), ''),
+       u.last_seen_at::text
+FROM (
+  SELECT username, MAX(bucket_start) AS last_seen_at
+  FROM usage_aggregates
+  WHERE username <> ''
+  GROUP BY username
+) u
+LEFT JOIN audit_subjects s ON s.username = u.username
+LEFT JOIN token_identity_cache c ON c.username = u.username
+WHERE u.username ILIKE $1 OR COALESCE(s.display_name, '') ILIKE $1
+GROUP BY u.username, u.last_seen_at
+ORDER BY u.last_seen_at DESC, u.username ASC
 LIMIT $2`, query, limit)
 	if err != nil {
 		return nil, err
@@ -640,26 +650,57 @@ LIMIT $2`, query, limit)
 	return items, rows.Err()
 }
 
-func fillUsageTrendPoints(start time.Time, expectedBuckets int, bucketSize string, raw []UsageTrendPoint) ([]UsageTrendPoint, int) {
-	step := 24 * time.Hour
-	layout := time.RFC3339
+type usageTrendBucket struct {
+	BucketStart      time.Time
+	RequestCount     int64
+	SuccessCount     int64
+	ErrorCount       int64
+	PromptTokens     int64
+	CompletionTokens int64
+	CachedTokens     int64
+	TotalTokens      int64
+}
+
+func usageBucketStep(bucketSize string) time.Duration {
 	if bucketSize == "hour" {
-		step = time.Hour
+		return time.Hour
 	}
-	byBucket := make(map[string]UsageTrendPoint, len(raw))
+	return 24 * time.Hour
+}
+
+func normalizeUsageBucketStart(ts time.Time, bucketSize string) time.Time {
+	return ts.UTC().Truncate(usageBucketStep(bucketSize))
+}
+
+func fillUsageTrendPoints(start time.Time, expectedBuckets int, bucketSize string, raw []usageTrendBucket) ([]UsageTrendPoint, int) {
+	step := usageBucketStep(bucketSize)
+	start = normalizeUsageBucketStart(start, bucketSize)
+	byBucket := make(map[time.Time]UsageTrendPoint, len(raw))
 	active := 0
 	for _, point := range raw {
-		byBucket[point.BucketStart] = point
-		if point.TotalTokens > 0 || point.RequestCount > 0 {
+		bucketStart := normalizeUsageBucketStart(point.BucketStart, bucketSize)
+		canonical := UsageTrendPoint{
+			BucketStart:      bucketStart.Format(time.RFC3339),
+			BucketSize:       bucketSize,
+			RequestCount:     point.RequestCount,
+			SuccessCount:     point.SuccessCount,
+			ErrorCount:       point.ErrorCount,
+			PromptTokens:     point.PromptTokens,
+			CompletionTokens: point.CompletionTokens,
+			CachedTokens:     point.CachedTokens,
+			TotalTokens:      point.TotalTokens,
+		}
+		byBucket[bucketStart] = canonical
+		if canonical.TotalTokens > 0 || canonical.RequestCount > 0 {
 			active++
 		}
 	}
 	points := make([]UsageTrendPoint, 0, expectedBuckets)
 	for i := 0; i < expectedBuckets; i++ {
-		bucketStart := start.Add(time.Duration(i) * step).UTC().Format(layout)
+		bucketStart := start.Add(time.Duration(i) * step)
 		point, ok := byBucket[bucketStart]
 		if !ok {
-			point = UsageTrendPoint{BucketStart: bucketStart, BucketSize: bucketSize}
+			point = UsageTrendPoint{BucketStart: bucketStart.Format(time.RFC3339), BucketSize: bucketSize}
 		}
 		points = append(points, point)
 	}
@@ -794,7 +835,7 @@ ORDER BY model`, filter.Username, filter.Start, filter.End, bucketSize)
 		pointWhere = append(pointWhere, fmt.Sprintf("model = $%d", len(pointArgs)))
 	}
 	rows, err = r.db.Query(ctx, fmt.Sprintf(`
-SELECT bucket_start::text,
+SELECT bucket_start,
        COALESCE(SUM(request_count), 0) AS request_count,
        COALESCE(SUM(success_count), 0) AS success_count,
        COALESCE(SUM(error_count), 0) AS error_count,
@@ -810,9 +851,9 @@ ORDER BY bucket_start`, strings.Join(pointWhere, " AND ")), pointArgs...)
 		return trend, err
 	}
 	defer rows.Close()
-	rawPoints := []UsageTrendPoint{}
+	rawPoints := []usageTrendBucket{}
 	for rows.Next() {
-		var point UsageTrendPoint
+		var point usageTrendBucket
 		if err := rows.Scan(
 			&point.BucketStart,
 			&point.RequestCount,
@@ -825,7 +866,6 @@ ORDER BY bucket_start`, strings.Join(pointWhere, " AND ")), pointArgs...)
 		); err != nil {
 			return trend, err
 		}
-		point.BucketSize = bucketSize
 		rawPoints = append(rawPoints, point)
 		trend.Summary.RequestCount += point.RequestCount
 		trend.Summary.SuccessCount += point.SuccessCount
@@ -841,9 +881,21 @@ ORDER BY bucket_start`, strings.Join(pointWhere, " AND ")), pointArgs...)
 	if filter.ExpectedBuckets > 0 {
 		trend.Points, trend.ActiveBucketCount = fillUsageTrendPoints(filter.Start, filter.ExpectedBuckets, bucketSize, rawPoints)
 	} else {
-		trend.Points = rawPoints
+		trend.Points = make([]UsageTrendPoint, 0, len(rawPoints))
 		for _, point := range rawPoints {
-			if point.TotalTokens > 0 || point.RequestCount > 0 {
+			canonical := UsageTrendPoint{
+				BucketStart:      normalizeUsageBucketStart(point.BucketStart, bucketSize).Format(time.RFC3339),
+				BucketSize:       bucketSize,
+				RequestCount:     point.RequestCount,
+				SuccessCount:     point.SuccessCount,
+				ErrorCount:       point.ErrorCount,
+				PromptTokens:     point.PromptTokens,
+				CompletionTokens: point.CompletionTokens,
+				CachedTokens:     point.CachedTokens,
+				TotalTokens:      point.TotalTokens,
+			}
+			trend.Points = append(trend.Points, canonical)
+			if canonical.TotalTokens > 0 || canonical.RequestCount > 0 {
 				trend.ActiveBucketCount++
 			}
 		}
