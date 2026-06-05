@@ -1080,8 +1080,13 @@ func TestRepositoryGlobalUsageSummaryBuildsTopEmployeeAndModelLists(t *testing.T
 		&scanRows{scans: []func(dest ...any) error{
 			func(dest ...any) error {
 				*(dest[0].(*string)) = "gpt-5.2"
-				*(dest[1].(*int64)) = 12000
-				*(dest[2].(*int64)) = 21
+				*(dest[1].(*int64)) = 21
+				*(dest[2].(*int64)) = 20
+				*(dest[3].(*int64)) = 1
+				*(dest[4].(*int64)) = 8000
+				*(dest[5].(*int64)) = 4000
+				*(dest[6].(*int64)) = 0
+				*(dest[7].(*int64)) = 12000
 				return nil
 			},
 		}},
@@ -1111,6 +1116,13 @@ func TestRepositoryGlobalUsageSummaryBuildsTopEmployeeAndModelLists(t *testing.T
 	}
 	if len(summary.TopModels) != 1 || summary.TopModels[0].Model != "gpt-5.2" {
 		t.Fatalf("TopModels=%#v", summary.TopModels)
+	}
+	if summary.TopModels[0].RequestCount != 21 ||
+		summary.TopModels[0].PromptTokens != 8000 ||
+		summary.TopModels[0].CompletionTokens != 4000 ||
+		summary.TopModels[0].CachedTokens != 0 ||
+		summary.TopModels[0].TotalTokens != 12000 {
+		t.Fatalf("TopModels metrics=%#v", summary.TopModels[0])
 	}
 }
 
