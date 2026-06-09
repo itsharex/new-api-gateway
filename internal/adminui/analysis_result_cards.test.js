@@ -36,7 +36,7 @@ test("buildAnalysisResultCardModel maps primary work_relevance to 初步判断",
 
   assert.equal(model.variant, "work_relevance");
   assert.equal(model.title, "初步判断");
-  assert.equal(model.subtitle, "工作相关");
+  assert.equal(model.subtitle, "工作相关 · 编码相关");
   assert.deepEqual(model.summaryItems, ["建议：仅记录", "置信度：高（0.95）"]);
   assert.deepEqual(model.detailItems, [
     "类别：编码",
@@ -77,7 +77,7 @@ test("buildAnalysisResultCardModel maps secondary work_relevance to 复核判断
   });
 
   assert.equal(model.title, "复核判断");
-  assert.equal(model.subtitle, "未知");
+  assert.equal(model.subtitle, "未知 · 软件开发");
   assert.deepEqual(model.summaryItems, ["建议：允许", "置信度：中（0.72）"]);
   assert.deepEqual(model.detailItems, [
     "类别：软件开发",
@@ -107,7 +107,7 @@ test("buildAnalysisResultCardModel falls back to 工作相关性判断 when sour
   });
 
   assert.equal(model.title, "工作相关性判断");
-  assert.equal(model.subtitle, "工作相关");
+  assert.equal(model.subtitle, "工作相关 · 编码相关");
   assert.deepEqual(model.summaryItems, ["建议：仅记录", "置信度：低（0.20）"]);
   assert.equal(model.emphasis, "normal");
   assert.equal(model.badge, "low");
@@ -162,6 +162,31 @@ test("buildAnalysisResultCardModel falls back for unknown analyzers", () => {
 
 test("renderAnalysisResultCards renders details blocks and empty state", () => {
   const html = renderAnalysisResultCards([
+    {
+      analyzer_name: "work_relevance",
+      category: "work_relevance",
+      label: "coding",
+      score: "0.20",
+      confidence: "0.20",
+      severity: "low",
+      created_at: "2026-06-05 09:17:00+00",
+      result_json: JSON.stringify({
+        task_category: "coding",
+        decision: "work_related",
+        recommended_action: "record_only",
+        confidence_label: "low",
+      }),
+    },
+    {
+      analyzer_name: "custom_rule",
+      category: "custom_rule",
+      label: "odd_shape",
+      score: "7",
+      confidence: "0.4",
+      severity: "low",
+      created_at: "2026-06-05 09:19:00+00",
+      result_json: "{\"ok\":true}",
+    },
     {
       analyzer_name: "work_relevance",
       category: "work_relevance",
@@ -230,10 +255,13 @@ test("renderAnalysisResultCards renders details blocks and empty state", () => {
   ]);
   assert.match(html, /analysis-result-grid/);
   assert.match(html, /analysis-card-title">初步判断</);
-  assert.match(html, /analysis-card-subtitle">工作相关</);
+  assert.match(html, /analysis-card-subtitle">工作相关 · 编码相关</);
   assert.match(html, /analysis-card-title">复核判断</);
+  assert.match(html, /analysis-card-subtitle">未知 · 软件开发</);
   assert.match(html, /analysis-card-marker">最终参考</);
   assert.match(html, /analysis-card-title">用量信息</);
+  assert.match(html, /analysis-card-title">工作相关性判断</);
+  assert.match(html, /analysis-card-title">custom_rule</);
   assert.match(html, /建议：仅记录/);
   assert.match(html, /建议：允许/);
   assert.match(html, /类别：编码/);
@@ -249,6 +277,14 @@ test("renderAnalysisResultCards renders details blocks and empty state", () => {
   assert.ok(
     html.indexOf('analysis-card-title">复核判断') <
       html.indexOf('analysis-card-title">用量信息')
+  );
+  assert.ok(
+    html.indexOf('analysis-card-title">用量信息') <
+      html.indexOf('analysis-card-title">工作相关性判断')
+  );
+  assert.ok(
+    html.indexOf('analysis-card-title">工作相关性判断') <
+      html.indexOf('analysis-card-title">custom_rule')
   );
   assert.match(renderAnalysisResultCards([]), /暂无分析结果/);
 });

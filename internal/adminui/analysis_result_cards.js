@@ -85,6 +85,19 @@ function formatCategory(value) {
   }
 }
 
+function formatSubtitleCategory(value) {
+  switch (String(value || "").toLowerCase()) {
+    case "coding":
+      return "编码相关";
+    case "software_development":
+      return "软件开发";
+    case "debugging":
+      return "调试";
+    default:
+      return formatCategory(value);
+  }
+}
+
 function formatConfidenceLabel(value) {
   switch (String(value || "").toLowerCase()) {
     case "high":
@@ -159,7 +172,7 @@ function buildWorkRelevanceCard(item, payload) {
     analyzerName: item.analyzer_name || "work_relevance",
     badge: payload.needs_review || severity === "review" ? "review" : severity,
     title: identity.title,
-    subtitle: formatDecision(decision),
+    subtitle: `${formatDecision(decision)} · ${formatSubtitleCategory(category)}`,
     marker: identity.marker,
     emphasis: identity.emphasis,
     summaryItems: [
