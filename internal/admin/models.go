@@ -396,6 +396,9 @@ type AnalysisResultSummary struct {
 	Score        string `json:"score"`
 	Confidence   string `json:"confidence"`
 	Severity     string `json:"severity"`
+	Stage        string `json:"stage"`
+	Producer     string `json:"producer"`
+	ResultKey    string `json:"result_key"`
 	ResultJSON   string `json:"result_json"`
 	CreatedAt    string `json:"created_at"`
 }

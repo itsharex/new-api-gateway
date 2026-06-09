@@ -1252,7 +1252,7 @@ func (r Repository) listAnalysisResults(ctx context.Context, traceID string) ([]
 	}
 	rows, err := r.db.Query(ctx, `
 SELECT analyzer_name, category, label, score::text, confidence::text,
-       severity, result_json::text, created_at::text
+       severity, stage, producer, result_key, result_json::text, created_at::text
 FROM analysis_results
 WHERE trace_id = $1
 ORDER BY created_at ASC`, traceID)
@@ -1270,6 +1270,9 @@ ORDER BY created_at ASC`, traceID)
 			&item.Score,
 			&item.Confidence,
 			&item.Severity,
+			&item.Stage,
+			&item.Producer,
+			&item.ResultKey,
 			&item.ResultJSON,
 			&item.CreatedAt,
 		); err != nil {

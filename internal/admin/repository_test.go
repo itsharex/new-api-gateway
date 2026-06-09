@@ -1271,8 +1271,11 @@ func TestRepositoryGetTraceDetailScansMessagesAndAnalysisResults(t *testing.T) {
 					*(dest[3].(*string)) = "0.92"
 					*(dest[4].(*string)) = "0.88"
 					*(dest[5].(*string)) = "low"
-					*(dest[6].(*string)) = `{"matched":"gateway"}`
-					*(dest[7].(*string)) = "2026-04-28 10:01:00+00"
+					*(dest[6].(*string)) = "core"
+					*(dest[7].(*string)) = "heuristic_work_relevance"
+					*(dest[8].(*string)) = "work_relevance_primary"
+					*(dest[9].(*string)) = `{"matched":"gateway"}`
+					*(dest[10].(*string)) = "2026-04-28 10:01:00+00"
 					return nil
 				},
 			}},
@@ -1312,11 +1315,17 @@ func TestRepositoryGetTraceDetailScansMessagesAndAnalysisResults(t *testing.T) {
 	if len(detail.AnalysisResults) != 1 || detail.AnalysisResults[0].Label != "work" || detail.AnalysisResults[0].ResultJSON != `{"matched":"gateway"}` {
 		t.Fatalf("analysis results = %#v", detail.AnalysisResults)
 	}
+	if detail.AnalysisResults[0].Stage != "core" || detail.AnalysisResults[0].Producer != "heuristic_work_relevance" || detail.AnalysisResults[0].ResultKey != "work_relevance_primary" {
+		t.Fatalf("analysis result origin metadata = %#v", detail.AnalysisResults[0])
+	}
 	if len(detail.Anomalies) != 1 || detail.Anomalies[0].AnomalyType != "non_work_job_search" {
 		t.Fatalf("anomalies = %#v", detail.Anomalies)
 	}
 	if detail.AnalysisStatus != "completed_with_enrichment_failure" {
 		t.Fatalf("analysis_status = %q", detail.AnalysisStatus)
+	}
+	if !db.queried("SELECT analyzer_name, category, label, score::text, confidence::text,\n       severity, stage, producer, result_key, result_json::text, created_at::text") {
+		t.Fatalf("expected analysis result origin columns in query, got %#v", db.querySQLs)
 	}
 	if !db.queried("FROM normalized_messages") || !db.queried("FROM analysis_results") || !db.queried("FROM usage_anomalies") {
 		t.Fatalf("expected detail helper queries, got %#v", db.querySQLs)
