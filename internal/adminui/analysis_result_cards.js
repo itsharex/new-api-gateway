@@ -24,6 +24,11 @@ function formatTime(value) {
   return String(value ?? "").replace(/(\d{2}:\d{2}:\d{2})\.\d+/, "$1");
 }
 
+function formatTimestamp(value) {
+  const timestamp = Date.parse(String(value ?? ""));
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
 function pickFirst(...values) {
   for (const value of values) {
     if (value !== undefined && value !== null && value !== "") {
@@ -50,10 +55,12 @@ function formatDecision(value) {
       return "工作相关";
     case "non_work_related":
       return "非工作相关";
+    case "needs_review":
+      return "需进一步复核";
     case "unknown":
       return "未知";
     default:
-      return value ? String(value) : "未知";
+      return "结论待定";
   }
 }
 
@@ -63,12 +70,16 @@ function formatAction(value) {
       return "仅记录";
     case "allow":
       return "允许";
+    case "alert_non_work":
+      return "提示非工作用途";
+    case "review_conflict":
+      return "复核冲突";
     case "block":
       return "阻止";
     case "review":
       return "人工复核";
     default:
-      return value ? String(value) : "未知";
+      return "仅记录";
   }
 }
 
@@ -79,9 +90,23 @@ function formatCategory(value) {
     case "software_development":
       return "软件开发";
     case "debugging":
-      return "调试";
+      return "调试排障";
+    case "documentation":
+      return "文档编写";
+    case "code_review":
+      return "代码评审";
+    case "job_search":
+      return "求职应聘";
+    case "unknown":
+      return "未分类";
+    case "personal_chat":
+      return "个人闲聊";
+    case "side_business":
+      return "副业经营";
+    case "policy_violation":
+      return "违规风险";
     default:
-      return value ? String(value) : "未知";
+      return "未分类";
   }
 }
 
@@ -92,23 +117,35 @@ function formatSubtitleCategory(value) {
     case "software_development":
       return "软件开发";
     case "debugging":
-      return "调试";
+      return "调试排障";
+    case "documentation":
+      return "文档编写";
+    case "code_review":
+      return "代码评审";
+    case "job_search":
+      return "求职应聘";
+    case "unknown":
+      return "未分类";
+    case "personal_chat":
+      return "个人闲聊";
+    case "side_business":
+      return "副业经营";
+    case "policy_violation":
+      return "违规风险";
     default:
       return formatCategory(value);
   }
 }
 
 function formatConfidenceLabel(value) {
-  switch (String(value || "").toLowerCase()) {
-    case "high":
-      return "高";
-    case "medium":
-      return "中";
-    case "low":
-      return "低";
-    default:
-      return value ? String(value) : "未知";
+  const score = finiteNumber(value);
+  if (score >= 0.8) {
+    return "高";
   }
+  if (score >= 0.5) {
+    return "中";
+  }
+  return "低";
 }
 
 function resolveWorkRelevanceIdentity(item) {
@@ -156,19 +193,14 @@ function resolveWorkRelevanceIdentity(item) {
 function buildWorkRelevanceCard(item, payload) {
   const breakdown = payload.score_breakdown || {};
   const identity = resolveWorkRelevanceIdentity(item);
-  const category = pickFirst(payload.task_category, item.label, "unknown");
-  const decision = pickFirst(payload.decision, item.label, "unknown");
+  const category = pickFirst(payload.task_category, "unknown");
+  const decision = pickFirst(payload.decision, "pending");
   const action = pickFirst(payload.recommended_action, item.action, "record_only");
   const confidenceValue = pickFirst(payload.confidence, item.confidence, 0);
-  const confidenceLabel = pickFirst(
-    payload.confidence_label,
-    payload.confidence_level,
-    item.confidence_label,
-    "unknown"
-  );
   const severity = String(item.severity || "").toLowerCase();
   return {
     variant: "work_relevance",
+    identity: identity.identity,
     analyzerName: item.analyzer_name || "work_relevance",
     badge: payload.needs_review || severity === "review" ? "review" : severity,
     title: identity.title,
@@ -177,7 +209,7 @@ function buildWorkRelevanceCard(item, payload) {
     emphasis: identity.emphasis,
     summaryItems: [
       `建议：${formatAction(action)}`,
-      `置信度：${formatConfidenceLabel(confidenceLabel)}（${formatScore(confidenceValue)}）`,
+      `置信度：${formatConfidenceLabel(confidenceValue)}（${formatScore(confidenceValue)}）`,
     ],
     detailItems: [
       `类别：${formatCategory(category)}`,
@@ -185,8 +217,10 @@ function buildWorkRelevanceCard(item, payload) {
       `非工作分：${formatScore(breakdown.non_work ?? payload.personal_use_score)}`,
       `风险分：${formatScore(breakdown.risk ?? 0)}`,
     ],
+    extraDetailItems: [],
     meta: [formatTime(item.created_at)],
     sortOrder: identity.sortOrder,
+    createdAtMs: formatTimestamp(item.created_at),
     detailsJSON: JSON.stringify(payload, null, 2),
   };
 }
@@ -208,8 +242,10 @@ function buildUsageExtractionCard(item, payload) {
       `推理 ${formatCount(payload.reasoning_tokens)}`,
     ],
     detailItems: [],
+    extraDetailItems: [],
     meta: [`总量 ${formatCount(totalTokens)}`, formatTime(item.created_at)],
     sortOrder: 2,
+    createdAtMs: formatTimestamp(item.created_at),
     detailsJSON: JSON.stringify(payload, null, 2),
   };
 }
@@ -229,8 +265,10 @@ function buildGenericCard(item, payload) {
       `confidence ${item.confidence || "0"}`,
     ],
     detailItems: [],
+    extraDetailItems: [],
     meta: [item.category || "unknown", formatTime(item.created_at)],
     sortOrder: 4,
+    createdAtMs: formatTimestamp(item.created_at),
     detailsJSON: JSON.stringify(payload, null, 2),
   };
 }
@@ -251,10 +289,68 @@ function renderBadge(value) {
   return `<span class="badge ${escapeHTML(String(value).toLowerCase())}">${escapeHTML(value)}</span>`;
 }
 
+function buildSupplementalDetailItems(models) {
+  if (!models.length) return [];
+  const items = [`附加结果 ${models.length} 条`];
+  for (const model of models) {
+    items.push(
+      `${model.subtitle}；${[...(model.summaryItems || []), ...(model.detailItems || [])].join("；")}`
+    );
+  }
+  return items;
+}
+
+function mergeAnalysisResultCardModels(models) {
+  const grouped = new Map();
+  const merged = [];
+
+  for (const model of models) {
+    if (model.variant === "work_relevance" && (model.identity === "primary" || model.identity === "secondary")) {
+      const existing = grouped.get(model.identity);
+      if (!existing) {
+        grouped.set(model.identity, {
+          primary: model,
+          extras: [],
+        });
+        continue;
+      }
+
+      if ((model.createdAtMs ?? 0) >= (existing.primary.createdAtMs ?? 0)) {
+        existing.extras.push(existing.primary);
+        existing.primary = model;
+      } else {
+        existing.extras.push(model);
+      }
+      continue;
+    }
+
+    merged.push(model);
+  }
+
+  for (const identity of ["primary", "secondary"]) {
+    const group = grouped.get(identity);
+    if (!group) continue;
+    const extras = group.extras.sort((left, right) => (right.createdAtMs ?? 0) - (left.createdAtMs ?? 0));
+    merged.push({
+      ...group.primary,
+      extraDetailItems: [...(group.primary.extraDetailItems || []), ...buildSupplementalDetailItems(extras)],
+    });
+  }
+
+  return merged.sort(
+    (left, right) =>
+      (left.sortOrder ?? 99) - (right.sortOrder ?? 99) ||
+      (right.createdAtMs ?? 0) - (left.createdAtMs ?? 0)
+  );
+}
+
 function renderAnalysisResultCard(item) {
-  const model = buildAnalysisResultCardModel(item);
+  const model = item && Array.isArray(item.summaryItems) ? item : buildAnalysisResultCardModel(item);
   const summary = model.summaryItems.map((entry) => `<span>${escapeHTML(entry)}</span>`).join("");
   const details = (model.detailItems || [])
+    .map((entry) => `<span>${escapeHTML(entry)}</span>`)
+    .join("");
+  const extraDetails = (model.extraDetailItems || [])
     .map((entry) => `<span>${escapeHTML(entry)}</span>`)
     .join("");
   const meta = model.meta.map((entry) => `<span>${escapeHTML(entry)}</span>`).join("");
@@ -282,6 +378,7 @@ function renderAnalysisResultCard(item) {
       <div class="analysis-card-meta">${meta}</div>
       <details class="analysis-card-details">
         <summary>查看原始 JSON</summary>
+        ${extraDetails ? `<div class="analysis-card-details-inline">${extraDetails}</div>` : ""}
         <pre>${escapeHTML(model.detailsJSON)}</pre>
       </details>
     </article>
@@ -293,15 +390,8 @@ function renderAnalysisResultCards(items) {
   if (!list.length) {
     return `<div class="muted">暂无分析结果。</div>`;
   }
-  const sorted = list
-    .map((item, index) => ({
-      item,
-      index,
-      sortOrder: buildAnalysisResultCardModel(item).sortOrder ?? 99,
-    }))
-    .sort((left, right) => left.sortOrder - right.sortOrder || left.index - right.index)
-    .map((entry) => entry.item);
-  return `<div class="analysis-result-grid">${sorted.map(renderAnalysisResultCard).join("")}</div>`;
+  const merged = mergeAnalysisResultCardModels(list.map(buildAnalysisResultCardModel));
+  return `<div class="analysis-result-grid">${merged.map(renderAnalysisResultCard).join("")}</div>`;
 }
 
 const AdminAnalysisResultCards = {

@@ -22,7 +22,6 @@ test("buildAnalysisResultCardModel maps primary work_relevance to 初步判断",
       task_category: "coding",
       decision: "work_related",
       recommended_action: "record_only",
-      confidence_label: "high",
       needs_review: true,
       work_related_score: 0.92,
       personal_use_score: 0.02,
@@ -67,7 +66,6 @@ test("buildAnalysisResultCardModel maps secondary work_relevance to 复核判断
       task_category: "software_development",
       decision: "unknown",
       recommended_action: "allow",
-      confidence_label: "medium",
       score_breakdown: {
         work: 0.61,
         non_work: 0.21,
@@ -101,16 +99,76 @@ test("buildAnalysisResultCardModel falls back to 工作相关性判断 when sour
     result_json: JSON.stringify({
       task_category: "coding",
       decision: "work_related",
-      recommended_action: "record_only",
-      confidence_label: "low",
+      recommended_action: "review_conflict",
     }),
   });
 
   assert.equal(model.title, "工作相关性判断");
   assert.equal(model.subtitle, "工作相关 · 编码相关");
-  assert.deepEqual(model.summaryItems, ["建议：仅记录", "置信度：低（0.20）"]);
+  assert.deepEqual(model.summaryItems, ["建议：复核冲突", "置信度：低（0.20）"]);
   assert.equal(model.emphasis, "normal");
   assert.equal(model.badge, "low");
+});
+
+test("buildAnalysisResultCardModel maps worker enum values and conservative fallbacks", () => {
+  const model = buildAnalysisResultCardModel({
+    analyzer_name: "work_relevance",
+    category: "work_relevance",
+    label: "job_search",
+    score: "0.48",
+    confidence: "0.48",
+    severity: "",
+    created_at: "2026-06-05 09:20:00+00",
+    result_json: JSON.stringify({
+      task_category: "job_search",
+      decision: "needs_review",
+      recommended_action: "alert_non_work",
+      score_breakdown: {
+        work: 0.15,
+        non_work: 0.75,
+        risk: 0.24,
+      },
+    }),
+  });
+
+  assert.equal(model.title, "工作相关性判断");
+  assert.equal(model.subtitle, "需进一步复核 · 求职应聘");
+  assert.deepEqual(model.summaryItems, ["建议：提示非工作用途", "置信度：低（0.48）"]);
+  assert.deepEqual(model.detailItems, [
+    "类别：求职应聘",
+    "工作分：0.15",
+    "非工作分：0.75",
+    "风险分：0.24",
+  ]);
+});
+
+test("buildAnalysisResultCardModel uses conservative fallbacks for missing decision category and action", () => {
+  const model = buildAnalysisResultCardModel({
+    analyzer_name: "work_relevance",
+    category: "work_relevance",
+    label: "code_review",
+    score: "0.51",
+    confidence: "0.51",
+    severity: "",
+    created_at: "2026-06-05 09:21:00+00",
+    result_json: JSON.stringify({
+      score_breakdown: {
+        work: 0.51,
+        non_work: 0.10,
+        risk: 0.02,
+      },
+    }),
+  });
+
+  assert.equal(model.title, "工作相关性判断");
+  assert.equal(model.subtitle, "结论待定 · 未分类");
+  assert.deepEqual(model.summaryItems, ["建议：仅记录", "置信度：中（0.51）"]);
+  assert.deepEqual(model.detailItems, [
+    "类别：未分类",
+    "工作分：0.51",
+    "非工作分：0.10",
+    "风险分：0.02",
+  ]);
 });
 
 test("buildAnalysisResultCardModel formats usage_extraction as 用量信息", () => {
@@ -173,8 +231,7 @@ test("renderAnalysisResultCards renders details blocks and empty state", () => {
       result_json: JSON.stringify({
         task_category: "coding",
         decision: "work_related",
-        recommended_action: "record_only",
-        confidence_label: "low",
+        recommended_action: "review_conflict",
       }),
     },
     {
@@ -202,7 +259,6 @@ test("renderAnalysisResultCards renders details blocks and empty state", () => {
         task_category: "software_development",
         decision: "unknown",
         recommended_action: "allow",
-        confidence_label: "medium",
         score_breakdown: {
           work: 0.61,
           non_work: 0.21,
@@ -241,7 +297,6 @@ test("renderAnalysisResultCards renders details blocks and empty state", () => {
         task_category: "coding",
         decision: "work_related",
         recommended_action: "record_only",
-        confidence_label: "high",
         needs_review: true,
         work_related_score: 0.92,
         personal_use_score: 0.02,
@@ -264,6 +319,7 @@ test("renderAnalysisResultCards renders details blocks and empty state", () => {
   assert.match(html, /analysis-card-title">custom_rule</);
   assert.match(html, /建议：仅记录/);
   assert.match(html, /建议：允许/);
+  assert.match(html, /建议：复核冲突/);
   assert.match(html, /类别：编码/);
   assert.match(html, /类别：软件开发/);
   assert.match(html, /置信度：高（0\.95）/);
@@ -287,6 +343,107 @@ test("renderAnalysisResultCards renders details blocks and empty state", () => {
       html.indexOf('analysis-card-title">custom_rule')
   );
   assert.match(renderAnalysisResultCards([]), /暂无分析结果/);
+});
+
+test("renderAnalysisResultCards deduplicates repeated primary and secondary work_relevance cards", () => {
+  const html = renderAnalysisResultCards([
+    {
+      analyzer_name: "work_relevance",
+      category: "work_relevance",
+      label: "documentation",
+      score: "0.83",
+      confidence: "0.83",
+      severity: "",
+      created_at: "2026-06-05 09:11:00+00",
+      stage: "core",
+      producer: "heuristic_work_relevance",
+      result_key: "work_relevance_primary",
+      result_json: JSON.stringify({
+        task_category: "documentation",
+        decision: "work_related",
+        recommended_action: "record_only",
+        score_breakdown: {
+          work: 0.83,
+          non_work: 0.03,
+          risk: 0.01,
+        },
+      }),
+    },
+    {
+      analyzer_name: "work_relevance",
+      category: "work_relevance",
+      label: "code_review",
+      score: "0.91",
+      confidence: "0.91",
+      severity: "",
+      created_at: "2026-06-05 09:12:00+00",
+      stage: "core",
+      producer: "heuristic_work_relevance",
+      result_key: "work_relevance_primary",
+      result_json: JSON.stringify({
+        task_category: "code_review",
+        decision: "work_related",
+        recommended_action: "record_only",
+        score_breakdown: {
+          work: 0.91,
+          non_work: 0.02,
+          risk: 0.00,
+        },
+      }),
+    },
+    {
+      analyzer_name: "work_relevance",
+      category: "work_relevance",
+      label: "job_search",
+      score: "0.42",
+      confidence: "0.42",
+      severity: "review",
+      created_at: "2026-06-05 09:13:00+00",
+      stage: "enrichment",
+      producer: "llm_judge",
+      result_key: "work_relevance_secondary",
+      result_json: JSON.stringify({
+        task_category: "job_search",
+        decision: "needs_review",
+        recommended_action: "review_conflict",
+        score_breakdown: {
+          work: 0.20,
+          non_work: 0.61,
+          risk: 0.41,
+        },
+      }),
+    },
+    {
+      analyzer_name: "work_relevance",
+      category: "work_relevance",
+      label: "personal_chat",
+      score: "0.18",
+      confidence: "0.18",
+      severity: "",
+      created_at: "2026-06-05 09:14:00+00",
+      stage: "enrichment",
+      producer: "llm_judge",
+      result_key: "work_relevance_secondary",
+      result_json: JSON.stringify({
+        task_category: "personal_chat",
+        decision: "non_work_related",
+        recommended_action: "alert_non_work",
+        score_breakdown: {
+          work: 0.02,
+          non_work: 0.82,
+          risk: 0.36,
+        },
+      }),
+    },
+  ]);
+
+  assert.equal((html.match(/analysis-card-title">初步判断/g) || []).length, 1);
+  assert.equal((html.match(/analysis-card-title">复核判断/g) || []).length, 1);
+  assert.match(html, /analysis-card-subtitle">工作相关 · 代码评审</);
+  assert.match(html, /analysis-card-subtitle">非工作相关 · 个人闲聊</);
+  assert.match(html, /附加结果 1 条/);
+  assert.match(html, /工作相关 · 文档编写/);
+  assert.match(html, /需进一步复核 · 求职应聘/);
 });
 
 test("renderAnalysisResultCards escapes HTML in rendered fields", () => {
