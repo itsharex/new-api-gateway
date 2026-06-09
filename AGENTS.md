@@ -1,67 +1,72 @@
 # AGENTS.md
 
-This file provides guidance to coding agents when working with code in this repository.
+## Scope
 
-## Project
+- 默认用中文沟通；代码、标识符、错误文本沿用项目现有语言。
+- 只信当前代码和可执行配置；任务队列已切到 Redis Streams，不要再按旧的 Redis list/BLPOP 心智理解系统。
 
-new-api 的前端网关代理层。Go 网关（`cmd/audit-gateway/`）负责反向代理、请求/响应采集、证据与 trace 持久化、管理端与运维接口。Python 分析 worker（`workers/analysis_worker/`）消费 Redis 任务，执行协议归一化、用量聚合、异常检测。
+## Repo Shape
 
-两个进程通过 Redis Streams 协作：Go 网关 XADD `analysis.core`，Python worker 通过 consumer group 消费并在需要时继续投递 `analysis.enrichment`。
-
-## Key Docs
-
-- `README.md` — 快速开始、配置变量、请求处理流程图
-- `ARCHITECTURE.md` — 目录结构、Go 模块详解、数据库 schema 迁移、Python worker 管线
-- `docs/superpowers/` — 需求与计划材料（非稳定架构文档）
+- 这是双进程系统，不是单体服务：`cmd/audit-gateway/` 是 Go 网关入口，`workers/analysis_worker/` 是 Python 分析 worker。
+- Go 网关主链路在 `internal/gateway/proxy.go`：路由匹配、证据采集、身份解析、转发、trace 持久化、投递分析任务都在这里串起来。
+- Go/Python 契约边界在 `internal/jobs/` 和 `workers/analysis_worker/models.py`。改 job payload、trace 状态、analysis stage 时，必须同时检查 Go 发布端、Python 消费端、迁移和 e2e。
+- 当前任务队列是 Redis Streams：core stream 为 `analysis.core`，enrichment stream 为 `analysis.enrichment`。
 
 ## Commands
 
 ```bash
-# Go
-make test              # 全量单元测试
-go test ./internal/gateway/  # 单包测试
-make run               # 启动网关 (go run ./cmd/audit-gateway)
-make tidy              # go mod tidy
+# 全量基础验证：先 Node UI 测试，再 Go 全仓测试
+make test
 
-# Python worker
-cd workers/analysis_worker
-uv sync                # 安装依赖
-uv run pytest -q       # 单元测试
-uv run pytest -q tests/test_normalizers.py  # 单文件测试
-uv run python main.py              # 持续消费模式
-uv run python main.py --redis-once # 处理一个任务后退出（调试用）
+# 只跑网关包 / 单入口
+go test ./internal/gateway/...
+make run
 
-# 依赖服务（ARM Mac 自动使用原生 embedding）
-make dev -d
-# 或手动指定 compose 文件
+# 本地 compose 栈（前台运行；ARM64 自动叠加 deploy/docker-compose.arm.yml）
+make dev
+
+# 仅起基础依赖 + 跑迁移
 docker compose -f deploy/docker-compose.yml --env-file .env.local up -d postgres redis
 docker compose -f deploy/docker-compose.yml --env-file .env.local --profile tools run --rm migrate
 
-# E2E（需 postgres/redis/new-api 运行中）
-cd e2e && uv run run_all.py
+# Python worker
+cd workers/analysis_worker
+uv sync
+uv run pytest -q
+uv run pytest -q tests/test_normalizers.py
+uv run python main.py
+uv run python main.py --redis-once
+
+# E2E 总入口（要求 postgres/redis/new-api 可访问，且需要 OSS 凭证）
+uv run e2e/run_all.py
 ```
 
-## Architecture Essentials
+## Verification Rules
 
-**请求生命周期（`internal/gateway/proxy.go`）：**
-路由匹配 → API Key 提取（6 来源）→ HMAC 指纹脱敏 → 身份解析（Redis→PG→new-api DB 三级缓存）→ 请求采集 → 转发上游 → 响应采集（支持 SSE 流式、WebSocket 双向隧道、multipart）→ trace 持久化 → 发布 Redis 任务 → 返回响应
+- `make test` 不是纯 Go：它先跑 `node --test internal/adminui/analysis_result_cards.test.js`，再跑 `go test ./...`。改动 admin UI 渲染时，别只跑 Go 测试。
+- 小改动优先跑最窄验证：Go 改动先跑对应包测试，worker 改动先跑对应 `pytest` 文件，再决定是否升到全量或 e2e。
+- `scripts/smoke_proxy.sh` 依赖 `NEW_API_KEY`；`scripts/smoke_ops_health.sh` 验 `/healthz`、`/readyz`、`/metrics`。
 
-**Go→Python 契约（`internal/jobs/` 发布，`workers/analysis_worker/models.py` 消费）：**
-涉及此契约的改动必须同步检查 Go 发布端、Python 消费端、`migrations/` 和 e2e 测试。
+## Env And Runtime
 
-**证据存储（`internal/evidence/`）：**
-`Store` 接口统一 filesystem/OSS 双后端，写入时计算 SHA-256 并做路径穿越防护。`object_ref` 格式：`file:///` 或 `oss://`。
+- 本地快速启动可用 `bash start.sh`：它会在缺少 `.env.local` 时从 `.env.example` 复制并退出，自动拉起 postgres/redis，必要时执行迁移，再并行启动 Go 网关和 Python worker。
+- Docker Compose 默认会同时启动 `analysis-worker`、`analysis-enrichment-worker`、`analysis-batch`；不要误以为只有一个 worker。
+- worker 使用 Python 3.11+ 和 `uv`；Compose 容器启动命令里会先 `uv sync --quiet`。
+- 启用 OSS 证据存储时，Go 网关和 Python worker 都要能读到同一套 `OSS_*` 环境变量。
+- LLM judge 是可选外部能力；如果设置了任意 `LLM_JUDGE_*`，至少要同时设置 `LLM_JUDGE_BASE_URL` 和 `LLM_JUDGE_MODEL`，否则 worker 启动直接退出。
 
-**管理 API（`internal/admin/`）：**
-RBAC 四级权限（viewer→auditor→raw_access→admin），HMAC 签名 Cookie，全量审计日志。raw evidence 访问和 API key lookup 改动必须保留审计日志语义。
+## Testing Gotchas
 
-## Conventions
+- `e2e/run_all.py` 不是“最便宜的 smoke”：它会检查 OSS 凭证，并覆盖 filesystem + OSS 两种模式。
+- worker 类 e2e 如果复用默认 `REDIS_URL`，任务可能被常驻 worker 抢走。规则/单进程类 worker e2e 请改用隔离 Redis DB，例如 `redis://redis:6379/15`。
+- 网关链路类 e2e 可以继续用默认 Redis，验证真实持续消费链路；worker 单进程类 e2e 才需要隔离队列。
 
-- 默认用中文沟通；代码、标识符、错误文本沿用项目现有语言。
-- `main` 分支禁止直接进行功能开发或 bug 修复。遇到这类任务时，如果当前工作区位于 `main`，必须先创建并切换到独立的 git worktree，再开始后续实现、调试、测试与提交。
-- 创建 worktree 时优先复用已存在的 `.worktrees/`（其次 `worktrees/`）目录；如果使用项目内目录，先确认该目录已被 `.gitignore` 忽略，避免误把 worktree 内容纳入版本控制。
-- 不记录、不持久化 plaintext API key；相关逻辑使用 HMAC 指纹、元数据和脱敏证据。
-- 修改 schema 时新增迁移文件（`migrations/` 按编号顺序），不改写已发布迁移。
-- 查找文件与文本优先用 `rg` / `rg --files`。
-- Python 依赖用 `uv` 管理。
-- 代码修改完成后，主动检查 `README.md`、`ARCHITECTURE.md`、`CLAUDE.md` 等文档是否需要同步更新（如部署命令、架构描述、服务依赖关系），不要只做代码调整而遗漏文档。
+## Data And Safety
+
+- 不记录、不持久化 plaintext API key；相关逻辑只能用 HMAC 指纹、元数据和脱敏证据。
+- 证据存储同时有 filesystem/OSS 两条路径；涉及 `object_ref`、证据派生、副本写回时，注意兼容 `file:///` 和 `oss://`。
+- 修改 schema 时只新增 `migrations/NNNN_*.sql`，不要改写已发布迁移。迁移执行器会维护 `schema_migrations`，并对部分历史迁移做兼容性补记。
+
+## Docs To Sync
+
+- 如果你改了架构、命令、队列语义、运行方式或测试流程，至少检查 `README.md`、`ARCHITECTURE.md`、`CLAUDE.md`、`AGENTS.md` 是否一起过时。

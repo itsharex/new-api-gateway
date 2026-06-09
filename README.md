@@ -174,6 +174,8 @@ NEW_API_POSTGRES_DSN=postgres://root:123456@host.docker.internal:5432/new-api?ss
 │  │ audit-gateway (:8080) │ │     │  ┌──────────────┐         │
 │  │ postgres, redis       │ │     │  │   new-api    │         │
 │  │ analysis-worker       │ │────▶│  │ (port 3000)  │         │
+│  │ analysis-enrichment   │ │     │  └──────────────┘         │
+│  │ analysis-batch        │ │     │  ┌──────────────┐         │
 │  └───────────────────────┘ │     │  └──────────────┘         │
 └────────────────────────────┘     │  ┌──────────────┐         │
                                    │  │  new-api PG  │         │
@@ -200,7 +202,8 @@ NEW_API_POSTGRES_DSN=postgres://root:123456@192.168.1.100:5432/new-api?sslmode=d
 | `NEW_API_BASE_URL` | 上游 new-api 实例地址（同机 `host.docker.internal`，跨机用内网 IP，见上方网络拓扑） |
 | `AUDIT_HMAC_SECRET` | HMAC 密钥（≥32 字符） |
 | `NEW_API_POSTGRES_DSN` | new-api 数据库 DSN（身份解析用，需容器可达的地址，见上方网络拓扑） |
-| `AUDIT_GATEWAY_PORT` | 网关对外端口（默认 `8080`） |
+| `AUDIT_GATEWAY_LISTEN_ADDR` | 网关进程监听地址（默认 `:8080`） |
+| `AUDIT_GATEWAY_PORT` | Docker Compose 宿主机映射端口（默认 `8080`）；仅容器部署时使用 |
 | `EVIDENCE_STORAGE_BACKEND` | 证据存储后端：`filesystem`（默认）或 `oss` |
 | `EVIDENCE_HOST_DIR` | 证据文件宿主机目录（默认 `./var/evidence`） |
 
