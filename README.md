@@ -134,6 +134,8 @@ curl http://localhost:8080/readyz     # 就绪探针（所有依赖正常）
 docker compose -f deploy/docker-compose.yml --env-file .env.local --profile tools up -d analysis-batch
 ```
 
+`migrate` 服务会在数据库内维护 `schema_migrations` 记录已执行的 SQL 文件；首次部署会顺序应用全部迁移，后续重复执行会跳过已记录的迁移文件，适合重部署和恢复场景。
+
 ### Docker 网络拓扑
 
 `NEW_API_BASE_URL` 和 `NEW_API_POSTGRES_DSN` 的值取决于 new-api 与 gateway 的部署位置：

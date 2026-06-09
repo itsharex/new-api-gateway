@@ -25,6 +25,7 @@ new-api-gateway/
 ├── workers/
 │   └── analysis_worker/       # Python 分析 Worker
 ├── migrations/                # PostgreSQL schema 迁移（按编号顺序）
+├── scripts/run_migrations.sh  # Docker/运维迁移执行器，维护 schema_migrations
 ├── deploy/                    # Docker Compose 部署配置
 │   ├── Dockerfile             # Go 网关多阶段构建
 │   ├── docker-compose.yml     # 生产 compose

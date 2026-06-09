@@ -130,11 +130,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-audit_gateway}
     volumes:
       - ../migrations:/migrations:ro
-    command: >
-      sh -c 'for f in /migrations/*.sql; do
-        echo "applying $$f";
-        psql -h postgres -U audit -d "$$POSTGRES_DB" -v ON_ERROR_STOP=1 -f "$$f";
-      done'
+      - ../scripts:/scripts:ro
+    command: ["/scripts/run_migrations.sh"]
   analysis-batch:
     image: ghcr.io/astral-sh/uv:python3.11-bookworm
     profiles:
