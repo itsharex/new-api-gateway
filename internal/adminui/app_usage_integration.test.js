@@ -8,6 +8,20 @@ function loadAppModule(overrides = {}) {
   const sourcePath = path.join(__dirname, "app.js");
   const source = fs.readFileSync(sourcePath, "utf8").replace(/\nboot\(\);\s*$/, "\n");
   const fakeApp = { innerHTML: "" };
+  const fakeElement = {
+    addEventListener() {},
+    removeEventListener() {},
+    getAttribute() { return ""; },
+    matches() { return false; },
+    closest() { return null; },
+    getBoundingClientRect() {
+      return { top: 0, left: 0, bottom: 0, width: 0, height: 0 };
+    },
+    scrollWidth: 0,
+    clientWidth: 0,
+    textContent: "",
+    style: {},
+  };
   const sandbox = {
     console,
     setTimeout: overrides.setTimeout || setTimeout,
@@ -46,6 +60,9 @@ function loadAppModule(overrides = {}) {
           if (overrideResult !== undefined) return overrideResult;
         }
         if (selector === "#app") return fakeApp;
+        if (selector === "#change-password-button") return fakeElement;
+        if (selector === "#logout-button") return fakeElement;
+        if (selector === ".main") return fakeElement;
         return null;
       },
       querySelectorAll() {
@@ -74,6 +91,7 @@ function loadAppModule(overrides = {}) {
 module.exports = {
   state,
   loadUsage,
+  renderOverview: typeof renderOverview !== "undefined" ? renderOverview : undefined,
   reloadUsageView,
   renderUsage,
   usageChart,
@@ -297,4 +315,37 @@ test("selectUsageEmployee clears any pending debounced employee search", async (
   await app.selectUsageEmployee("roy.zhang");
 
   assert.deepEqual(clearCalls, [99]);
+});
+
+test("renderOverview shows business metrics without runtime cards", () => {
+  const { app, fakeApp } = loadAppModule();
+
+  app.renderOverview({
+    overview: {
+      request_count_24h: 120,
+      total_tokens_24h: 5600,
+      error_count_24h: 3,
+      open_anomalies: 2,
+      open_coverage_alerts: 1,
+      raw_only_trace_count_24h: 4,
+      token_usage_daily: [],
+    },
+    analysis_runtime: {
+      core: {
+        queue_depth: 9,
+        oldest_pending_age_seconds: 42,
+      },
+      enrichment: {
+        queue_depth: 7,
+      },
+    },
+  });
+
+  assert.match(fakeApp.innerHTML, /24h 请求数/);
+  assert.match(fakeApp.innerHTML, /24h Token 数/);
+  assert.match(fakeApp.innerHTML, /24h 错误数/);
+  assert.doesNotMatch(fakeApp.innerHTML, /分析运行摘要/);
+  assert.doesNotMatch(fakeApp.innerHTML, /队列深度/);
+  assert.doesNotMatch(fakeApp.innerHTML, /待处理时长/);
+  assert.doesNotMatch(fakeApp.innerHTML, /队列积压/);
 });

@@ -715,9 +715,6 @@ async function reloadUsageView() {
 function renderOverview(body) {
   body = body || {};
   const overview = body.overview || {};
-  const runtime = body.analysis_runtime || {};
-  const coreRuntime = runtime.core || {};
-  const enrichmentRuntime = runtime.enrichment || {};
   const metrics = [
     ["24h 请求数", overview.request_count_24h],
     ["24h Token 数", overview.total_tokens_24h],
@@ -736,36 +733,9 @@ function renderOverview(body) {
       `,
     )
     .join("");
-  const coreAvailable = runtimeSnapshotAvailable(coreRuntime);
-  const enrichmentAvailable = runtimeSnapshotAvailable(enrichmentRuntime);
-  const runtimeCards = [
-    ["Core Queue", coreAvailable ? coreRuntime.queue_depth : runtimeUnavailableText(coreRuntime)],
-    ["Core Oldest Pending", coreAvailable ? `${formatNumber(coreRuntime.oldest_pending_age_seconds)} s` : runtimeUnavailableText(coreRuntime)],
-    ["Core Leased", coreAvailable ? coreRuntime.leased_count : runtimeUnavailableText(coreRuntime)],
-    ["Core Throughput/min", coreAvailable ? coreRuntime.throughput_per_minute : runtimeUnavailableText(coreRuntime)],
-    ["Core Queue Wait P95", coreAvailable ? `${formatNumber(coreRuntime.queue_wait_p95_ms)} ms` : runtimeUnavailableText(coreRuntime)],
-    ["Core Processing P95", coreAvailable ? `${formatNumber(coreRuntime.processing_p95_ms)} ms` : runtimeUnavailableText(coreRuntime)],
-    ["Enrichment Backlog", enrichmentAvailable ? enrichmentRuntime.queue_depth : runtimeUnavailableText(enrichmentRuntime)],
-  ]
-    .map(
-      ([label, value]) => `
-        <article class="metric">
-          <div class="label">${escapeHTML(label)}</div>
-          <div class="value">${typeof value === "string" ? escapeHTML(value) : formatNumber(value)}</div>
-        </article>
-      `,
-    )
-    .join("");
   renderShell(page("概览", `
     <div class="overview-layout">
       <section class="cards">${cards}</section>
-      <section class="panel">
-        <div class="panel-header">
-          <h2>分析运行摘要</h2>
-          <div class="muted">来自 core / enrichment runtime snapshot</div>
-        </div>
-        <section class="cards">${runtimeCards}</section>
-      </section>
       ${tokenUsageChart(overview.token_usage_daily)}
     </div>
   `));
