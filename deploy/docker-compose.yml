@@ -136,12 +136,7 @@ services:
       UV_INDEX_STRATEGY: unsafe-best-match
     volumes:
       - ..:/workspace
-    entrypoint: >
-      sh -c '
-        uv sync &&
-        echo "0 * * * * cd /workspace/workers/analysis_worker && uv run python main.py --offline-batch" > /etc/crontabs/root &&
-        crond -f
-      '
+    command: ["sh", "-c", "uv sync --quiet && exec uv run python batch_scheduler.py"]
 
   # ── On-demand services ─────────────────────────────
   migrate:

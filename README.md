@@ -132,7 +132,7 @@ curl http://localhost:8080/readyz     # 就绪探针（所有依赖正常）
 
 ```
 
-`migrate` 服务会在数据库内维护 `schema_migrations` 记录已执行的 SQL 文件；首次部署会顺序应用全部迁移，后续重复执行会跳过已记录的迁移文件，适合重部署和恢复场景。`analysis-batch` 会随默认 `docker compose up -d` 一起启动，并在容器内通过 cron 于每小时整点执行一次 `uv run python main.py --offline-batch`，负责重建 `usage_aggregates` 与相关 baseline 数据。
+`migrate` 服务会在数据库内维护 `schema_migrations` 记录已执行的 SQL 文件；首次部署会顺序应用全部迁移，后续重复执行会跳过已记录的迁移文件，适合重部署和恢复场景。`analysis-batch` 会随默认 `docker compose up -d` 一起启动，并在容器内通过内置调度循环于每小时整点执行一次 `uv run python main.py --offline-batch`，负责重建 `usage_aggregates` 与相关 baseline 数据。
 
 ### Docker 网络拓扑
 
