@@ -1218,6 +1218,56 @@ func TestTraceDetailIncludesRawRefsForRawEvidenceRoles(t *testing.T) {
 	}
 }
 
+func TestTraceDetailIncludesAnalysisResultOriginMetadata(t *testing.T) {
+	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleAuditor, "", nil)
+	db.traceDetail = traceDetailWithRawRefs()
+	db.traceDetail.AnalysisResults = []AnalysisResultSummary{
+		{
+			AnalyzerName: "work_relevance",
+			Category:     "work_relevance",
+			Label:        "work",
+			Score:        "0.92",
+			Confidence:   "0.88",
+			Severity:     "low",
+			Stage:        "core",
+			Producer:     "heuristic_work_relevance",
+			ResultKey:    "work_relevance_primary",
+			ResultJSON:   `{"matched":"gateway"}`,
+			CreatedAt:    "2026-04-28 10:01:00+00",
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/traces/trace_123", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Trace struct {
+			AnalysisResults []struct {
+				Stage     string `json:"stage"`
+				Producer  string `json:"producer"`
+				ResultKey string `json:"result_key"`
+			} `json:"analysis_results"`
+		} `json:"trace"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode trace detail body: %v", err)
+	}
+	if len(body.Trace.AnalysisResults) != 1 {
+		t.Fatalf("analysis_results = %#v, want one item", body.Trace.AnalysisResults)
+	}
+	if body.Trace.AnalysisResults[0].Stage != "core" ||
+		body.Trace.AnalysisResults[0].Producer != "heuristic_work_relevance" ||
+		body.Trace.AnalysisResults[0].ResultKey != "work_relevance_primary" {
+		t.Fatalf("analysis result origin metadata = %#v", body.Trace.AnalysisResults[0])
+	}
+}
+
 func TestListAnomaliesIncludesDisplayReason(t *testing.T) {
 	handler, db, cookie := newAuthenticatedAdminHandler(t, RoleViewer, "", nil)
 	db.anomalies = []AnomalySummary{
@@ -2103,6 +2153,28 @@ func (m *memoryAdminDB) Query(ctx context.Context, sql string, args ...any) (pgx
 				*(dest[12].(*int)) = item.UsageTotalTokens
 				*(dest[13].(*string)) = item.CreatedAt
 				*(dest[14].(*bool)) = item.NeedsReview
+				return nil
+			})
+		}
+		return &scanRows{scans: scans}, nil
+	}
+	if strings.Contains(sql, "FROM analysis_results") {
+		items := m.traceDetail.AnalysisResults
+		scans := make([]func(dest ...any) error, 0, len(items))
+		for _, item := range items {
+			item := item
+			scans = append(scans, func(dest ...any) error {
+				*(dest[0].(*string)) = item.AnalyzerName
+				*(dest[1].(*string)) = item.Category
+				*(dest[2].(*string)) = item.Label
+				*(dest[3].(*string)) = item.Score
+				*(dest[4].(*string)) = item.Confidence
+				*(dest[5].(*string)) = item.Severity
+				*(dest[6].(*string)) = item.Stage
+				*(dest[7].(*string)) = item.Producer
+				*(dest[8].(*string)) = item.ResultKey
+				*(dest[9].(*string)) = item.ResultJSON
+				*(dest[10].(*string)) = item.CreatedAt
 				return nil
 			})
 		}
