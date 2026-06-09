@@ -117,25 +117,8 @@ services:
     command: ["sh", "-c", "uv sync --quiet && exec uv run python main.py"]
     restart: unless-stopped
 
-  # ── On-demand services ─────────────────────────────
-  migrate:
-    image: postgres:16
-    profiles:
-      - tools
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      PGPASSWORD: audit
-      POSTGRES_DB: ${POSTGRES_DB:-audit_gateway}
-    volumes:
-      - ../migrations:/migrations:ro
-      - ../scripts:/scripts:ro
-    command: ["/scripts/run_migrations.sh"]
   analysis-batch:
     image: ghcr.io/astral-sh/uv:python3.11-bookworm
-    profiles:
-      - tools
     depends_on:
       postgres:
         condition: service_healthy
@@ -159,6 +142,22 @@ services:
         echo "0 * * * * cd /workspace/workers/analysis_worker && uv run python main.py --offline-batch" > /etc/crontabs/root &&
         crond -f
       '
+
+  # ── On-demand services ─────────────────────────────
+  migrate:
+    image: postgres:16
+    profiles:
+      - tools
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: audit
+      POSTGRES_DB: ${POSTGRES_DB:-audit_gateway}
+    volumes:
+      - ../migrations:/migrations:ro
+      - ../scripts:/scripts:ro
+    command: ["/scripts/run_migrations.sh"]
 volumes:
   audit-postgres:
   audit-redis:

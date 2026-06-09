@@ -122,7 +122,7 @@ cp .env.example .env.local
 # 2. 运行数据库迁移（首次部署）
 docker compose -f deploy/docker-compose.yml --env-file .env.local --profile tools run --rm migrate
 
-# 3. 启动所有服务
+# 3. 启动所有服务（包含每小时整点运行的离线 batch）
 docker compose -f deploy/docker-compose.yml --env-file .env.local up -d
 
 # 4. 验证服务状态
@@ -130,11 +130,9 @@ docker compose -f deploy/docker-compose.yml --env-file .env.local ps
 curl http://localhost:8080/healthz    # 存活探针
 curl http://localhost:8080/readyz     # 就绪探针（所有依赖正常）
 
-# 5. 按需启动定时批处理
-docker compose -f deploy/docker-compose.yml --env-file .env.local --profile tools up -d analysis-batch
 ```
 
-`migrate` 服务会在数据库内维护 `schema_migrations` 记录已执行的 SQL 文件；首次部署会顺序应用全部迁移，后续重复执行会跳过已记录的迁移文件，适合重部署和恢复场景。
+`migrate` 服务会在数据库内维护 `schema_migrations` 记录已执行的 SQL 文件；首次部署会顺序应用全部迁移，后续重复执行会跳过已记录的迁移文件，适合重部署和恢复场景。`analysis-batch` 会随默认 `docker compose up -d` 一起启动，并在容器内通过 cron 于每小时整点执行一次 `uv run python main.py --offline-batch`，负责重建 `usage_aggregates` 与相关 baseline 数据。
 
 ### Docker 网络拓扑
 
