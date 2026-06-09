@@ -33,10 +33,11 @@ func (c ChainCache) Get(ctx context.Context, fingerprint string) (Snapshot, bool
 		if !ok {
 			continue
 		}
-		for backfillIndex := 0; backfillIndex < index; backfillIndex++ {
-			if !isNilInterface(c.Caches[backfillIndex]) {
-				_ = c.Caches[backfillIndex].Set(ctx, snapshot)
+		for backfillIndex, backfillCache := range c.Caches {
+			if backfillIndex == index || isNilInterface(backfillCache) {
+				continue
 			}
+			_ = backfillCache.Set(ctx, snapshot)
 		}
 		return snapshot, true, nil
 	}

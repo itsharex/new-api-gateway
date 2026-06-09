@@ -294,6 +294,32 @@ func TestChainCacheReadsSecondCacheAndBackfillsFirst(t *testing.T) {
 	}
 }
 
+func TestChainCacheHitFromFirstCacheBackfillsLaterCaches(t *testing.T) {
+	first := &fakeCache{
+		ok: true,
+		value: Snapshot{
+			TokenFingerprint: "fp-chain",
+			Username:         "dave.zhao",
+		},
+	}
+	second := &fakeCache{}
+	cache := ChainCache{Caches: []Cache{first, second}}
+
+	got, ok, err := cache.Get(context.Background(), "fp-chain")
+	if err != nil {
+		t.Fatalf("Get error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected hit from first cache")
+	}
+	if got.Username != "dave.zhao" {
+		t.Fatalf("Username = %q", got.Username)
+	}
+	if second.setCalls != 1 {
+		t.Fatalf("second cache Set called %d times", second.setCalls)
+	}
+}
+
 func TestChainCacheContinuesAfterFirstCacheErrorAndBackfills(t *testing.T) {
 	first := &fakeCache{getErr: errors.New("redis unavailable")}
 	second := &fakeCache{
