@@ -2,7 +2,7 @@ import work_relevance
 
 from llm_judge import LLMJudgeUnavailable
 from models import ContextCatalogEntry, NormalizedMessage, TraceCapturedJob
-from work_relevance import ANALYZER_VERSION, classify_work_relevance, extract_user_intent, _truncate_message
+from work_relevance import ANALYZER_VERSION, classify_work_relevance, extract_user_intent, _truncate_message, _strip_content_noise
 
 
 def job(**overrides):
@@ -544,3 +544,41 @@ def test_truncate_message_truncates_at_limit():
 def test_truncate_message_keeps_text_at_exact_limit():
     text = "A" * 800
     assert _truncate_message(text, max_chars=800) == text
+
+
+def test_strip_content_noise_replaces_code_block():
+    text = 'Here is my code:\n```python\nprint("hello")\n```\nPlease review it.'
+    result = _strip_content_noise(text)
+    assert result == "Here is my code:\n[CODE_BLOCK]\nPlease review it."
+
+
+def test_strip_content_noise_replaces_long_json():
+    json_payload = '{"key": "' + "x" * 250 + '"}'
+    text = f"The config is {json_payload} please help."
+    result = _strip_content_noise(text)
+    assert "[JSON_BLOCK]" in result
+    assert "please help" in result
+
+
+def test_strip_content_noise_keeps_short_json():
+    text = 'Set the field {"name": "test"} to that value.'
+    assert _strip_content_noise(text) == text
+
+
+def test_strip_content_noise_replaces_base64():
+    text = "The image is data:image/png;base64," + "A" * 200 + " please describe."
+    result = _strip_content_noise(text)
+    assert "[BASE64]" in result
+    assert "please describe" in result
+
+
+def test_strip_content_noise_code_block_takes_priority_over_json():
+    json_body = '{"key": "' + "x" * 250 + '"}'
+    text = f"```json\n{json_body}\n```"
+    result = _strip_content_noise(text)
+    assert result == "[CODE_BLOCK]"
+
+
+def test_strip_content_noise_preserves_plain_text():
+    text = "Please help me debug the authentication middleware."
+    assert _strip_content_noise(text) == text

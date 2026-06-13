@@ -298,6 +298,48 @@ def _truncate_message(text: str, max_chars: int = 800) -> str:
     return text[:max_chars] + f"[...truncated, {omitted} chars omitted]"
 
 
+_CODE_BLOCK_RE = re.compile(r"```[\s\S]*?```")
+_BASE64_RE = re.compile(r"[A-Za-z0-9+/=]{100,}")
+
+
+def _replace_long_json(text: str, min_length: int = 200) -> str:
+    result: list[str] = []
+    i = 0
+    while i < len(text):
+        if text[i] != "{":
+            result.append(text[i])
+            i += 1
+            continue
+        depth = 0
+        j = i
+        while j < len(text):
+            if text[j] == "{":
+                depth += 1
+            elif text[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    segment = text[i : j + 1]
+                    if len(segment) >= min_length and '"' in segment and ":" in segment:
+                        result.append("[JSON_BLOCK]")
+                    else:
+                        result.append(segment)
+                    j += 1
+                    break
+            j += 1
+        else:
+            result.append(text[i:])
+            break
+        i = j
+    return "".join(result)
+
+
+def _strip_content_noise(text: str) -> str:
+    text = _CODE_BLOCK_RE.sub("[CODE_BLOCK]", text)
+    text = _replace_long_json(text)
+    text = _BASE64_RE.sub("[BASE64]", text)
+    return text
+
+
 def _normalized_terms(values: list[str]) -> list[str]:
     seen: set[str] = set()
     normalized: list[str] = []
