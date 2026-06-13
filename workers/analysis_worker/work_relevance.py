@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -288,6 +289,13 @@ def _request_text_by_roles(messages: list[NormalizedMessage], roles: set[str]) -
         and message.role in roles
         and message.content_text
     ]
+
+
+def _truncate_message(text: str, max_chars: int = 800) -> str:
+    if len(text) <= max_chars:
+        return text
+    omitted = len(text) - max_chars
+    return text[:max_chars] + f"[...truncated, {omitted} chars omitted]"
 
 
 def _normalized_terms(values: list[str]) -> list[str]:

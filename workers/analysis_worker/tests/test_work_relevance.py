@@ -2,7 +2,7 @@ import work_relevance
 
 from llm_judge import LLMJudgeUnavailable
 from models import ContextCatalogEntry, NormalizedMessage, TraceCapturedJob
-from work_relevance import ANALYZER_VERSION, classify_work_relevance, extract_user_intent
+from work_relevance import ANALYZER_VERSION, classify_work_relevance, extract_user_intent, _truncate_message
 
 
 def job(**overrides):
@@ -529,3 +529,18 @@ def test_allow_llm_false_skips_judge_but_marks_enrichment_request_for_conflict()
     assert assessment.llm_judge_requested is True
     assert assessment.llm_judge_reason == "mixed_signals"
     assert not any(item.get("source") == "llm_judge" for item in assessment.evidence if isinstance(item, dict))
+
+
+def test_truncate_message_keeps_short_text():
+    assert _truncate_message("hello world") == "hello world"
+
+
+def test_truncate_message_truncates_at_limit():
+    text = "A" * 900
+    result = _truncate_message(text, max_chars=800)
+    assert result == "A" * 800 + "[...truncated, 100 chars omitted]"
+
+
+def test_truncate_message_keeps_text_at_exact_limit():
+    text = "A" * 800
+    assert _truncate_message(text, max_chars=800) == text
