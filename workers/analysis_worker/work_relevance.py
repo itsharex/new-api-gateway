@@ -268,10 +268,11 @@ def token_tier(total_tokens: int) -> str:
 
 
 def extract_user_intent(messages: list[NormalizedMessage], max_chars: int = MAX_INTENT_CHARS) -> ExtractedIntent:
-    relevant = _request_text_by_roles(messages, {"user"})
+    relevant = _filter_intent_messages(messages, {"user"})
     if not relevant:
-        relevant = _request_text_by_roles(messages, {"developer", "system"})
-    text = "\n".join(relevant).lower()
+        relevant = _filter_intent_messages(messages, {"developer", "system"})
+    cleaned = [_truncate_message(_strip_content_noise(t)) for t in relevant]
+    text = "\n".join(cleaned).lower()
     original_length = len(text)
     truncated = original_length > max_chars
     return ExtractedIntent(

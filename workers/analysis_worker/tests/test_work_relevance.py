@@ -646,3 +646,52 @@ def test_filter_intent_messages_keeps_all_when_three():
     msgs = [_msg("user", f"turn {i}") for i in range(3)]
     result = _filter_intent_messages(msgs, {"user"})
     assert result == ["turn 0", "turn 1", "turn 2"]
+
+
+def test_extract_user_intent_skips_tool_return_messages():
+    msgs = [
+        _msg("user", "Call the weather API"),
+        _msg("tool", '{"temperature": 22, "humidity": 65, "wind_speed": 10, "forecast": "sunny with light clouds"}', protocol_item_type="openai_chat_message"),
+        _msg("user", "What about tomorrow?"),
+    ]
+    intent = extract_user_intent(msgs)
+    assert "call the weather api" in intent.text
+    assert "temperature" not in intent.text
+    assert "what about tomorrow?" in intent.text
+
+
+def test_extract_user_intent_strips_code_blocks_from_text():
+    code = "def hello():\n    print('world')\n    return True"
+    msgs = [message(f"Review this:\n```python\n{code}\n```\nIs it correct?")]
+    intent = extract_user_intent(msgs)
+    assert "[code_block]" in intent.text
+    assert "is it correct?" in intent.text
+
+
+def test_extract_user_intent_strips_long_json_from_text():
+    json_payload = '{"data": "' + "x" * 300 + '", "meta": {"page": 1, "total": 500}}'
+    msgs = [message(f"Process this data: {json_payload}")]
+    intent = extract_user_intent(msgs)
+    assert "[json_block]" in intent.text
+
+
+def test_extract_user_intent_head_tail_selection():
+    msgs = [message(f"Turn {i} message") for i in range(10)]
+    intent = extract_user_intent(msgs)
+    assert "turn 0 message" in intent.text
+    assert "turn 1 message" in intent.text
+    assert "turn 2 message" in intent.text
+    assert "turn 7 message" in intent.text
+    assert "turn 8 message" in intent.text
+    assert "turn 9 message" in intent.text
+    assert "turn 4" not in intent.text
+    assert "turn 5" not in intent.text
+
+
+def test_extract_user_intent_truncates_long_single_message():
+    # Use mixed-case text to avoid base64 regex match
+    long_text = "Hello world. " * 70  # ~910 chars, well over 800 limit
+    msgs = [message(long_text)]
+    intent = extract_user_intent(msgs, max_chars=2000)
+    assert intent.text.endswith("chars omitted]")
+    assert len(intent.text) < len(long_text)
