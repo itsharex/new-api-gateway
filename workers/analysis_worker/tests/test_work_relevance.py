@@ -2,7 +2,7 @@ import work_relevance
 
 from llm_judge import LLMJudgeUnavailable
 from models import ContextCatalogEntry, NormalizedMessage, TraceCapturedJob
-from work_relevance import ANALYZER_VERSION, classify_work_relevance, extract_user_intent, _truncate_message, _strip_content_noise
+from work_relevance import ANALYZER_VERSION, classify_work_relevance, extract_user_intent, _truncate_message, _strip_content_noise, _filter_intent_messages
 
 
 def job(**overrides):
@@ -582,3 +582,67 @@ def test_strip_content_noise_code_block_takes_priority_over_json():
 def test_strip_content_noise_preserves_plain_text():
     text = "Please help me debug the authentication middleware."
     assert _strip_content_noise(text) == text
+
+
+def _msg(
+    role: str,
+    text: str,
+    direction: str = "request",
+    protocol_item_type: str = "openai_chat_message",
+) -> NormalizedMessage:
+    return NormalizedMessage(
+        trace_id="t",
+        direction=direction,
+        sequence_index=0,
+        role=role,
+        modality="text",
+        content_text=text,
+        content_text_hash="h",
+        media_url="",
+        source_path="request.messages[0]",
+        protocol_item_type=protocol_item_type,
+        token_count_estimate=1,
+        metadata={},
+    )
+
+
+def test_filter_intent_messages_returns_user_text():
+    msgs = [
+        _msg("user", "hello"),
+        _msg("assistant", "world", direction="response"),
+    ]
+    assert _filter_intent_messages(msgs, {"user"}) == ["hello"]
+
+
+def test_filter_intent_messages_skips_base64_media():
+    msgs = [
+        _msg("user", "describe this", protocol_item_type="base64_media"),
+        _msg("user", "debug the handler"),
+    ]
+    assert _filter_intent_messages(msgs, {"user"}) == ["debug the handler"]
+
+
+def test_filter_intent_messages_skips_base64_media_extracted():
+    msgs = [
+        _msg("user", "analyze image", protocol_item_type="base64_media_extracted"),
+        _msg("user", "fix the bug"),
+    ]
+    assert _filter_intent_messages(msgs, {"user"}) == ["fix the bug"]
+
+
+def test_filter_intent_messages_head_and_tail_selection():
+    msgs = [_msg("user", f"turn {i}") for i in range(10)]
+    result = _filter_intent_messages(msgs, {"user"})
+    assert result == ["turn 0", "turn 1", "turn 2", "turn 7", "turn 8", "turn 9"]
+
+
+def test_filter_intent_messages_keeps_all_when_few():
+    msgs = [_msg("user", f"turn {i}") for i in range(4)]
+    result = _filter_intent_messages(msgs, {"user"})
+    assert result == ["turn 0", "turn 1", "turn 2", "turn 3"]
+
+
+def test_filter_intent_messages_keeps_all_when_three():
+    msgs = [_msg("user", f"turn {i}") for i in range(3)]
+    result = _filter_intent_messages(msgs, {"user"})
+    assert result == ["turn 0", "turn 1", "turn 2"]

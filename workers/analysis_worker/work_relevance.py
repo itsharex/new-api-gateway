@@ -340,6 +340,29 @@ def _strip_content_noise(text: str) -> str:
     return text
 
 
+_SKIP_INTENT_TYPES = frozenset({"base64_media", "base64_media_extracted"})
+
+
+def _filter_intent_messages(
+    messages: list[NormalizedMessage],
+    roles: set[str],
+    max_head: int = 3,
+    max_tail: int = 3,
+) -> list[str]:
+    texts = [
+        m.content_text
+        for m in messages
+        if m.direction == "request"
+        and m.role in roles
+        and m.protocol_item_type not in _SKIP_INTENT_TYPES
+        and m.content_text
+    ]
+    if len(texts) <= max_head + max_tail:
+        return texts
+    indices = set(range(max_head)) | set(range(len(texts) - max_tail, len(texts)))
+    return [texts[i] for i in sorted(indices)]
+
+
 def _normalized_terms(values: list[str]) -> list[str]:
     seen: set[str] = set()
     normalized: list[str] = []
