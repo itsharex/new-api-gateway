@@ -339,6 +339,12 @@ def text_hash(value: str) -> str:
     return sha256(value.encode("utf-8")).hexdigest()
 
 
+def message_key(role: str, modality: str, content_text: str) -> str:
+    parts = [role.encode("utf-8"), modality.encode("utf-8"), content_text.encode("utf-8")]
+    payload = b"".join(f"{len(p)}:".encode() + p for p in parts)
+    return sha256(payload).hexdigest()
+
+
 def bucket_start_hour(value: str) -> str:
     if not value:
         return datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0).isoformat()
