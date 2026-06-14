@@ -37,7 +37,7 @@
 - Modify: `workers/analysis_worker/models.py`（在 `text_hash()` 附近新增函数）
 - Test: `workers/analysis_worker/tests/test_models.py`
 
-**Background:** 现有 `text_hash()` 在 `models.py:338` 是 `sha256(content_text.encode("utf-8")).hexdigest()`。新增的 `message_key()` 需要对 `(role, modality, content_text)` 三元组哈希，用 `\x00` 分隔避免歧义。
+**Background:** 现有 `text_hash()` 在 `models.py:338` 是 `sha256(content_text.encode("utf-8")).hexdigest()`。新增的 `message_key()` 需要对 `(role, modality, content_text)` 三元组哈希。使用**长度前缀**编码（`len(field):field`）而非简单分隔符，保证对任意输入（包括字段值含分隔字符的退化场景）无歧义。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -66,8 +66,10 @@ def test_message_key_differs_by_content():
     assert message_key("user", "text", "hi") != message_key("user", "text", "hello")
 
 
-def test_message_key_null_byte_delimiter_prevents_collision():
-    # 如果不用分隔符，("a\x00b", "c") 和 ("a", "b\x00c") 会哈希到同一值
+def test_message_key_length_prefix_prevents_collision():
+    # 字段值含分隔字符 ":": ("a:b", "c") 与 ("a", ":b" 不冲突)
+    # 字段值含 null byte: ("a\x00b", "c", "x") 与 ("a", "b\x00c", "x") 不冲突
+    assert message_key("a:b", "c", "x") != message_key("a", ":b", "x")
     assert message_key("a\x00b", "c", "x") != message_key("a", "b\x00c", "x")
 ```
 
@@ -83,11 +85,12 @@ Expected: FAIL with `ImportError: cannot import name 'message_key' from 'models'
 
 ```python
 def message_key(role: str, modality: str, content_text: str) -> str:
-    payload = f"{role}\x00{modality}\x00{content_text}".encode("utf-8")
+    parts = [role.encode("utf-8"), modality.encode("utf-8"), content_text.encode("utf-8")]
+    payload = b"".join(f"{len(p)}:".encode() + p for p in parts)
     return sha256(payload).hexdigest()
 ```
 
-`sha256` 已经在文件顶部导入（`text_hash()` 在用）。
+`sha256` 已经在文件顶部导入（`text_hash()` 在用）。长度前缀编码保证对任意输入无歧义：每个字段以 `<字节长度>:` 开头，再跟字段内容本身，即使字段值含 `:` 或 `\x00` 也不会与其他三元组产生相同 payload。
 
 - [ ] **Step 4: 跑测试确认通过**
 

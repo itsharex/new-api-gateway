@@ -30,7 +30,7 @@
 
 | 决定 | 选择 | 理由 |
 |---|---|---|
-| dedup key | `sha256(role + '\0' + modality + '\0' + content_text)` | 同文本不同角色/模态仍是不同消息；位置/元数据（trace_id、sequence_index、source_path、metadata_json）不进 key |
+| dedup key | `sha256(len-prefixed(role, modality, content_text))` | 同文本不同角色/模态仍是不同消息；位置/元数据（trace_id、sequence_index、source_path、metadata_json）不进 key。长度前缀编码（如 `b"".join(f"{len(p)}:".encode() + p for p in parts)`）保证对任意输入无歧义，包括字段值本身包含分隔字符的退化场景 |
 | 历史数据 | 删除，不 backfill | 历史数据可丢弃；避免 backfill 复杂度 |
 | 旧表处理 | 直接 DROP，建立同名视图 | 视图对 admin 读路径完全透明 |
 | `messages.occurrence_count` 字段 | 加入 | 监控 dedup 命中率、调试、未来扩展（注：当前 `repeated_prompt` 规则只是 `anomaly_rules` 表里的死配置，worker 没有实现该规则的 analyzer，本 spec 不依赖此规则） |
@@ -57,7 +57,7 @@ CREATE INDEX idx_messages_content_hash ON messages(content_text_hash);
 CREATE INDEX idx_messages_role_modality ON messages(role, modality);
 ```
 
-- `message_key` = `sha256(role || '\x00' || modality || '\x00' || content_text)`，由 worker 在写入前计算（沿用现有 `text_hash` 模式，扩展为三元组）
+- `message_key` = `sha256(len(role_b) + b":" + role_b + len(modality_b) + b":" + modality_b + len(content_b) + b":" + content_b)`，其中各部分按 UTF-8 编码为 bytes。长度前缀保证对任意输入（包括字段值含分隔字符）无歧义。由 worker 在写入前计算（沿用现有 `text_hash` 模式，扩展为三元组）
 - `content_text_hash` 保留 `sha256(content_text)` 单值，用于 diagnostics 和向后兼容字段名
 - `occurrence_count`：每次新 trace 引用此消息时 +1，是 dedup 命中率监控的关键字段，也方便调试（"这条消息被多少 trace 引用过"）。**注**：当前 `repeated_prompt` 规则在 `anomaly_rules` 表里有定义但 worker 没实现对应 analyzer，本字段不被任何规则消费；如果未来实现该规则，可直接走 `messages.occurrence_count` 索引。
 
