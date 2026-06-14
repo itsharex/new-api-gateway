@@ -130,6 +130,7 @@ def test_repository_inserts_messages_results_aggregates_anomalies_and_coverage()
         protocol_item_type="openai_chat_message",
         token_count_estimate=2,
         metadata={"protocol_family": "openai_chat"},
+        message_key="test_key",
     )
     result = AnalysisResult(
         trace_id="trace_1",
@@ -277,6 +278,7 @@ def test_save_trace_analysis_writes_trace_usage_fact_instead_of_usage_aggregate_
         protocol_item_type="openai_chat_message",
         token_count_estimate=2,
         metadata={"protocol_family": "openai_chat"},
+        message_key="test_key",
     )
     result = AnalysisResult(
         trace_id="trace_1",
@@ -475,6 +477,7 @@ def test_repository_queues_media_snapshot_jobs_for_media_urls():
         protocol_item_type="media_url",
         token_count_estimate=0,
         metadata={"protocol_family": "openai_chat"},
+        message_key="test_key",
     )
 
     repo.save_trace_analysis([media_message], [], [], [], [])
@@ -510,6 +513,7 @@ def test_repository_skips_obvious_non_http_media_urls():
         protocol_item_type="media_url",
         token_count_estimate=0,
         metadata={"protocol_family": "openai_chat"},
+        message_key="test_key",
     )
 
     repo.save_trace_analysis([media_message], [], [], [], [])

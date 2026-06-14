@@ -135,6 +135,7 @@ class NormalizedMessage:
     protocol_item_type: str
     token_count_estimate: int
     metadata: dict[str, Any]
+    message_key: str
 
 
 @dataclass(frozen=True)
