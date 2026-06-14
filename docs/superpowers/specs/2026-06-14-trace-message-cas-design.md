@@ -127,56 +127,61 @@ def message_key(role: str, modality: str, content_text: str) -> str:
 
 ### `workers/analysis_worker/repository.py:242-272`
 
-把当前的单条 INSERT 改为两步写入：
+把当前的单条 INSERT 改为三步写入（关键的幂等性设计：仅在创建**新的** trace_messages 关联、且 canonical 行已存在时才递增 `occurrence_count`）：
 
 ```python
 for message in messages:
+    # 第 1 步：尝试插入新 canonical 行；DO NOTHING 不更新内容，命中时 RETURNING 返回 None
     cursor.execute("""
         INSERT INTO messages (
             message_key, role, modality, content_text,
             content_text_hash, token_count_estimate, first_trace_id
         )
         VALUES (%s,%s,%s,%s,%s,%s,%s)
-        ON CONFLICT (message_key)
-        DO UPDATE SET occurrence_count = messages.occurrence_count + 1
+        ON CONFLICT (message_key) DO NOTHING
         RETURNING message_id
-    """, (
-        message.message_key,
-        message.role,
-        message.modality,
-        message.content_text,
-        message.content_text_hash,
-        message.token_count_estimate,
-        message.trace_id,
-    ))
-    message_id = cursor.fetchone()[0]
-
-    cursor.execute("""
-        INSERT INTO trace_messages (
-            trace_id, message_id, direction, sequence_index,
-            source_path, protocol_item_type, media_url,
-            media_object_id, metadata_json
+    """, (...))
+    row = cursor.fetchone()
+    if row is not None:
+        message_id = row[0]
+        messages_row_is_new = True  # 新 canonical 行，occurrence_count 已经从 schema 默认值 1 开始
+    else:
+        # 第 2 步：canonical 行已存在，按 key 查 message_id
+        cursor.execute(
+            "SELECT message_id FROM messages WHERE message_key = %s",
+            (message.message_key,),
         )
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+        message_id = cursor.fetchone()[0]
+        messages_row_is_new = False
+
+    # 第 3 步：尝试插入 trace_messages 关联；DO NOTHING，命中时 RETURNING 返回 None
+    cursor.execute("""
+        INSERT INTO trace_messages (...) VALUES (...)
         ON CONFLICT (trace_id, direction, sequence_index, source_path)
         DO NOTHING
-    """, (
-        message.trace_id,
-        message_id,
-        message.direction,
-        message.sequence_index,
-        message.source_path,
-        message.protocol_item_type,
-        message.media_url,
-        message.media_object_id,
-        json.dumps(message.metadata, sort_keys=True),
-    ))
+        RETURNING message_id
+    """, (...))
+    tm_row = cursor.fetchone()
+
+    # 第 4 步：仅当 (a) 新建了 trace_messages 关联 AND (b) canonical 行非新建时，才递增
+    if tm_row is not None and not messages_row_is_new:
+        cursor.execute(
+            "UPDATE messages SET occurrence_count = occurrence_count + 1 WHERE message_id = %s",
+            (message_id,),
+        )
 ```
 
+**4 种场景的正确行为**：
+- 新 canonical + 新关联 → `messages_row_is_new=True`，UPDATE 跳过，count 保持 1（schema 默认） ✓
+- 已存在 canonical + 新关联 → `messages_row_is_new=False`、`tm_row` 命中，UPDATE 触发，count +1 ✓
+- 已存在 canonical + 重试（关联已存在） → `tm_row` 为 None（PK 冲突 DO NOTHING），UPDATE 跳过 ✓
+- 并发处理同一 trace → 输的 worker 同时命中两个 PK 冲突，UPDATE 跳过 ✓
+        message_id,
 关键语义：
-- `messages` 表 INSERT 命中 `ON CONFLICT` 时**只递增 occurrence_count**，不覆盖 content。canonical 消息是不可变的。
+- `messages` 表 canonical 内容**首次写入后不可变**（`ON CONFLICT DO NOTHING`），不覆盖 content。
 - `trace_messages` 表 INSERT 命中主键冲突时 `DO NOTHING`。同一 trace 重处理（重试/重放）不会重复挂关联。
-- 两条 SQL 在同一事务内执行（调用方已开启事务）。
+- `occurrence_count` 仅在创建**新的** trace_messages 关联且 canonical 行已存在时递增；重试和并发同 trace 都不递增。
+- 多条 SQL 在同一事务内执行（调用方已开启事务）。
 
 **First-writer-wins 语义**：`token_count_estimate`、`modality` 等字段在 `messages` 表里首次写入后不再更新。理论上同一 `(role, modality, content_text)` 三元组在 worker 不同版本下应产出相同字段值；如果未来 token_count 估计算法升级，老消息的 estimate 保持首次写入时的值（不会回填）。这是可接受的：`token_count_estimate` 只是估算，不参与 trace 级别聚合（聚合走 usage_aggregates，来自 LLM 上游返回的真实 token 数）。
 
