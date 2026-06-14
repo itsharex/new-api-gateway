@@ -87,9 +87,13 @@ class FakeCursor:
         self.executed = []
         self.fetch_values = list(fetch_values or [])
         self.fetchall_rows = list(fetchall_rows or [])
+        self._next_message_id = 1
 
     def execute(self, query, params):
         self.executed.append((query, params))
+        if "RETURNING message_id" in query:
+            self.fetch_values = [(self._next_message_id,)] + self.fetch_values
+            self._next_message_id += 1
 
     def fetchone(self):
         if not self.fetch_values:
@@ -228,7 +232,12 @@ def test_repository_inserts_messages_results_aggregates_anomalies_and_coverage()
     repo.save_trace_analysis([message], [result, work_relevance_result], [aggregate], [anomaly], [coverage])
 
     queries = "\n".join(query for query, _ in conn.cursor_obj.executed)
-    assert "INSERT INTO normalized_messages" in queries
+    assert "INSERT INTO messages" in queries
+    assert "INSERT INTO trace_messages" in queries
+    assert "INSERT INTO normalized_messages" not in queries
+    assert "occurrence_count = messages.occurrence_count + 1" in queries
+    assert "ON CONFLICT (trace_id, direction, sequence_index, source_path)" in queries
+    assert "DO NOTHING" in queries
     assert "INSERT INTO analysis_results" in queries
     assert "INSERT INTO trace_usage_facts" in queries
     assert "INSERT INTO usage_aggregates" not in queries

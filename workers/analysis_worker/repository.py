@@ -241,34 +241,46 @@ class PostgresAnalysisRepository:
         for message in messages:
             cursor.execute(
                 """
-                INSERT INTO normalized_messages (
-                    trace_id, direction, sequence_index, role, modality,
-                    content_text, content_text_hash, media_url, source_path,
-                    protocol_item_type, token_count_estimate, metadata_json
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
-                ON CONFLICT (trace_id, direction, sequence_index, source_path)
-                DO UPDATE SET
-                    role = EXCLUDED.role,
-                    modality = EXCLUDED.modality,
-                    content_text = EXCLUDED.content_text,
-                    content_text_hash = EXCLUDED.content_text_hash,
-                    media_url = EXCLUDED.media_url,
-                    protocol_item_type = EXCLUDED.protocol_item_type,
-                    token_count_estimate = EXCLUDED.token_count_estimate,
-                    metadata_json = EXCLUDED.metadata_json
+                INSERT INTO messages (
+                    message_key, role, modality, content_text,
+                    content_text_hash, token_count_estimate, first_trace_id
+                )
+                VALUES (%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (message_key)
+                DO UPDATE SET occurrence_count = messages.occurrence_count + 1
+                RETURNING message_id
                 """,
                 (
-                    message.trace_id,
-                    message.direction,
-                    message.sequence_index,
+                    message.message_key,
                     message.role,
                     message.modality,
                     message.content_text,
                     message.content_text_hash,
-                    message.media_url,
+                    message.token_count_estimate,
+                    message.trace_id,
+                ),
+            )
+            message_id = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                INSERT INTO trace_messages (
+                    trace_id, message_id, direction, sequence_index,
+                    source_path, protocol_item_type, media_url,
+                    media_object_id, metadata_json
+                )
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+                ON CONFLICT (trace_id, direction, sequence_index, source_path)
+                DO NOTHING
+                """,
+                (
+                    message.trace_id,
+                    message_id,
+                    message.direction,
+                    message.sequence_index,
                     message.source_path,
                     message.protocol_item_type,
-                    message.token_count_estimate,
+                    message.media_url,
+                    None,
                     json.dumps(message.metadata, sort_keys=True),
                 ),
             )
