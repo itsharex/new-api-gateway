@@ -107,6 +107,7 @@ def test_no_coverage_alert_when_messages_exist():
         protocol_item_type="openai_chat_message",
         token_count_estimate=2,
         metadata={},
+        message_key="test_key",
     )
 
     assert detect_coverage_alerts(job(), [message]) == []
@@ -236,6 +237,7 @@ def test_legacy_prompt_and_aggregate_signals_no_longer_emit_anomalies():
             protocol_item_type="openai_chat_message",
             token_count_estimate=4,
             metadata={},
+            message_key="test_key",
         )
         for index in range(3)
     ]

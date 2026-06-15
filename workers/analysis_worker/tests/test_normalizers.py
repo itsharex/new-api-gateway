@@ -622,3 +622,43 @@ def test_claude_source_base64_without_extraction_context_returns_base64_media():
 
     image_msg = [m for m in messages if m.modality == "image"][0]
     assert image_msg.protocol_item_type == "base64_media"
+
+
+from models import message_key
+
+
+def test_normalize_openai_chat_populates_message_key():
+    test_job = job("openai_chat")
+    body = json.dumps({
+        "model": "gpt-4.1",
+        "messages": [{"role": "user", "content": "hello"}],
+    })
+    messages, _ = normalize_json_trace(test_job, body, "{}")
+    assert len(messages) == 1
+    expected_key = message_key("user", "text", "hello")
+    assert messages[0].message_key == expected_key
+
+
+def test_with_sequence_index_preserves_message_key():
+    from models import NormalizedMessage, text_hash
+    from normalizers import _with_sequence_index
+
+    original = NormalizedMessage(
+        trace_id="trace_1",
+        direction="request",
+        sequence_index=0,
+        role="user",
+        modality="text",
+        content_text="hi",
+        content_text_hash=text_hash("hi"),
+        message_key=message_key("user", "text", "hi"),
+        media_url="",
+        source_path="request.messages[0]",
+        protocol_item_type="openai_chat_message",
+        token_count_estimate=1,
+        metadata={},
+    )
+    updated = _with_sequence_index(original, sequence_index=5)
+    assert updated.sequence_index == 5
+    assert updated.message_key == original.message_key
+    assert updated.content_text == original.content_text

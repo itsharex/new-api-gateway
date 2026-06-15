@@ -135,6 +135,7 @@ class NormalizedMessage:
     protocol_item_type: str
     token_count_estimate: int
     metadata: dict[str, Any]
+    message_key: str
 
 
 @dataclass(frozen=True)
@@ -337,6 +338,12 @@ def parse_job(line: str) -> TraceCapturedJob:
 
 def text_hash(value: str) -> str:
     return sha256(value.encode("utf-8")).hexdigest()
+
+
+def message_key(role: str, modality: str, content_text: str) -> str:
+    parts = [role.encode("utf-8"), modality.encode("utf-8"), content_text.encode("utf-8")]
+    payload = b"".join(f"{len(p)}:".encode() + p for p in parts)
+    return sha256(payload).hexdigest()
 
 
 def bucket_start_hour(value: str) -> str:

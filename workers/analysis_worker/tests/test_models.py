@@ -261,3 +261,32 @@ def test_analysis_context_defaults_preserve_legacy_rule_fields():
     assert ctx.repeated_prompt_threshold == 3
     assert ctx.model_baselines is None
     assert ctx.baseline_computed_at is None
+
+
+from models import message_key
+
+
+def test_message_key_is_deterministic_for_same_inputs():
+    k1 = message_key("user", "text", "hello")
+    k2 = message_key("user", "text", "hello")
+    assert k1 == k2
+    assert len(k1) == 64  # sha256 hex
+
+
+def test_message_key_differs_by_role():
+    assert message_key("user", "text", "hi") != message_key("assistant", "text", "hi")
+
+
+def test_message_key_differs_by_modality():
+    assert message_key("user", "text", "hi") != message_key("user", "audio", "hi")
+
+
+def test_message_key_differs_by_content():
+    assert message_key("user", "text", "hi") != message_key("user", "text", "hello")
+
+
+def test_message_key_length_prefix_prevents_collision():
+    # 字段值含分隔字符 ":": ("a:b", "c") 与 ("a", ":b" 不冲突)
+    # 字段值含 null byte: ("a\x00b", "c", "x") 与 ("a", "b\x00c", "x") 不冲突
+    assert message_key("a:b", "c", "x") != message_key("a", ":b", "x")
+    assert message_key("a\x00b", "c", "x") != message_key("a", "b\x00c", "x")

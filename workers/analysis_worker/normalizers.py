@@ -2,7 +2,7 @@ import json
 from typing import Any
 
 from media_extraction import MediaExtractionContext
-from models import AnalysisResult, NormalizedMessage, TraceCapturedJob, text_hash
+from models import AnalysisResult, NormalizedMessage, TraceCapturedJob, message_key, text_hash
 
 
 ANALYZER_VERSION = "normalizer_mvp_2026_04_28"
@@ -506,6 +506,7 @@ def _message(
         protocol_item_type=protocol_item_type,
         token_count_estimate=max(1, len(content_text.split())) if content_text else 0,
         metadata={"route_pattern": job.route_pattern, "protocol_family": job.protocol_family},
+        message_key=message_key(role, modality, content_text),
     )
 
 
@@ -523,6 +524,7 @@ def _with_sequence_index(message: NormalizedMessage, sequence_index: int) -> Nor
         protocol_item_type=message.protocol_item_type,
         token_count_estimate=message.token_count_estimate,
         metadata=message.metadata,
+        message_key=message.message_key,
     )
 
 

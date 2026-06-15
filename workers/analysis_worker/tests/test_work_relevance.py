@@ -34,6 +34,7 @@ def message(text: str) -> NormalizedMessage:
         protocol_item_type="openai_chat_message",
         token_count_estimate=10,
         metadata={},
+        message_key="test_key",
     )
 
 
@@ -56,6 +57,7 @@ def request_message(
         protocol_item_type=protocol_item_type,
         token_count_estimate=10,
         metadata={},
+        message_key="test_key",
     )
 
 
@@ -73,6 +75,7 @@ def response_message(text: str) -> NormalizedMessage:
         protocol_item_type="openai_chat_message",
         token_count_estimate=10,
         metadata={},
+        message_key="test_key",
     )
 
 
@@ -603,6 +606,7 @@ def _msg(
         protocol_item_type=protocol_item_type,
         token_count_estimate=1,
         metadata={},
+        message_key="test_key",
     )
 
 

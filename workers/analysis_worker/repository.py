@@ -239,39 +239,89 @@ class PostgresAnalysisRepository:
         cursor = self.connection.cursor()
         trace_ids = {m.trace_id for m in messages} | {r.trace_id for r in results}
         for message in messages:
+            # Step 1: Try to insert a new canonical messages row. DO NOTHING on
+            # conflict so existing canonical rows keep their immutable content
+            # fields; occurrence_count is NOT bumped here (it would inflate on
+            # retry / concurrent-same-trace).
             cursor.execute(
                 """
-                INSERT INTO normalized_messages (
-                    trace_id, direction, sequence_index, role, modality,
-                    content_text, content_text_hash, media_url, source_path,
-                    protocol_item_type, token_count_estimate, metadata_json
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
-                ON CONFLICT (trace_id, direction, sequence_index, source_path)
-                DO UPDATE SET
-                    role = EXCLUDED.role,
-                    modality = EXCLUDED.modality,
-                    content_text = EXCLUDED.content_text,
-                    content_text_hash = EXCLUDED.content_text_hash,
-                    media_url = EXCLUDED.media_url,
-                    protocol_item_type = EXCLUDED.protocol_item_type,
-                    token_count_estimate = EXCLUDED.token_count_estimate,
-                    metadata_json = EXCLUDED.metadata_json
+                INSERT INTO messages (
+                    message_key, role, modality, content_text,
+                    content_text_hash, token_count_estimate, first_trace_id
+                )
+                VALUES (%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (message_key) DO NOTHING
+                RETURNING message_id
                 """,
                 (
-                    message.trace_id,
-                    message.direction,
-                    message.sequence_index,
+                    message.message_key,
                     message.role,
                     message.modality,
                     message.content_text,
                     message.content_text_hash,
-                    message.media_url,
+                    message.token_count_estimate,
+                    message.trace_id,
+                ),
+            )
+            row = cursor.fetchone()
+            if row is not None:
+                # New canonical message; occurrence_count starts at 1 from the
+                # schema default. No further increment needed.
+                message_id = row[0]
+                messages_row_is_new = True
+            else:
+                # Existing canonical message; look up id, conditionally
+                # increment occurrence_count below if a NEW trace association
+                # is created.
+                cursor.execute(
+                    "SELECT message_id FROM messages WHERE message_key = %s",
+                    (message.message_key,),
+                )
+                message_id = cursor.fetchone()[0]
+                messages_row_is_new = False
+
+            # Step 2: Try to insert the trace association. DO NOTHING on
+            # conflict so retry / concurrent-same-trace is a no-op.
+            cursor.execute(
+                """
+                INSERT INTO trace_messages (
+                    trace_id, message_id, direction, sequence_index,
+                    source_path, protocol_item_type, media_url,
+                    media_object_id, metadata_json
+                )
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+                ON CONFLICT (trace_id, direction, sequence_index, source_path)
+                DO NOTHING
+                RETURNING message_id
+                """,
+                (
+                    message.trace_id,
+                    message_id,
+                    message.direction,
+                    message.sequence_index,
                     message.source_path,
                     message.protocol_item_type,
-                    message.token_count_estimate,
+                    message.media_url,
+                    None,
                     json.dumps(message.metadata, sort_keys=True),
                 ),
             )
+            tm_row = cursor.fetchone()
+
+            # Step 3: Only increment occurrence_count when a NEW trace_messages
+            # association was actually created AND the canonical messages row
+            # pre-existed (a brand-new canonical row already has count=1 from
+            # the schema default). Retry / concurrent-same-trace hits the PK
+            # conflict on trace_messages, so tm_row is None and we skip.
+            if tm_row is not None and not messages_row_is_new:
+                cursor.execute(
+                    """
+                    UPDATE messages
+                    SET occurrence_count = occurrence_count + 1
+                    WHERE message_id = %s
+                    """,
+                    (message_id,),
+                )
         for message in messages:
             if not _is_snapshot_queue_candidate(message.media_url):
                 continue

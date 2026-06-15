@@ -87,9 +87,42 @@ class FakeCursor:
         self.executed = []
         self.fetch_values = list(fetch_values or [])
         self.fetchall_rows = list(fetchall_rows or [])
+        self._next_message_id = 1
+        # Map message_key -> synthesized message_id for SELECT-fallback path
+        # used by the corrected 3-statement CAS insert. Existing keys reuse
+        # their id (simulating a row that already exists).
+        self._known_message_ids: dict[str, int] = {}
 
     def execute(self, query, params):
         self.executed.append((query, params))
+        if "RETURNING message_id" in query and "INSERT INTO messages" in query:
+            # New canonical row path: return synthesized id and record it so
+            # subsequent inserts for the same key look like a conflict
+            # (FakeCursor returns None for the INSERT-fallback, then the
+            # SELECT-fallback returns the previously assigned id).
+            message_key = params[0]
+            if message_key in self._known_message_ids:
+                # Second insert with same key: simulate DO NOTHING returning no row.
+                self.fetch_values = [None] + self.fetch_values
+            else:
+                new_id = self._next_message_id
+                self._next_message_id += 1
+                self._known_message_ids[message_key] = new_id
+                self.fetch_values = [(new_id,)] + self.fetch_values
+        elif "RETURNING message_id" in query and "INSERT INTO trace_messages" in query:
+            # trace_messages association insert: simulate "new association" by
+            # returning a row; existing tests don't drive retry through the
+            # FakeCursor, so we always treat it as a fresh association.
+            self.fetch_values = [(self._next_message_id,)] + self.fetch_values
+            self._next_message_id += 1
+        elif "SELECT message_id FROM messages WHERE message_key" in query:
+            # Fallback lookup for an already-existing canonical row.
+            message_key = params[0]
+            known_id = self._known_message_ids.get(message_key, self._next_message_id)
+            if message_key not in self._known_message_ids:
+                self._next_message_id += 1
+                self._known_message_ids[message_key] = known_id
+            self.fetch_values = [(known_id,)] + self.fetch_values
 
     def fetchone(self):
         if not self.fetch_values:
@@ -130,6 +163,7 @@ def test_repository_inserts_messages_results_aggregates_anomalies_and_coverage()
         protocol_item_type="openai_chat_message",
         token_count_estimate=2,
         metadata={"protocol_family": "openai_chat"},
+        message_key="test_key",
     )
     result = AnalysisResult(
         trace_id="trace_1",
@@ -184,6 +218,7 @@ def test_repository_inserts_messages_results_aggregates_anomalies_and_coverage()
         cached_tokens=3,
         request_body_bytes=0,
         response_body_bytes=0,
+        trace_id="trace_1",
     )
     anomaly = AnomalyAlert(
         anomaly_id="anom_high_trace_tokens_abc",
@@ -224,10 +259,52 @@ def test_repository_inserts_messages_results_aggregates_anomalies_and_coverage()
         affected_user_count=1,
     )
 
-    repo.save_trace_analysis([message], [result, work_relevance_result], [aggregate], [anomaly], [coverage])
+    # Second message reuses the same message_key (same role/modality/content)
+    # but comes from a different trace. This exercises the second-statement
+    # SELECT-fallback path of the corrected CAS insert and verifies the
+    # conditional UPDATE messages ... occurrence_count += 1 fires only when
+    # the canonical row pre-existed and a new trace_messages association is
+    # created.
+    message_dedup = NormalizedMessage(
+        trace_id="trace_2",
+        direction="request",
+        sequence_index=0,
+        role="user",
+        modality="text",
+        content_text="Summarize incident",
+        content_text_hash="abc",
+        media_url="",
+        source_path="request.messages[0]",
+        protocol_item_type="openai_chat_message",
+        token_count_estimate=2,
+        metadata={"protocol_family": "openai_chat"},
+        message_key="test_key",
+    )
+
+    repo.save_trace_analysis(
+        [message, message_dedup],
+        [result, work_relevance_result],
+        [aggregate],
+        [anomaly],
+        [coverage],
+    )
 
     queries = "\n".join(query for query, _ in conn.cursor_obj.executed)
-    assert "INSERT INTO normalized_messages" in queries
+    # Verify corrected 3-statement pattern: messages DO NOTHING + conditional
+    # UPDATE only when a new trace_messages association is created.
+    assert "INSERT INTO messages" in queries
+    assert "ON CONFLICT (message_key) DO NOTHING" in queries
+    # Second message hits the canonical-row conflict, so the SELECT-fallback
+    # path is exercised.
+    assert "SELECT message_id FROM messages WHERE message_key" in queries
+    assert "INSERT INTO trace_messages" in queries
+    assert "ON CONFLICT (trace_id, direction, sequence_index, source_path)" in queries
+    assert "DO NOTHING" in queries
+    assert "UPDATE messages" in queries
+    assert "SET occurrence_count = occurrence_count + 1" in queries
+    # Old (incorrect) pattern must NOT be present
+    assert "INSERT INTO normalized_messages" not in queries
+    assert "DO UPDATE SET occurrence_count = messages.occurrence_count + 1" not in queries
     assert "INSERT INTO analysis_results" in queries
     assert "INSERT INTO trace_usage_facts" in queries
     assert "INSERT INTO usage_aggregates" not in queries
@@ -277,6 +354,7 @@ def test_save_trace_analysis_writes_trace_usage_fact_instead_of_usage_aggregate_
         protocol_item_type="openai_chat_message",
         token_count_estimate=2,
         metadata={"protocol_family": "openai_chat"},
+        message_key="test_key",
     )
     result = AnalysisResult(
         trace_id="trace_1",
@@ -475,6 +553,7 @@ def test_repository_queues_media_snapshot_jobs_for_media_urls():
         protocol_item_type="media_url",
         token_count_estimate=0,
         metadata={"protocol_family": "openai_chat"},
+        message_key="test_key",
     )
 
     repo.save_trace_analysis([media_message], [], [], [], [])
@@ -510,6 +589,7 @@ def test_repository_skips_obvious_non_http_media_urls():
         protocol_item_type="media_url",
         token_count_estimate=0,
         metadata={"protocol_family": "openai_chat"},
+        message_key="test_key",
     )
 
     repo.save_trace_analysis([media_message], [], [], [], [])

@@ -37,7 +37,7 @@
 - Modify: `workers/analysis_worker/models.py`（在 `text_hash()` 附近新增函数）
 - Test: `workers/analysis_worker/tests/test_models.py`
 
-**Background:** 现有 `text_hash()` 在 `models.py:338` 是 `sha256(content_text.encode("utf-8")).hexdigest()`。新增的 `message_key()` 需要对 `(role, modality, content_text)` 三元组哈希，用 `\x00` 分隔避免歧义。
+**Background:** 现有 `text_hash()` 在 `models.py:338` 是 `sha256(content_text.encode("utf-8")).hexdigest()`。新增的 `message_key()` 需要对 `(role, modality, content_text)` 三元组哈希。使用**长度前缀**编码（`len(field):field`）而非简单分隔符，保证对任意输入（包括字段值含分隔字符的退化场景）无歧义。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -66,8 +66,10 @@ def test_message_key_differs_by_content():
     assert message_key("user", "text", "hi") != message_key("user", "text", "hello")
 
 
-def test_message_key_null_byte_delimiter_prevents_collision():
-    # 如果不用分隔符，("a\x00b", "c") 和 ("a", "b\x00c") 会哈希到同一值
+def test_message_key_length_prefix_prevents_collision():
+    # 字段值含分隔字符 ":": ("a:b", "c") 与 ("a", ":b" 不冲突)
+    # 字段值含 null byte: ("a\x00b", "c", "x") 与 ("a", "b\x00c", "x") 不冲突
+    assert message_key("a:b", "c", "x") != message_key("a", ":b", "x")
     assert message_key("a\x00b", "c", "x") != message_key("a", "b\x00c", "x")
 ```
 
@@ -83,11 +85,12 @@ Expected: FAIL with `ImportError: cannot import name 'message_key' from 'models'
 
 ```python
 def message_key(role: str, modality: str, content_text: str) -> str:
-    payload = f"{role}\x00{modality}\x00{content_text}".encode("utf-8")
+    parts = [role.encode("utf-8"), modality.encode("utf-8"), content_text.encode("utf-8")]
+    payload = b"".join(f"{len(p)}:".encode() + p for p in parts)
     return sha256(payload).hexdigest()
 ```
 
-`sha256` 已经在文件顶部导入（`text_hash()` 在用）。
+`sha256` 已经在文件顶部导入（`text_hash()` 在用）。长度前缀编码保证对任意输入无歧义：每个字段以 `<字节长度>:` 开头，再跟字段内容本身，即使字段值含 `:` 或 `\x00` 也不会与其他三元组产生相同 payload。
 
 - [ ] **Step 4: 跑测试确认通过**
 
@@ -464,9 +467,14 @@ assert "INSERT INTO normalized_messages" in queries
 assert "INSERT INTO messages" in queries
 assert "INSERT INTO trace_messages" in queries
 assert "INSERT INTO normalized_messages" not in queries
-assert "occurrence_count = messages.occurrence_count + 1" in queries
+assert "ON CONFLICT (message_key) DO NOTHING" in queries
+assert "SELECT message_id FROM messages WHERE message_key" in queries
 assert "ON CONFLICT (trace_id, direction, sequence_index, source_path)" in queries
 assert "DO NOTHING" in queries
+assert "UPDATE messages" in queries
+assert "SET occurrence_count = occurrence_count + 1" in queries
+# 旧的 bug 模式必须消失
+assert "DO UPDATE SET occurrence_count = messages.occurrence_count + 1" not in queries
 ```
 
 `test_repository.py:230` 这一行原本的 `assert "INSERT INTO normalized_messages" in queries` 是要替换的目标。
@@ -479,10 +487,11 @@ Expected: FAIL — `assert "INSERT INTO messages" in queries` 不成立（因为
 
 - [ ] **Step 3: 改写 `repository.py` 的写入循环**
 
-把 `workers/analysis_worker/repository.py:241-273` 区域（`for message in messages:` 开头的整个循环）替换为：
+把 `workers/analysis_worker/repository.py:241-273` 区域（`for message in messages:` 开头的整个循环）替换为下面的**三步幂等写入**模式（仅在创建新的 trace_messages 关联、且 canonical 行已存在时才递增 `occurrence_count`）：
 
 ```python
         for message in messages:
+            # 第 1 步：尝试插入新 canonical 行；ON CONFLICT DO NOTHING 不更新内容
             cursor.execute(
                 """
                 INSERT INTO messages (
@@ -490,8 +499,7 @@ Expected: FAIL — `assert "INSERT INTO messages" in queries` 不成立（因为
                     content_text_hash, token_count_estimate, first_trace_id
                 )
                 VALUES (%s,%s,%s,%s,%s,%s,%s)
-                ON CONFLICT (message_key)
-                DO UPDATE SET occurrence_count = messages.occurrence_count + 1
+                ON CONFLICT (message_key) DO NOTHING
                 RETURNING message_id
                 """,
                 (
@@ -504,7 +512,20 @@ Expected: FAIL — `assert "INSERT INTO messages" in queries` 不成立（因为
                     message.trace_id,
                 ),
             )
-            message_id = cursor.fetchone()[0]
+            row = cursor.fetchone()
+            if row is not None:
+                message_id = row[0]
+                messages_row_is_new = True  # 新 canonical 行，occurrence_count 已是 schema 默认值 1
+            else:
+                # 第 2 步：canonical 行已存在，按 key 查 message_id
+                cursor.execute(
+                    "SELECT message_id FROM messages WHERE message_key = %s",
+                    (message.message_key,),
+                )
+                message_id = cursor.fetchone()[0]
+                messages_row_is_new = False
+
+            # 第 3 步：尝试插入 trace_messages 关联；DO NOTHING
             cursor.execute(
                 """
                 INSERT INTO trace_messages (
@@ -515,6 +536,7 @@ Expected: FAIL — `assert "INSERT INTO messages" in queries` 不成立（因为
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
                 ON CONFLICT (trace_id, direction, sequence_index, source_path)
                 DO NOTHING
+                RETURNING message_id
                 """,
                 (
                     message.trace_id,
@@ -528,7 +550,25 @@ Expected: FAIL — `assert "INSERT INTO messages" in queries` 不成立（因为
                     json.dumps(message.metadata, sort_keys=True),
                 ),
             )
+            tm_row = cursor.fetchone()
+
+            # 第 4 步：仅当 (a) 新建了 trace_messages 关联 AND (b) canonical 行非新建时才递增 occurrence_count
+            if tm_row is not None and not messages_row_is_new:
+                cursor.execute(
+                    """
+                    UPDATE messages
+                    SET occurrence_count = occurrence_count + 1
+                    WHERE message_id = %s
+                    """,
+                    (message_id,),
+                )
 ```
+
+**幂等性原理**：
+- 新 canonical + 新关联 → 第 4 步跳过（`messages_row_is_new=True`），count 保持 schema 默认值 1
+- 已存在 canonical + 新关联 → 第 4 步触发，count +1
+- 已存在 canonical + 重试（关联已存在）→ `tm_row` 为 None（PK 冲突），第 4 步跳过
+- 并发处理同一 trace → 输的 worker 同时命中两个 PK 冲突，第 4 步跳过
 
 注意：
 - `media_object_id` 字段在 `NormalizedMessage` 数据类里**没有**，传入 `None`（schema 允许 NULL）。如果未来需要写真实值，再扩 dataclass。
