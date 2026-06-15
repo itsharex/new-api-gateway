@@ -241,11 +241,7 @@ def test_legacy_prompt_and_aggregate_signals_no_longer_emit_anomalies():
         )
         for index in range(3)
     ]
-    aggregate_context = AnalysisContext(
-        daily_tokens_before=100000,
-        short_window_tokens_before=10000,
-        distinct_client_hashes_1h=3,
-    )
+    aggregate_context = AnalysisContext()
 
     assert detect_anomalies(job(), messages=messages) == []
     assert detect_anomalies(job(usage_total_tokens=1), context=aggregate_context) == []
@@ -273,11 +269,7 @@ def test_detects_off_hours_high_usage():
 
 
 def test_does_not_emit_token_scoped_aggregate_alerts_for_empty_token_fingerprint():
-    context = AnalysisContext(
-        daily_tokens_before=200000,
-        short_window_tokens_before=20000,
-        distinct_client_hashes_1h=10,
-    )
+    context = AnalysisContext()
 
     alerts = detect_anomalies(job(
         token_fingerprint="",
@@ -331,11 +323,7 @@ def test_long_output_uses_completion_p95_baseline():
 
 
 def test_off_hours_uses_effective_token_floor_even_with_baseline_context():
-    ctx = AnalysisContext(
-        off_hours_baseline=500.0,
-        off_hours_mad=100.0,
-        local_timezone_offset_hours=8,
-    )
+    ctx = AnalysisContext(local_timezone_offset_hours=8)
     alerts = detect_anomalies(job(
         request_started_at="2026-04-28T15:45:22Z",
         usage_prompt_tokens=15000,

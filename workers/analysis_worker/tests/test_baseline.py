@@ -2,11 +2,7 @@ import json
 
 from baseline import (
     BaselineRow,
-    QUERY_HOURLY,
-    QUERY_MODEL_HOURLY,
     QUERY_TRACE_LEVEL,
-    compute_hourly_baselines,
-    compute_model_baselines,
     compute_trace_level_baselines,
     upsert_baselines,
 )
@@ -30,37 +26,6 @@ class FakeConnection:
 
     def commit(self):
         self.committed = True
-
-
-# -- compute_hourly_baselines --
-
-
-def test_compute_hourly_baselines_returns_one_row_per_fingerprint():
-    rows = [
-        {"fingerprint_key": "fp_a", "hourly_total": 5000.0, "hour_count": 10},
-        {"fingerprint_key": "fp_b", "hourly_total": 12000.5, "hour_count": 6},
-    ]
-
-    result = compute_hourly_baselines(rows)
-
-    assert len(result) == 2
-    assert result[0] == BaselineRow(
-        fingerprint_key="fp_a",
-        metric_type="hourly_tokens_median",
-        metric_value=5000.0,
-        metadata_json={"hour_count": 10},
-    )
-    assert result[1] == BaselineRow(
-        fingerprint_key="fp_b",
-        metric_type="hourly_tokens_median",
-        metric_value=12000.5,
-        metadata_json={"hour_count": 6},
-    )
-
-
-def test_compute_hourly_baselines_returns_empty_for_no_rows():
-    result = compute_hourly_baselines([])
-    assert result == []
 
 
 # -- compute_trace_level_baselines --
@@ -108,44 +73,6 @@ def test_compute_trace_level_baselines_returns_multiple_fingerprints():
 
 def test_compute_trace_level_baselines_returns_empty_for_no_rows():
     result = compute_trace_level_baselines([])
-    assert result == []
-
-
-# -- compute_model_baselines --
-
-
-def test_compute_model_baselines_returns_one_row_per_input():
-    rows = [
-        {"fingerprint_key": "fp_a", "model": "gpt-4.1", "median_hourly": 5000.0},
-        {"fingerprint_key": "fp_a", "model": "o3", "median_hourly": 2000.0},
-        {"fingerprint_key": "fp_b", "model": "gpt-4.1", "median_hourly": 8000.0},
-    ]
-
-    result = compute_model_baselines(rows)
-
-    assert len(result) == 3
-    assert result[0] == BaselineRow(
-        fingerprint_key="fp_a",
-        metric_type="model_hourly_median_gpt-4.1",
-        metric_value=5000.0,
-        metadata_json={"model": "gpt-4.1"},
-    )
-    assert result[1] == BaselineRow(
-        fingerprint_key="fp_a",
-        metric_type="model_hourly_median_o3",
-        metric_value=2000.0,
-        metadata_json={"model": "o3"},
-    )
-    assert result[2] == BaselineRow(
-        fingerprint_key="fp_b",
-        metric_type="model_hourly_median_gpt-4.1",
-        metric_value=8000.0,
-        metadata_json={"model": "gpt-4.1"},
-    )
-
-
-def test_compute_model_baselines_returns_empty_for_no_rows():
-    result = compute_model_baselines([])
     assert result == []
 
 
@@ -217,15 +144,7 @@ def test_upsert_baselines_json_serializes_metadata():
 
 
 def test_query_constants_use_parameterized_lookback():
-    assert "%s" in QUERY_HOURLY
     assert "%s" in QUERY_TRACE_LEVEL
-    assert "%s" in QUERY_MODEL_HOURLY
-
-
-def test_query_hourly_groups_by_fingerprint():
-    assert "PERCENTILE_CONT(0.5)" in QUERY_HOURLY
-    assert "HAVING COUNT(*) >= 3" in QUERY_HOURLY
-    assert "bucket_size = 'hour'" in QUERY_HOURLY
 
 
 def test_query_trace_level_uses_trace_effective_tokens_formula():
@@ -233,9 +152,3 @@ def test_query_trace_level_uses_trace_effective_tokens_formula():
     assert "HAVING COUNT(*) >= 5" in QUERY_TRACE_LEVEL
     assert "GREATEST(usage_prompt_tokens - usage_cached_tokens, 0) + usage_completion_tokens" in QUERY_TRACE_LEVEL
     assert "usage_completion_tokens" in QUERY_TRACE_LEVEL
-
-
-def test_query_model_hourly_groups_by_model():
-    assert "PERCENTILE_CONT(0.5)" in QUERY_MODEL_HOURLY
-    assert "GROUP BY token_fingerprint, model" in QUERY_MODEL_HOURLY
-    assert "HAVING COUNT(*) >= 3" in QUERY_MODEL_HOURLY

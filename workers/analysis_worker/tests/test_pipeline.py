@@ -266,16 +266,9 @@ def test_process_job_line_persists_work_relevance_result(tmp_path: Path):
     assert work_results[0].result["recommended_action"] == "allow"
     assert not any(
         alert.anomaly_type in {
-            "low_work_relevance_high_cost",
-            "non_work_high_risk",
-            "non_work_job_search",
-            "non_work_personal_use",
-            "non_work_side_business",
             "identity_unresolved_success",
             "daily_token_limit_exceeded",
             "short_window_token_spike",
-            "unknown_high_cost",
-            "work_nonwork_conflict",
         }
         for alert in repo.anomalies
     )
@@ -3457,10 +3450,8 @@ def test_core_stage_hot_path_avoids_heavy_analysis_context_queries():
     def fake_process_job_line(payload, evidence_store, repository, context_repository, **kwargs):
         context = repository.analysis_context_for(parse_job(payload))
         assert kwargs["enable_media_derivation"] is False
-        assert context.daily_tokens_before == 0
-        assert context.short_window_tokens_before == 0
-        assert context.distinct_client_hashes_1h == 0
         assert context.trace_effective_tokens_p95 is None
+        assert context.completion_tokens_p95 is None
         return {
             "accepted_trace_id": "trace_hot_path",
             "worker_status": "processed",

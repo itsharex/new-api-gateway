@@ -2,11 +2,7 @@ import json
 from datetime import datetime, timezone
 
 from baseline import (
-    QUERY_HOURLY,
-    QUERY_MODEL_HOURLY,
-    compute_hourly_baselines,
     compute_trace_level_baselines,
-    compute_model_baselines,
     upsert_baselines,
 )
 
@@ -101,27 +97,15 @@ def run_offline_batch(connection, lookback_days: int = 7) -> dict:
     cursor = connection.cursor()
     usage_aggregate_rows = _rebuild_usage_aggregates(connection)
 
-    # 1. Compute hourly baselines from rebuilt aggregates
-    cursor.execute(QUERY_HOURLY, (str(lookback_days),))
-    columns = ["fingerprint_key", "hourly_total", "hour_count"]
-    hourly_rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
-    hourly_baselines = compute_hourly_baselines(hourly_rows)
-
-    # 2. Compute model baselines
-    cursor.execute(QUERY_MODEL_HOURLY, (str(lookback_days),))
-    columns = ["fingerprint_key", "model", "median_hourly"]
-    model_rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
-    model_baseline_rows = compute_model_baselines(model_rows)
-
-    # 3. Upsert all baselines
+    # 1. Upsert trace-level baselines
     fact_trace_rows = load_trace_level_rows(connection, lookback_days)
     trace_baselines = compute_trace_level_baselines(fact_trace_rows)
-    all_baselines = hourly_baselines + trace_baselines + model_baseline_rows
+    all_baselines = trace_baselines
     upsert_baselines(connection, all_baselines, ttl_hours=25)
 
     fingerprints = set(b.fingerprint_key for b in all_baselines)
 
-    # 4. Train Isolation Forest if enough trace data
+    # 2. Train Isolation Forest if enough trace data
     cursor.execute(
         """
         SELECT

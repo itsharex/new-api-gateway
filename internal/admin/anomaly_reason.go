@@ -15,6 +15,8 @@ func formatAnomalyDisplayReasonZH(item AnomalySummary) string {
 		return "夜间时段（23:00-07:00）本次有效 token 消耗 " + observed + "，超过阈值 " + threshold + "。"
 	case "non_work_use":
 		return "检测到明确非工作用途内容。"
+	case "multivariate_anomaly":
+		return "多变量异常检测标记本次请求为异常（Isolation Forest）。"
 	default:
 		return item.Reason
 	}
