@@ -109,3 +109,16 @@ func TestFormatAnomalyDisplayReasonZHFallsBackForUnknownType(t *testing.T) {
 		t.Fatalf("formatAnomalyDisplayReasonZH() = %q, want fallback %q", got, item.Reason)
 	}
 }
+
+func TestFormatAnomalyDisplayReasonZHMultivariate(t *testing.T) {
+	item := AnomalySummary{
+		AnomalyType:   "multivariate_anomaly",
+		ObservedValue: "1",
+		Reason:        "Isolation Forest flagged this trace as a multivariate anomaly",
+	}
+	got := formatAnomalyDisplayReasonZH(item)
+	want := "多变量异常检测标记本次请求为异常（Isolation Forest）。"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
