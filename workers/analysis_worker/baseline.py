@@ -11,18 +11,6 @@ class BaselineRow:
     metadata_json: dict[str, Any]
 
 
-QUERY_HOURLY = """
-SELECT
-    token_fingerprint AS fingerprint_key,
-    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY total_tokens) AS hourly_total,
-    COUNT(*) AS hour_count
-FROM usage_aggregates
-WHERE bucket_size = 'hour'
-  AND bucket_start >= (now() - (%s || ' days')::interval)
-GROUP BY token_fingerprint
-HAVING COUNT(*) >= 3
-"""
-
 QUERY_TRACE_LEVEL = """
 SELECT
     token_fingerprint AS fingerprint_key,
@@ -35,32 +23,6 @@ WHERE request_started_at >= (now() - (%s || ' days')::interval)
 GROUP BY token_fingerprint
 HAVING COUNT(*) >= 5
 """
-
-QUERY_MODEL_HOURLY = """
-SELECT
-    token_fingerprint AS fingerprint_key,
-    model,
-    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY total_tokens) AS median_hourly
-FROM usage_aggregates
-WHERE bucket_size = 'hour'
-  AND bucket_start >= (now() - (%s || ' days')::interval)
-GROUP BY token_fingerprint, model
-HAVING COUNT(*) >= 3
-"""
-
-
-def compute_hourly_baselines(rows: list[dict]) -> list[BaselineRow]:
-    result: list[BaselineRow] = []
-    for row in rows:
-        result.append(
-            BaselineRow(
-                fingerprint_key=row["fingerprint_key"],
-                metric_type="hourly_tokens_median",
-                metric_value=float(row["hourly_total"]),
-                metadata_json={"hour_count": int(row["hour_count"])},
-            )
-        )
-    return result
 
 
 def compute_trace_level_baselines(rows: list[dict]) -> list[BaselineRow]:
@@ -80,21 +42,6 @@ def compute_trace_level_baselines(rows: list[dict]) -> list[BaselineRow]:
                 metric_type="completion_tokens_p95",
                 metric_value=float(row["p95_completion"]),
                 metadata_json={},
-            )
-        )
-    return result
-
-
-def compute_model_baselines(rows: list[dict]) -> list[BaselineRow]:
-    result: list[BaselineRow] = []
-    for row in rows:
-        model = row["model"]
-        result.append(
-            BaselineRow(
-                fingerprint_key=row["fingerprint_key"],
-                metric_type=f"model_hourly_median_{model}",
-                metric_value=float(row["median_hourly"]),
-                metadata_json={"model": model},
             )
         )
     return result
