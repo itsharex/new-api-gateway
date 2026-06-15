@@ -198,7 +198,8 @@ RBAC 角色：`viewer` → `auditor` → `raw_access` → `admin`，权限逐级
 | `enrichment_stage.py` | enrichment 阶段处理器：承接慢增强任务，执行 LLM judge / 追加 enrichment 结果，收口第二阶段 trace 状态 |
 | `models.py` | 数据类：`TraceCapturedJob`, `NormalizedMessage`, `AnalysisResult` 等 |
 | `normalizers.py` | 协议归一化器：OpenAI chat/responses, Claude, Gemini；SSE 流重组 |
-| `rules.py` | 持久化异常收敛层：统一计算 `effective_tokens = max(prompt_tokens - cached_tokens, 0) + completion_tokens`，当前 worker 新写入/收敛为 4 类 anomaly：`high_trace_tokens`、`long_output_anomaly`、`off_hours_high_usage`、`non_work_use` |
+| `rules.py` | 持久化异常收敛层：统一计算 `effective_tokens = max(prompt_tokens - cached_tokens, 0) + completion_tokens`，core worker 实时产生 4 类 rule-based anomaly：`high_trace_tokens`、`long_output_anomaly`、`off_hours_high_usage`、`non_work_use` |
+| `isolation_forest.py` | 多变量异常打分：离线 batch 训练 Isolation Forest 模型，产出第 5 类 anomaly `multivariate_anomaly`；模型版本写入 `model_artifacts` |
 | `work_relevance.py` | 工作相关性分类器：基于 `context_catalog` aliases/keywords、non-work 规则和 token 成本分层生成 `WorkRelevanceAssessment`；必要时调用外部 OpenAI-compatible LLM judge，但只产出 `analysis_results` 语义，不直接落库 anomaly |
 | `repository.py` | PostgreSQL 持久化：归一化消息、分析结果、`trace_usage_facts`、异常告警 |
 | `evidence.py` | 证据存储抽象（`EvidenceStore` Protocol）与文件系统实现 |
@@ -264,6 +265,7 @@ Worker 使用 `context_catalog` 的 aliases/keywords、独立 non-work 规则和
 LLM judge 只处理工作相关性 assessment，不直接生成 `AnomalyAlert`。异常落库仍由 `rules.py` 中的 `detect_anomalies()` 与 `detect_work_relevance_anomalies()` 统一完成：
 - `detect_anomalies()` 负责 3 类成本/时段异常：`high_trace_tokens`、`long_output_anomaly`、`off_hours_high_usage`
 - `detect_work_relevance_anomalies()` 只会把显式非工作相关收敛为 `non_work_use`
+- `isolation_forest.py` 的 `score_traces()` 离线批量打分，产出第 5 类 `multivariate_anomaly`，依赖 `model_artifacts` 中 `is_active=true` 的最新模型
 - 成本型 trace anomaly 全部使用 `effective_tokens = max(prompt_tokens - cached_tokens, 0) + completion_tokens` 口径，避免缓存命中 prompt token 抬高阈值判断
 
 默认 Docker Compose 会透传 `LLM_JUDGE_*` 到 `analysis-worker` / `analysis-batch` 容器；容器部署时只需在 `--env-file` 指定的 env 文件中配置这些变量即可。

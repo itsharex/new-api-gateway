@@ -17,17 +17,19 @@
 
 ### 2.1 当前异常菜单只关注什么
 
-当前异常菜单只保留 4 类明确、可信、可解释的异常信号：
+当前异常菜单只保留 5 类明确、可信、可解释的异常信号：
 
 1. `non_work_use`
 2. `high_trace_tokens`
 3. `long_output_anomaly`
 4. `off_hours_high_usage`
+5. `multivariate_anomaly`（Isolation Forest 离线训练的多变量异常打分）
 
 设计原则是：
 
 - 只保留明确非工作内容
 - 只保留明确高消耗或明确异常输出长度
+- 多变量异常通过离线模型批量打分，避免规则噪音
 - 不再把噪音较大的身份链路、聚合波动、unknown 高成本等信号直接塞进异常菜单
 
 ### 2.2 什么不会进入异常菜单
@@ -91,7 +93,10 @@
 
 - `rules.py`
   - 负责把明确可落库的规则转换成 anomaly
-  - 当前只会新写入/收敛为 4 类 anomaly
+  - 当前只会新写入/收敛为 4 类 rule-based anomaly（`non_work_use` / `high_trace_tokens` / `long_output_anomaly` / `off_hours_high_usage`）
+
+- `isolation_forest.py`
+  - 离线训练的 Isolation Forest 模型批量打分，产出第 5 类 `multivariate_anomaly`
 
 - `internal/admin/anomaly_reason.go`
   - 负责把 anomaly 转换成管理端展示用的中文说明
@@ -141,7 +146,7 @@ effective_tokens = max(usage_prompt_tokens - usage_cached_tokens, 0) + usage_com
 
 ---
 
-## 5. 当前会进入异常菜单的 4 类异常
+## 5. 当前会进入异常菜单的 5 类异常
 
 ## 5.1 `non_work_use`
 
@@ -310,12 +315,7 @@ effective_tokens >= 20,000
 
 ### 解释
 
-这条规则不再依赖：
-
-- `hourly_tokens_baseline`
-- client 维度基线
-
-也就是说，它是一个明确、简单、固定的夜间高消耗判断规则。
+这条规则不依赖任何 baseline，只看固定阈值（`effective_tokens >= 20,000`）+ 本地时段。
 
 ### 管理端展示
 
@@ -324,6 +324,51 @@ effective_tokens >= 20,000
 ```text
 夜间时段（23:00-07:00）本次有效 token 消耗 22,500，超过阈值 20,000。
 ```
+
+---
+
+## 5.5 `multivariate_anomaly`
+
+### 含义
+
+表示该 trace 在多变量维度上被 Isolation Forest 模型判定为离群。
+
+### 来源
+
+由 `workers/analysis_worker/isolation_forest.py` 离线批量打分产生：
+
+- 离线 batch（`offline.py` 的 `run_offline_batch`）按 lookback 窗口抽样 trace，提取特征向量并训练 Isolation Forest 模型
+- 模型随后对最近 trace 打分，被标记为 `-1` 的样本落库为 `multivariate_anomaly`
+
+### 特征维度
+
+特征列包含（见 `isolation_forest.py:FEATURE_COLUMNS`）：
+
+- `usage_total_tokens`
+- `completion_ratio`
+- `hour_of_day`
+- `is_weekend`
+- `model_price_tier`
+- `prompt_repetition`
+- `distinct_models_24h`
+
+### 触发条件
+
+```text
+Isolation Forest 预测结果 == -1
+```
+
+阈值由训练时的 `contamination` 参数控制（当前默认 0.02）。
+
+### 管理端展示
+
+```text
+多变量异常检测标记本次请求为异常（Isolation Forest）。
+```
+
+### 与其他 4 类的区别
+
+其他 4 类 anomaly 在 core worker 处理每个 trace 时实时产生；`multivariate_anomaly` 由离线 batch 在重建 baseline 之后用最新模型批量打分产生，依赖 `model_artifacts` 表中标记为 `is_active=true` 的模型版本。
 
 ---
 
@@ -348,6 +393,7 @@ effective_tokens >= 20,000
 
 - **历史数据**中仍可能保留这些 anomaly type
 - 但这不代表当前 worker 还会继续生成它们
+- 历史上某些类型（`identity_unresolved_success` / `raw_only_large_response` / `retry_storm_trace` / `daily_token_limit_exceeded` / `short_window_token_spike` / `expensive_model_overuse` / `possible_token_leak`）曾注册在 `anomaly_rules` 表中作为占位 rule_key，但 worker 从未读取该表；migration 0019 已 drop 该表，阈值统一以 `rules.py` 中的硬编码常量为准
 
 ---
 
@@ -443,7 +489,7 @@ unknown 场景下：
 
 因此：
 
-- 如果是当前 4 类 anomaly，通常能看到标准中文说明
+- 如果是当前 5 类 anomaly，通常能看到标准中文说明
 - 如果是历史 anomaly 或未知类型，`display_reason` 不保证一定是中文
 
 ---
@@ -517,6 +563,7 @@ unknown 场景下：
 | `high_trace_tokens` | 是 | `effective_tokens` 超阈值 | 保留 |
 | `long_output_anomaly` | 是 | `completion_tokens` 超阈值 | 保留 |
 | `off_hours_high_usage` | 是 | 夜间 + 高 `effective_tokens` | 保留 |
+| `multivariate_anomaly` | 是 | Isolation Forest 离线打分 | 保留 |
 | `work_nonwork_conflict` | 否 | 冲突内容 | 仅 review-only |
 | `unknown_high_cost` | 否 | 已取消 | 不再新写入 |
 | 身份链路类异常 | 否 | 已取消 | 不再新写入 |
