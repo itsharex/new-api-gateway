@@ -30,7 +30,8 @@ new-api-gateway/
 │   ├── Dockerfile             # Go 网关多阶段构建
 │   ├── docker-compose.yml     # 生产 compose
 │   └── docker-compose.arm.yml # ARM Mac override
-├── scripts/                   # smoke 与 e2e 检查脚本
+├── e2e/                       # Docker-native 端到端测试（compose profile=e2e）
+├── scripts/                   # smoke 与迁移检查脚本
 ├── docs/                      # 开发文档
 ├── Makefile                   # 常用构建目标
 ├── go.mod / go.sum            # Go 模块定义
