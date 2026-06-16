@@ -177,7 +177,7 @@ services:
       NEW_API_POSTGRES_DSN: ${NEW_API_POSTGRES_DSN:-}
       POSTGRES_DSN: postgres://audit:audit@postgres:5432/audit_gateway?sslmode=disable
       REDIS_URL: redis://redis:6379/0
-      E2E_API_KEY: ${E2E_API_KEY:-sk-G0YzOkt9WQAwp8S9DL9mLKlcFNEYRjdnA4x6PMrNRgZA05l8}
+      E2E_API_KEY: ${E2E_API_KEY}
       E2E_OPENAI_MODEL: ${E2E_OPENAI_MODEL:-gpt-5.4}
       E2E_CLAUDE_MODEL: ${E2E_CLAUDE_MODEL:-claude-sonnet-4-6}
       EVIDENCE_STORAGE_BACKEND: ${EVIDENCE_STORAGE_BACKEND:-filesystem}
