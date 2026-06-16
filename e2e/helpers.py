@@ -241,7 +241,7 @@ def assert_identity_cache(conn: psycopg.Connection, fingerprint: str) -> None:
     ).fetchone()
     check(f"identity_cache({fingerprint[:12]}…)", row is not None, "no cache entry")
     if row:
-        eq("identity_cache.username", "username", row[0], EXPECTED_USERNAME)
+        eq("identity_cache", "username", row[0], EXPECTED_USERNAME)
 
 
 def read_request_raw_ref(trace_id: str) -> str:
