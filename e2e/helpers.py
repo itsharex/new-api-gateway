@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from typing import NoReturn
 
 import psycopg
 import requests
@@ -72,7 +73,7 @@ def gt(context: str, field: str, got: int, threshold: int) -> None:
     check(f"{context}.{field}", got > threshold, f"got={got} want > {threshold}")
 
 
-def bail(msg: str) -> None:
+def bail(msg: str) -> NoReturn:
     print(f"FATAL: {msg}", file=sys.stderr)
     raise AssertionError(msg)
 
@@ -170,6 +171,7 @@ def wait_for_traces(trace_ids: list[str], timeout: int = 10) -> None:
 
 def wait_for_rows(sql: str, params: tuple, expected: int, timeout: int = 30, label: str = "rows") -> int:
     """Poll until a query returns >= expected rows; returns the count found."""
+    n = 0
     for attempt in range(timeout):
         with psycopg.connect(PG_DSN) as conn:
             n = conn.execute(sql, params).fetchone()[0]

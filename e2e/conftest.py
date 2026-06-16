@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 import psycopg
 import pytest
 import redis
@@ -79,9 +77,15 @@ def prerequisites():
 
 
 @pytest.fixture(autouse=True)
-def _reset_errors():
+def _isolate_errors():
+    """Clear errors before each test; fail the test if any were recorded."""
     helpers.errors.clear()
     yield
+    if helpers.errors:
+        raise AssertionError(
+            f"{len(helpers.errors)} assertion(s) failed:\n"
+            + "\n".join(f"  {e}" for e in helpers.errors)
+        )
 
 
 # ---------------------------------------------------------------------------
