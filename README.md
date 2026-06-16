@@ -303,58 +303,29 @@ make test
 # Python 单元测试（分析 Worker）
 cd workers/analysis_worker && uv run pytest -q
 
-# Smoke / E2E（需先启动依赖服务）
+# Smoke（需先启动依赖服务）
 make smoke
 ./scripts/smoke_ops_health.sh
-./scripts/e2e_worker_anomaly_coverage.sh
-./scripts/e2e_worker_work_relevance.sh
 ```
 
 ### E2E 测试
 
-端到端测试位于 `e2e/` 目录，验证网关代理 → Redis 队列 → Worker 分析 → 数据库写入的完整链路。运行前需确保 postgres、redis、new-api、audit-gateway 均已启动，且数据库迁移已应用。
+端到端测试位于 `e2e/` 目录，验证网关代理 → Redis 队列 → Worker 分析 → 数据库写入的完整链路。e2e 采用 docker-native 的 `profile=e2e` on-demand 容器：直接复用已部署的网关 + 常驻 worker（`analysis-worker` / `analysis-enrichment-worker` / `analysis-batch`），不再 `go run` 网关、不发布宿主机端口、不再手动投 list/跑 `--redis-once`。当前保留 5 个端到端用例：
 
-如果本地已经有常驻 `analysis-worker` 在消费默认队列/库（例如 Docker Compose 启动后的 `redis://redis:6379/0`），worker 类 e2e 不要直接复用默认 `REDIS_URL`，否则测试任务可能会被后台 worker 抢先消费，脚本自己运行的 `--redis-once` 只会拿到 `idle`。推荐做法是：
+- `test_smoke.py`：基础连通性 smoke
+- `test_gateway_openai.py`：OpenAI 协议（/v1/chat/completions、/v1/responses，含流式）
+- `test_gateway_claude.py`：Claude 协议（/v1/messages，含 SSE 流式）
+- `test_gateway_worker_pipeline.py`：完整 Worker 管线（网关采集 → Redis → 常驻 worker 分析 → DB 验证）
+- `test_media_extraction.py`：媒体 base64 提取（发送 base64 图片 → 常驻 worker 提取 → 证据改写验证）
 
-- 网关链路类 e2e：继续使用默认环境，验证真实的持续消费链路。
-- worker 单进程类 e2e：使用隔离的 Redis DB（例如 `redis://redis:6379/15`），并通过一次性容器运行脚本。
-
-```bash
-# worker 规则相关 e2e：使用隔离 Redis DB，避免被常驻 analysis-worker 抢占
-docker compose -f deploy/docker-compose.yml --env-file .env.local run --rm \
-  -e POSTGRES_DSN='postgres://audit:audit@postgres:5432/audit_gateway?sslmode=disable' \
-  -e REDIS_URL='redis://redis:6379/15' \
-  analysis-worker sh -lc 'cd /workspace/e2e && uv run python test_worker_work_relevance.py'
-
-docker compose -f deploy/docker-compose.yml --env-file .env.local run --rm \
-  -e POSTGRES_DSN='postgres://audit:audit@postgres:5432/audit_gateway?sslmode=disable' \
-  -e REDIS_URL='redis://redis:6379/15' \
-  analysis-worker sh -lc 'cd /workspace/e2e && uv run python test_worker_anomaly_coverage.py'
-
-docker compose -f deploy/docker-compose.yml --env-file .env.local run --rm \
-  -e POSTGRES_DSN='postgres://audit:audit@postgres:5432/audit_gateway?sslmode=disable' \
-  -e REDIS_URL='redis://redis:6379/15' \
-  analysis-worker sh -lc 'cd /workspace/e2e && uv run python test_worker_baseline_anomaly.py'
-
-# offline batch e2e：不消费 Redis，可直接用一次性 worker 容器运行
-docker compose -f deploy/docker-compose.yml --env-file .env.local run --rm \
-  -e POSTGRES_DSN='postgres://audit:audit@postgres:5432/audit_gateway?sslmode=disable' \
-  analysis-worker sh -lc 'cd /workspace/e2e && uv run python test_offline_batch.py'
-```
+运行前需确保 postgres、redis、new-api、audit-gateway 及常驻 worker 均已部署，迁移已应用，且 new-api 侧已配齐 `E2E_OPENAI_MODEL` 与 `E2E_CLAUDE_MODEL` 对应的模型。
 
 ```bash
-# OpenAI 协议（/v1/chat/completions、/v1/responses，含流式）
-uv run e2e/test_gateway_openai.py
-
-# Claude 协议（/v1/messages，含 SSE 流式）
-uv run e2e/test_gateway_claude.py
-
-# 完整 Worker 管线（网关采集 → Redis → Worker 分析 → DB 验证）
-uv run e2e/test_gateway_worker_pipeline.py
-
-# 媒体 base64 提取（发送 base64 图片 → Worker 提取 → 证据改写验证）
-uv run e2e/test_media_extraction.py
+# E2E（docker 部署后，profile=e2e on-demand 容器；要求网关/postgres/redis/常驻 worker/new-api 已部署，且 new-api 配齐 E2E_OPENAI_MODEL 与 E2E_CLAUDE_MODEL）
+docker compose -f deploy/docker-compose.yml --profile e2e --env-file .env.local run --rm e2e
 ```
+
+> worker 单元逻辑（normalizers / rules / isolation_forest 等）已回归 `workers/analysis_worker/tests/`（pytest），不再以独立 e2e 脚本形式运行。
 
 ## 安全设计
 

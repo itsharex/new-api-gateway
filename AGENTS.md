@@ -37,8 +37,8 @@ uv run pytest -q tests/test_normalizers.py
 uv run python main.py
 uv run python main.py --redis-once
 
-# E2E 总入口（要求 postgres/redis/new-api 可访问，且需要 OSS 凭证）
-uv run e2e/run_all.py
+# E2E（docker 部署后，profile=e2e on-demand 容器；要求网关/postgres/redis/常驻 worker/new-api 已部署，且 new-api 配齐 E2E_OPENAI_MODEL 与 E2E_CLAUDE_MODEL）
+docker compose -f deploy/docker-compose.yml --profile e2e --env-file .env.local run --rm e2e
 ```
 
 ## Verification Rules
@@ -57,9 +57,8 @@ uv run e2e/run_all.py
 
 ## Testing Gotchas
 
-- `e2e/run_all.py` 不是“最便宜的 smoke”：它会检查 OSS 凭证，并覆盖 filesystem + OSS 两种模式。
-- worker 类 e2e 如果复用默认 `REDIS_URL`，任务可能被常驻 worker 抢走。规则/单进程类 worker e2e 请改用隔离 Redis DB，例如 `redis://redis:6379/15`。
-- 网关链路类 e2e 可以继续用默认 Redis，验证真实持续消费链路；worker 单进程类 e2e 才需要隔离队列。
+- E2E 是 docker-native `profile=e2e` on-demand 容器：复用已部署的网关 + 常驻 worker（`analysis-worker` / `analysis-enrichment-worker` / `analysis-batch`），不再 `go run` 网关、不发布宿主机端口、不再手动投 list/跑 `--redis-once`。
+- worker 单元逻辑已回归 `workers/analysis_worker/tests/`（pytest）；e2e 只保留 5 个端到端用例，网关→worker 全链路依赖常驻 worker 消费 `analysis.core` stream。
 
 ## Data And Safety
 
