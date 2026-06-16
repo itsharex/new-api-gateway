@@ -51,6 +51,12 @@ services:
       REDIS_ADDR: redis:6379
     volumes:
       - ${EVIDENCE_HOST_DIR:-./var/evidence}:/evidence
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz | grep -q '\"status\":\"ok\"' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
     restart: unless-stopped
   analysis-worker:
     image: ghcr.io/astral-sh/uv:python3.11-bookworm
@@ -153,6 +159,38 @@ services:
       - ../migrations:/migrations:ro
       - ../scripts:/scripts:ro
     command: ["/scripts/run_migrations.sh"]
+
+  e2e:
+    profiles:
+      - e2e
+    image: ghcr.io/astral-sh/uv:python3.11-bookworm
+    working_dir: /workspace/e2e
+    depends_on:
+      audit-gateway: { condition: service_healthy }
+      postgres:      { condition: service_healthy }
+      redis:         { condition: service_healthy }
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      AUDIT_GATEWAY_URL: http://audit-gateway:8080
+      NEW_API_BASE_URL: ${NEW_API_BASE_URL}
+      NEW_API_POSTGRES_DSN: ${NEW_API_POSTGRES_DSN:-}
+      POSTGRES_DSN: postgres://audit:audit@postgres:5432/audit_gateway?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      E2E_API_KEY: ${E2E_API_KEY:-sk-G0YzOkt9WQAwp8S9DL9mLKlcFNEYRjdnA4x6PMrNRgZA05l8}
+      E2E_OPENAI_MODEL: ${E2E_OPENAI_MODEL:-gpt-5.4}
+      E2E_CLAUDE_MODEL: ${E2E_CLAUDE_MODEL:-claude-sonnet-4-6}
+      EVIDENCE_STORAGE_BACKEND: ${EVIDENCE_STORAGE_BACKEND:-filesystem}
+      EVIDENCE_STORAGE_DIR: /evidence
+      OSS_ENDPOINT: ${OSS_ENDPOINT:-}
+      OSS_BUCKET: ${OSS_BUCKET:-}
+      OSS_ACCESS_KEY_ID: ${OSS_ACCESS_KEY_ID:-}
+      OSS_ACCESS_KEY_SECRET: ${OSS_ACCESS_KEY_SECRET:-}
+      UV_PROJECT_ENVIRONMENT: /tmp/e2e-venv
+    volumes:
+      - ..:/workspace
+      - ${EVIDENCE_HOST_DIR:-./var/evidence}:/evidence
+    command: ["uv", "run", "pytest", "-q"]
 volumes:
   audit-postgres:
   audit-redis:

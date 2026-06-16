@@ -13,7 +13,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /audit-gateway ./cmd/a
 FROM debian:bookworm-slim
 
 RUN apt-get update --allow-insecure-repositories || true && \
-    apt-get install -y --no-install-recommends --allow-unauthenticated ca-certificates && \
+    apt-get install -y --no-install-recommends --allow-unauthenticated ca-certificates wget && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /audit-gateway /usr/local/bin/audit-gateway
